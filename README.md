@@ -3,8 +3,8 @@
 ## clone
 
 ```bash
-git clone https://github.com/hndrr/modal-comfyui.git
-cd modal-comfyui
+git clone https://github.com/hndrr/modal-comfyui-deploy.git
+cd modal-comfyui-deploy
 uv sync
 ```
 
