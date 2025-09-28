@@ -1,5 +1,11 @@
 # Comfy UI
 
+```bash
+git clone https://github.com/hndrr/modal-comfyui.git
+cd modal-comfyui
+uv sync
+```
+
 ## launch
 
 ```bash
