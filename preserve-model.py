@@ -14,6 +14,7 @@ COMFY_MODEL_SUBDIRS = {
     "diffusion_models",
     "loras",
     "text_encoders",
+    "audio_encoders",
     "clip",
     "clip_vision",
     "controlnet",
