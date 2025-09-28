@@ -31,6 +31,8 @@ uv run modal serve comfyapp.py
 - 常時稼働させる際は `modal deploy comfyapp.py` を利用して常駐サービスとして公開できます。
 
 ## model upload
+![Modal/Storage](assets/2025-09-28-23-54-39.png)
+
 
 ```bash
 uv run modal run preserve-model.py::preserve_model \
@@ -47,4 +49,3 @@ uv run preserve_model_gui.py
 ```
 
 ![Gradio](assets/2025-09-28-22-01-40.png)
-![Modal/Storage](assets/2025-09-28-23-54-39.png)
