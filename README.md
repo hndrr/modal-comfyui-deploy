@@ -1,4 +1,14 @@
-# model upload
+# Comfy UI
+
+## launch
+
+```bash
+uv run modal serve comfyapp.py
+```
+
+![ComfyUI](assets/2025-09-28-21-11-34.png)
+
+## model upload
 
 ```bash
 uv run modal run preserve-model.py::preserve_model \
@@ -8,7 +18,7 @@ uv run modal run preserve-model.py::preserve_model \
   --destination-subdir "text_encoders"
 ```
 
-## Gradio UI
+### Gradio UI
 
 ```bash
 uv run preserve_model_gui.py
