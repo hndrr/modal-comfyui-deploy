@@ -17,16 +17,23 @@ app = modal.App()
 
 
 @app.function(
-    volumes={
-        MODEL_DIR.as_posix(): volume
-    },  # "mount" the Volume, sharing it with your function
-    image=download_image,  # only download dependencies needed here
+    volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
+    image=download_image,
 )
 def download_model(
-    repo_id: str = "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    revision: Optional[str] = None,  # include a revision to prevent surprises!
+    repo_id: str = "Comfy-Org/flux1-schnell",
+    filename: str = "flux1-schnell-fp8.safetensors",
+    revision: Optional[str] = None,
 ):
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import hf_hub_download
 
-    snapshot_download(repo_id=repo_id, local_dir=MODEL_DIR / repo_id, revision=revision)
-    print(f"Model downloaded to {MODEL_DIR / repo_id}")
+    target_dir = MODEL_DIR / repo_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    downloaded_path = hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        revision=revision,
+        local_dir=target_dir,
+        local_dir_use_symlinks=False,
+    )
+    print(f"モデルファイルを {downloaded_path} に取得しました")
