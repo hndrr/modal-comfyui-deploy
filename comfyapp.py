@@ -82,7 +82,9 @@ def ui():
             else:
                 if destination.exists():
                     try:
-                        same_file = destination.is_file() and filecmp.cmp(item, destination, shallow=False)
+                        same_file = destination.is_file() and filecmp.cmp(
+                            item, destination, shallow=False
+                        )
                     except OSError:
                         same_file = False
                     if same_file:
