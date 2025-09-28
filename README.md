@@ -47,3 +47,4 @@ uv run preserve_model_gui.py
 ```
 
 ![Gradio](assets/2025-09-28-22-01-40.png)
+![Modal/Storage](assets/2025-09-28-23-54-39.png)

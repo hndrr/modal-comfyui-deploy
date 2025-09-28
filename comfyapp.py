@@ -2,6 +2,7 @@ import filecmp
 import os
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import modal
@@ -11,6 +12,7 @@ custom_node_volume = modal.Volume.from_name(
     "comfy-custom-nodes", create_if_missing=True
 )
 output_volume = modal.Volume.from_name("comfy-outputs", create_if_missing=True)
+user_data_volume = modal.Volume.from_name("comfy-user-data", create_if_missing=True)
 MODEL_VOLUME_DIR = Path("/models")
 COMFY_ROOT_CANDIDATES = [
     Path("/root/comfy/ComfyUI"),
@@ -19,6 +21,18 @@ COMFY_ROOT_CANDIDATES = [
 ]
 CUSTOM_NODE_VOLUME_MOUNT = Path("/data/custom_nodes")
 OUTPUT_VOLUME_MOUNT = Path("/data/output")
+USER_DATA_VOLUME_MOUNT = Path("/data/user")
+WORKFLOWS_PATCH_MARKER = "# MODAL_PATCH_ALLOW_WORKFLOWS_START"
+WORKFLOWS_PATCH_SNIPPET = textwrap.dedent(
+    """
+    # MODAL_PATCH_ALLOW_WORKFLOWS_START
+    for _name in ("ALLOWED_JSON_TYPES", "ALLOWED_TYPES"):
+        _container = globals().get(_name)
+        if isinstance(_container, list) and "workflows" not in _container:
+            _container.append("workflows")
+    # MODAL_PATCH_ALLOW_WORKFLOWS_END
+    """
+).lstrip("\n")
 
 # 使用するカスタムノードのリスト
 NODES = [
@@ -32,7 +46,16 @@ NODES = [
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
-    .pip_install("comfy-cli==1.5.1")
+    .pip_install(
+        "comfy-cli==1.5.1",
+        "diffusers==0.30.2",
+        "moviepy==1.0.3",
+        "librosa==0.10.2.post1",
+        "soundfile==0.12.1",
+        "ftfy==6.2.3",
+        "sageattention",
+        "accelerate==1.1.0",
+    )
     .run_commands("comfy --skip-prompt install --nvidia")
     .run_commands(*[f"comfy node install {node}" for node in NODES])
 )
@@ -49,6 +72,7 @@ app = modal.App(name="comfyui", image=image)
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
         OUTPUT_VOLUME_MOUNT.as_posix(): output_volume,
+        USER_DATA_VOLUME_MOUNT.as_posix(): user_data_volume,
     },
 )
 @modal.concurrent(max_inputs=10)
@@ -57,6 +81,7 @@ def ui():
     CUSTOM_NODE_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
     OUTPUT_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
     MODEL_VOLUME_DIR.mkdir(parents=True, exist_ok=True)
+    USER_DATA_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
 
     comfy_roots = [root_dir for root_dir in COMFY_ROOT_CANDIDATES if root_dir.exists()]
     if not comfy_roots:
@@ -95,6 +120,30 @@ def ui():
                 else:
                     shutil.move(str(item), destination)
 
+    def patch_user_manager_for_workflows(comfy_root: Path) -> None:
+        """ComfyUI のユーザーデータ API で workflows を許可するパッチを適用する"""
+
+        user_manager_path = comfy_root / "comfy" / "ui" / "user_manager.py"
+        if not user_manager_path.exists():
+            return
+
+        try:
+            content = user_manager_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"警告: {user_manager_path} の読み込みに失敗しました: {exc}")
+            return
+
+        if WORKFLOWS_PATCH_MARKER in content:
+            return
+
+        updated = f"{content}\n{WORKFLOWS_PATCH_SNIPPET}"
+
+        try:
+            user_manager_path.write_text(updated, encoding="utf-8")
+            print(f"{user_manager_path} に workflows 保存許可パッチを適用しました")
+        except OSError as exc:
+            print(f"警告: {user_manager_path} の書き込みに失敗しました: {exc}")
+
     def link_directory(target: Path, source: Path) -> bool:
         """指定ディレクトリを永続化 Volume に向ける"""
 
@@ -129,6 +178,7 @@ def ui():
         return True
 
     for comfy_root in comfy_roots:
+        patch_user_manager_for_workflows(comfy_root)
         models_dir = comfy_root / "models"
 
         if link_directory(models_dir, MODEL_VOLUME_DIR):
@@ -139,5 +189,8 @@ def ui():
 
         if link_directory(comfy_root / "output", OUTPUT_VOLUME_MOUNT):
             print(f"{comfy_root} の output を永続化 Volume に接続しました")
+
+        if link_directory(comfy_root / "user", USER_DATA_VOLUME_MOUNT):
+            print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
     subprocess.Popen("comfy launch -- --listen 0.0.0.0 --port 8000", shell=True)
