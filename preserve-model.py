@@ -30,9 +30,6 @@ download_image = (
 )
 app = modal.App()
 
-# https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors
-# https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors
-
 
 @app.function(
     volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
@@ -81,9 +78,7 @@ def preserve_model(
     shutil.copy2(downloaded_path, destination_path)
     file_stat = destination_path.stat()
     completed_at = datetime.now(timezone.utc).isoformat()
-    print(
-        f"モデルファイルを {downloaded_path} から {destination_path} に保存しました"
-    )
+    print(f"モデルファイルを {downloaded_path} から {destination_path} に保存しました")
     return {
         "destination": destination_path.as_posix(),
         "size_bytes": file_stat.st_size,
