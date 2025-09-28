@@ -35,7 +35,7 @@ app = modal.App(name="example-comfyui", image=image)
     concurrency_limit=1,
     container_idle_timeout=30,
     timeout=1800,
-    gpu="L4",
+    gpu="T4",
 )
 @modal.web_server(8000, startup_timeout=60)
 def ui():
