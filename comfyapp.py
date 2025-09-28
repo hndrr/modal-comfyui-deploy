@@ -16,7 +16,7 @@ NODES = []
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
-    .pip_install("comfy-cli==1.2.3")
+    .pip_install("comfy-cli==1.5.1")
     .run_commands("comfy --skip-prompt install --nvidia")
     .run_commands(
         *[
