@@ -15,14 +15,16 @@ download_image = (
 )
 app = modal.App()
 
+# https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors
+
 
 @app.function(
     volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
     image=download_image,
 )
-def download_model(
-    repo_id: str = "Comfy-Org/flux1-schnell",
-    filename: str = "flux1-schnell-fp8.safetensors",
+def preserve_model(
+    repo_id: str = "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+    filename: str = "split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors",
     revision: Optional[str] = None,
 ):
     from huggingface_hub import hf_hub_download
