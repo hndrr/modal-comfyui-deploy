@@ -26,10 +26,32 @@ WORKFLOWS_PATCH_MARKER = "# MODAL_PATCH_ALLOW_WORKFLOWS_START"
 WORKFLOWS_PATCH_SNIPPET = textwrap.dedent(
     """
     # MODAL_PATCH_ALLOW_WORKFLOWS_START
-    for _name in ("ALLOWED_JSON_TYPES", "ALLOWED_TYPES"):
-        _container = globals().get(_name)
-        if isinstance(_container, list) and "workflows" not in _container:
-            _container.append("workflows")
+    def _modal_allow_workflows():
+        _candidates = (
+            "ALLOWED_JSON_TYPES",
+            "ALLOWED_TYPES",
+            "ALLOWED_JSON_DIRS",
+            "ALLOWED_DIRS",
+        )
+        for _name in _candidates:
+            _container = globals().get(_name)
+            if isinstance(_container, list):
+                if "workflows" not in _container:
+                    _container.append("workflows")
+            elif isinstance(_container, set):
+                if "workflows" not in _container:
+                    _container.add("workflows")
+            elif isinstance(_container, tuple):
+                if "workflows" not in _container:
+                    globals()[_name] = _container + ("workflows",)
+
+        for _name in ("ALLOWED_JSON_TYPES_MAP", "ALLOWED_TYPES_MAP"):
+            _mapping = globals().get(_name)
+            if isinstance(_mapping, dict) and "workflows" not in _mapping:
+                _mapping["workflows"] = "json"
+
+    _modal_allow_workflows()
+    del _modal_allow_workflows
     # MODAL_PATCH_ALLOW_WORKFLOWS_END
     """
 ).lstrip("\n")
@@ -48,13 +70,14 @@ image = (
     .apt_install("git")
     .pip_install(
         "comfy-cli==1.5.1",
-        "diffusers==0.30.2",
+        "diffusers==0.32.0",
         "moviepy==1.0.3",
         "librosa==0.10.2.post1",
         "soundfile==0.12.1",
         "ftfy==6.2.3",
         "sageattention",
         "accelerate==1.1.0",
+        "gguf",
     )
     .run_commands("comfy --skip-prompt install --nvidia")
     .run_commands(*[f"comfy node install {node}" for node in NODES])
@@ -121,28 +144,53 @@ def ui():
                     shutil.move(str(item), destination)
 
     def patch_user_manager_for_workflows(comfy_root: Path) -> None:
-        """ComfyUI のユーザーデータ API で workflows を許可するパッチを適用する"""
+        """ComfyUI のユーザーデータ API を補正し workflows 保存を許可する"""
+        candidate_paths = [
+            comfy_root / "comfy" / "ui" / "user_manager.py",
+            comfy_root / "app" / "user_manager.py",
+        ]
 
-        user_manager_path = comfy_root / "comfy" / "ui" / "user_manager.py"
-        if not user_manager_path.exists():
-            return
+        replacements = {
+            '@routes.get("/userdata/{file}")': '@routes.get(r"/userdata/{file:.*}")',
+            "@routes.get('/userdata/{file}')": "@routes.get(r'/userdata/{file:.*}')",
+            '@routes.post("/userdata/{file}")': '@routes.post(r"/userdata/{file:.*}")',
+            "@routes.post('/userdata/{file}')": "@routes.post(r'/userdata/{file:.*}')",
+            '@routes.delete("/userdata/{file}")': '@routes.delete(r"/userdata/{file:.*}")',
+            "@routes.delete('/userdata/{file}')": "@routes.delete(r'/userdata/{file:.*}')",
+            '@routes.post("/userdata/{file}/move/{dest}")': '@routes.post(r"/userdata/{file:.*}/move/{dest:.*}")',
+            "@routes.post('/userdata/{file}/move/{dest}')": "@routes.post(r'/userdata/{file:.*}/move/{dest:.*}')",
+        }
 
-        try:
-            content = user_manager_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            print(f"警告: {user_manager_path} の読み込みに失敗しました: {exc}")
-            return
+        for user_manager_path in candidate_paths:
+            if not user_manager_path.exists():
+                continue
 
-        if WORKFLOWS_PATCH_MARKER in content:
-            return
+            try:
+                content = user_manager_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"警告: {user_manager_path} の読み込みに失敗しました: {exc}")
+                continue
 
-        updated = f"{content}\n{WORKFLOWS_PATCH_SNIPPET}"
+            updated = content
+            modified = False
 
-        try:
-            user_manager_path.write_text(updated, encoding="utf-8")
-            print(f"{user_manager_path} に workflows 保存許可パッチを適用しました")
-        except OSError as exc:
-            print(f"警告: {user_manager_path} の書き込みに失敗しました: {exc}")
+            for original, replacement in replacements.items():
+                if replacement not in updated and original in updated:
+                    updated = updated.replace(original, replacement)
+                    modified = True
+
+            if WORKFLOWS_PATCH_MARKER not in updated:
+                updated = f"{updated}\n{WORKFLOWS_PATCH_SNIPPET}"
+                modified = True
+
+            if not modified:
+                continue
+
+            try:
+                user_manager_path.write_text(updated, encoding="utf-8")
+                print(f"{user_manager_path} に workflows 保存許可パッチを適用しました")
+            except OSError as exc:
+                print(f"警告: {user_manager_path} の書き込みに失敗しました: {exc}")
 
     def link_directory(target: Path, source: Path) -> bool:
         """指定ディレクトリを永続化 Volume に向ける"""
