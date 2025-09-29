@@ -51,6 +51,49 @@ CONFIG = AppConfig(
 )
 
 
+async def _spawn_modal_function(modal_function, **kwargs) -> FunctionCall:
+    """Modal関数の spawn を非同期で呼び出し、FunctionCall を返す"""
+
+    spawn_callable = getattr(modal_function, "spawn", None)
+    if spawn_callable is None:
+        raise AttributeError("指定された Modal 関数に spawn が見つかりません")
+
+    aio_impl = getattr(spawn_callable, "aio", None)
+    if aio_impl is not None:
+        return await aio_impl(**kwargs)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: spawn_callable(**kwargs))
+
+
+async def _await_function_call(call: FunctionCall, timeout: float) -> Optional[dict]:
+    """FunctionCall.get を非同期的に待ち受ける"""
+
+    get_callable = getattr(call, "get", None)
+    if get_callable is None:
+        raise AttributeError("FunctionCall に get が定義されていません")
+
+    aio_impl = getattr(get_callable, "aio", None)
+    if aio_impl is not None:
+        return await aio_impl(timeout=timeout)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: get_callable(timeout=timeout))
+
+
+async def _get_remote_function(app_name: str, function_name: str) -> Function:
+    """Function.from_name の非同期/同期呼び出しを吸収する"""
+
+    from_name_callable = getattr(Function, "from_name")
+    aio_impl = getattr(from_name_callable, "aio", None)
+    if aio_impl is not None:
+        return await aio_impl(app_name, function_name)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: from_name_callable(app_name, function_name))
+
+
+
 def _run_async(coro):
     """Gradioコールバックから安全に非同期処理を実行する"""
     try:
@@ -74,12 +117,12 @@ async def _invoke_preserve(
     destination_subdir: Optional[str],
 ) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
     async def _spawn_and_poll(
-        spawn_coro, app_id: Optional[str]
+        modal_function, app_id: Optional[str], **spawn_kwargs
     ) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
-        call = await spawn_coro
+        call = await _spawn_modal_function(modal_function, **spawn_kwargs)
         result = None
         try:
-            result = await call.get.aio(timeout=0.5)
+            result = await _await_function_call(call, timeout=0.5)
             completed = True
         except (asyncio.TimeoutError, ModalTimeoutError):
             completed = False
@@ -87,7 +130,7 @@ async def _invoke_preserve(
 
     if CONFIG.use_deployed:
         try:
-            remote_function: Function = await Function.from_name.aio(
+            remote_function: Function = await _get_remote_function(
                 CONFIG.deployed_app_name, CONFIG.deployed_function_name
             )
         except ModalNotFoundError as exc:  # デプロイ済み関数が存在しない場合
@@ -95,24 +138,22 @@ async def _invoke_preserve(
                 f"デプロイ済みのアプリ '{CONFIG.deployed_app_name}' または関数 '{CONFIG.deployed_function_name}' が見つかりません"
             ) from exc
         return await _spawn_and_poll(
-            remote_function.spawn.aio(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision or None,
-                destination_subdir=destination_subdir or None,
-            ),
+            remote_function,
             None,
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision or None,
+            destination_subdir=destination_subdir or None,
         )
 
     async with _APP.run(detach=True) as running_app:
         return await _spawn_and_poll(
-            _PRESERVE_FUNCTION.spawn.aio(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision or None,
-                destination_subdir=destination_subdir or None,
-            ),
+            _PRESERVE_FUNCTION,
             running_app.app_id,
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision or None,
+            destination_subdir=destination_subdir or None,
         )
 
 
