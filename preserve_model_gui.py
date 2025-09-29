@@ -361,13 +361,14 @@ def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Hugging FaceモデルをModalへ保存するGUIを起動します",
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--use-deployed",
         dest="use_deployed",
         action="store_true",
         help="デプロイ済みのModal関数を利用して実行します",
     )
-    parser.add_argument(
+    group.add_argument(
         "--use-local",
         dest="use_deployed",
         action="store_false",
