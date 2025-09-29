@@ -17,8 +17,8 @@ from modal.exception import RemoteError as ModalRemoteError
 from modal.exception import TimeoutError as ModalTimeoutError
 from modal_proto import api_pb2
 
-# preserve-model.py を動的に読み込んで、元の関数や定数を再利用する
-_MODULE_PATH = Path(__file__).with_name("preserve-model.py")
+# preserve_model.py を動的に読み込んで、元の関数や定数を再利用する
+_MODULE_PATH = Path(__file__).with_name("preserve_model.py")
 _SPEC = importlib.util.spec_from_file_location("preserve_model_module", _MODULE_PATH)
 _MODULE = importlib.util.module_from_spec(_SPEC)
 assert _SPEC.loader is not None
@@ -91,7 +91,9 @@ def _schedule_app_stop(call: FunctionCall, app_id: Optional[str]) -> None:
             return
         try:
             await client.stub.AppStop(
-                api_pb2.AppStopRequest(app_id=app_id, source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT)
+                api_pb2.AppStopRequest(
+                    app_id=app_id, source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT
+                )
             )
         except Exception:
             pass
@@ -117,12 +119,16 @@ def _cancel_inflight_call(call: FunctionCall, app_id: Optional[str]) -> None:
             return
         try:
             await client.stub.AppStop(
-                api_pb2.AppStopRequest(app_id=app_id, source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT)
+                api_pb2.AppStopRequest(
+                    app_id=app_id, source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT
+                )
             )
         except Exception:
             pass
 
-    threading.Thread(target=lambda: asyncio.run(_cancel_and_stop()), daemon=True).start()
+    threading.Thread(
+        target=lambda: asyncio.run(_cancel_and_stop()), daemon=True
+    ).start()
 
 
 def _parse_repo_and_filename(raw: str) -> Tuple[str, str, Optional[str]]:
@@ -193,7 +199,9 @@ def download_model(
     finished_normally = False
     try:
         try:
-            repo_id, filename, revision_from_input = _parse_repo_and_filename(repo_and_file)
+            repo_id, filename, revision_from_input = _parse_repo_and_filename(
+                repo_and_file
+            )
         except ValueError as exc:
             yield str(exc), gr.update(interactive=True)
             return
@@ -245,10 +253,14 @@ def download_model(
             )
             _schedule_app_stop(call, app_id)
         except ModalConnectionError:
-            yield "Modalサーバーに接続できません。CLIでログイン済みか、ネットワーク設定をご確認ください。", gr.update(interactive=True)
+            yield "Modalサーバーに接続できません。CLIでログイン済みか、ネットワーク設定をご確認ください。", gr.update(
+                interactive=True
+            )
             return
         except ModalInvalidError as exc:
-            yield f"Modal側で入力内容が無効と判定されました: {exc}", gr.update(interactive=True)
+            yield f"Modal側で入力内容が無効と判定されました: {exc}", gr.update(
+                interactive=True
+            )
             return
         except ModalRemoteError as exc:
             message = str(exc)
@@ -259,7 +271,9 @@ def download_model(
                     gr.update(interactive=True),
                 )
                 return
-            yield f"リモート実行中にエラーが発生しました: {message}", gr.update(interactive=True)
+            yield f"リモート実行中にエラーが発生しました: {message}", gr.update(
+                interactive=True
+            )
             return
         except Exception as exc:  # pylint: disable=broad-except
             yield f"予期しないエラーが発生しました: {exc}", gr.update(interactive=True)
@@ -276,7 +290,7 @@ def download_model(
             ]
             if call_id:
                 followups.append(
-                    f"- Python: `modal.FunctionCall.from_id(\"{call_id}\").get(timeout=120)` で状態を取得する"
+                    f'- Python: `modal.FunctionCall.from_id("{call_id}").get(timeout=120)` で状態を取得する'
                 )
             status_message = "\n".join(followups)
 
@@ -311,7 +325,7 @@ def build_interface() -> gr.Blocks:
     with gr.Blocks(title="Modal: Hugging Face モデル取り込み") as demo:
         gr.Markdown(
             """### Hugging FaceのモデルをModalボリュームに保存
-`preserve-model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。"""
+`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。"""
         )
 
         repo_and_file_input = gr.Textbox(

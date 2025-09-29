@@ -35,7 +35,7 @@ uv run modal serve comfyapp.py
 ![Modal/Storage](assets/2025-09-28-23-54-39.png)
 
 ```bash
-uv run modal run preserve-model.py::preserve_model \
+uv run modal run preserve_model.py::preserve_model \
   --repo-id "Comfy-Org/Qwen-Image_ComfyUI" \
   --filename "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
   --revision "main" \
