@@ -47,6 +47,7 @@ uv run modal run preserve_model.py::preserve_model \
 1. `uv run modal deploy preserve_model.py --name preserve-model`
    - `preserve_model.py` 内で定義している `modal.App("preserve-model")` と CLI のデプロイ名を一致させます。
 2. デプロイ済み関数は Python から呼び出します。ワンライナーの例:
+   - `remote` は非同期実行を開始し、戻り値で保存先パスとファイルサイズを確認できます。
 
 ```bash
    uv run python - <<'PY'
@@ -61,8 +62,6 @@ uv run modal run preserve_model.py::preserve_model \
    print(result)
    PY
 ```
-
-- `remote` は非同期実行を開始し、戻り値で保存先パスとファイルサイズを確認できます。
 
 3. 実行ログは `uv run modal app logs preserve-model --tail` で追跡できます。長時間監視する場合は `--tail` を外して `--since` などを指定してください。
 
