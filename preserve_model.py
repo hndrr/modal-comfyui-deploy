@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 from datetime import datetime, timezone
+import shutil
 
 import modal
 
@@ -78,22 +79,18 @@ def preserve_model(
 
     filename_path = Path(filename)
     destination_path = _resolve_destination(filename, destination_subdir)
-    subfolder = (
-        filename_path.parent.as_posix() if filename_path.parent != Path(".") else None
-    )
     downloaded_path = Path(
         hf_hub_download(
             repo_id=repo_id,
-            filename=filename_path.name,
-            subfolder=subfolder,
+            filename=filename_path.as_posix(),
             revision=revision,
-            local_dir=str(destination_path.parent),
             local_dir_use_symlinks=False,
             resume_download=True,
         )
     )
-    if downloaded_path != destination_path:
-        downloaded_path = downloaded_path.replace(destination_path)
+    if downloaded_path.resolve() != destination_path.resolve():
+        shutil.copy2(downloaded_path, destination_path)
+        downloaded_path = destination_path
     file_stat = downloaded_path.stat()
     completed_at = datetime.now(timezone.utc).isoformat()
     print(f"モデルファイルを {downloaded_path} に保存しました")
