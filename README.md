@@ -98,3 +98,4 @@ uv run python rename_volume.py <コピー元ボリューム名> <コピー先ボ
 - 実行すると確認プロンプトが表示されます。CI などで確認を省略したい場合は `--yes` オプションを付けてください。
 - コピー完了後は Modal ダッシュボードや `modal volume list` で内容を確認してください。
 - 問題がなければ旧ボリュームを `modal volume delete <コピー元ボリューム名>` で削除できます。
+- 単体のファイル削除は `modal volume delete <コピー元ボリューム名> <ファイル名>` で可能です。
