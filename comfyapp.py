@@ -7,7 +7,7 @@ from pathlib import Path
 
 import modal
 
-volume = modal.Volume.from_name("comyfy-model", create_if_missing=True)
+volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
 custom_node_volume = modal.Volume.from_name(
     "comfy-custom-nodes", create_if_missing=True
 )
@@ -90,7 +90,7 @@ app = modal.App(name="comfyui", image=image)
     max_containers=1,
     scaledown_window=30,
     timeout=1800,
-    gpu="T4",
+    gpu="A100-40GB",
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
@@ -241,4 +241,7 @@ def ui():
         if link_directory(comfy_root / "user", USER_DATA_VOLUME_MOUNT):
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
-    subprocess.Popen("comfy launch -- --listen 0.0.0.0 --port 8000", shell=True)
+    subprocess.Popen(
+        "comfy launch -- --listen 0.0.0.0 --port 8000 --use-sage-attention",
+        shell=True,
+    )

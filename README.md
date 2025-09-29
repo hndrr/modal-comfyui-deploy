@@ -12,13 +12,15 @@ uv sync
 
 ```bash
 uv run modal serve comfyapp.py
+# または常時稼働させる場合
+uv run modal deploy comfyapp.py
 ```
 
 ![ComfyUI](assets/2025-09-28-21-11-34.png)
 
 ### GPU とコンテナ設定
 
-- `comfyapp.py` 内の `@app.function` で `gpu="T4"` など Modal が提供する GPU 名を指定します。CPU のみで動かす場合は `gpu=None` にします。
+- `comfyapp.py` 内の `@app.function` で `gpu="A100-40GB"` など Modal が提供する GPU 名を指定します。CPU のみで動かす場合は `gpu=None` にします。
 - 2025年9月時点で指定できる主な GPU 名は
    `T4`、`L4`、`A10`、`A100`、`A100-40GB`、`A100-80GB`、`L40S`、`H100`、`H200`、`B200`
    です。
@@ -28,7 +30,6 @@ uv run modal serve comfyapp.py
 - 料金は GPU 種類ごとに異なるため、[Modal の料金ページ](https://modal.com/pricing)で最新の秒課金単価を確認してください。例: `H100` は 1秒あたり約 $0.001097。
 - 同時実行数を増やしたい場合は `max_containers` を調整します。値を大きくすると並列に立ち上がる GPU コンテナが増え、利用料金も比例して増えます。
 - 長時間の推論が必要な場合は `timeout` や `scaledown_window` を大きめに設定し、セッションが途中で停止しないようにします。
-- 常時稼働させる際は `modal deploy comfyapp.py` を利用して常駐サービスとして公開できます。
 
 ## model upload
 
