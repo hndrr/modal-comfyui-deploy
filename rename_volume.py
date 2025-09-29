@@ -96,7 +96,9 @@ def run_copy(old_volume_name: str, new_volume_name: str, auto_confirm: bool) -> 
     try:
         with app.run():
             copy_data.remote()
-    except modal.exception.ModalError as exc:  except   # noqa: BLE001 Modal APIからの例外をそのまま通知
+    except (
+        modal.exception.ModalError
+    ) as exc:  # noqa: BLE001 Modal APIからの例外をそのまま通知
         print(f"Failed to start Modal job. Reason: {exc}")
         raise
 
