@@ -51,19 +51,24 @@ CONFIG = AppConfig(
 )
 
 
+async def _run_aio_or_sync(callable_obj, *args, **kwargs):
+    """callable_obj.aio(...) があれば await し、なければ同期版をスレッド経由で実行する"""
+
+    aio_impl = getattr(callable_obj, "aio", None)
+    if aio_impl is not None:
+        return await aio_impl(*args, **kwargs)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: callable_obj(*args, **kwargs))
+
+
 async def _spawn_modal_function(modal_function, **kwargs) -> FunctionCall:
-    """Modal関数の spawn を非同期で呼び出し、FunctionCall を返す"""
+    """Modal関数の spawn を非同期的に扱う"""
 
     spawn_callable = getattr(modal_function, "spawn", None)
     if spawn_callable is None:
         raise AttributeError("指定された Modal 関数に spawn が見つかりません")
-
-    aio_impl = getattr(spawn_callable, "aio", None)
-    if aio_impl is not None:
-        return await aio_impl(**kwargs)
-
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: spawn_callable(**kwargs))
+    return await _run_aio_or_sync(spawn_callable, **kwargs)
 
 
 async def _await_function_call(call: FunctionCall, timeout: float) -> Optional[dict]:
@@ -72,25 +77,14 @@ async def _await_function_call(call: FunctionCall, timeout: float) -> Optional[d
     get_callable = getattr(call, "get", None)
     if get_callable is None:
         raise AttributeError("FunctionCall に get が定義されていません")
-
-    aio_impl = getattr(get_callable, "aio", None)
-    if aio_impl is not None:
-        return await aio_impl(timeout=timeout)
-
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: get_callable(timeout=timeout))
+    return await _run_aio_or_sync(get_callable, timeout=timeout)
 
 
 async def _get_remote_function(app_name: str, function_name: str) -> Function:
-    """Function.from_name の非同期/同期呼び出しを吸収する"""
+    """Function.from_name の同期/非同期差を吸収する"""
 
-    from_name_callable = getattr(Function, "from_name")
-    aio_impl = getattr(from_name_callable, "aio", None)
-    if aio_impl is not None:
-        return await aio_impl(app_name, function_name)
+    return await _run_aio_or_sync(Function.from_name, app_name, function_name)
 
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: from_name_callable(app_name, function_name))
 
 
 
