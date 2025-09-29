@@ -37,6 +37,7 @@ app = modal.App("preserve-model")
     image=download_image,
     timeout=60 * 60 * 24,  # 24時間に延長して大容量ダウンロードを許容
     max_containers=1,  # 同時実行を制限してI/O競合を避ける
+    secrets=[modal.Secret.from_name("huggingface-token")],
 )
 def preserve_model(
     repo_id: Optional[str] = None,
