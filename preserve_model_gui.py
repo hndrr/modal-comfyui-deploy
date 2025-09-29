@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.util
+from dataclasses import dataclass
 from pathlib import Path
 import threading
 import os
@@ -31,14 +32,22 @@ _PRESERVE_FUNCTION = _MODULE.preserve_model
 _APP = _MODULE.app
 _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
 
-_USE_DEPLOYED = os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
-_DEPLOYED_APP_NAME = os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model")
-_DEPLOYED_FUNCTION_NAME = os.getenv(
-    "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"
+
+@dataclass
+class AppConfig:
+    use_deployed: bool
+    deployed_app_name: str
+    deployed_function_name: str
+
+
+CONFIG = AppConfig(
+    use_deployed=os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    },
+    deployed_app_name=os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model"),
+    deployed_function_name=os.getenv("PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"),
 )
 
 
@@ -76,14 +85,14 @@ async def _invoke_preserve(
             completed = False
         return call, completed, result, app_id
 
-    if _USE_DEPLOYED:
+    if CONFIG.use_deployed:
         try:
             remote_function: Function = await Function.from_name.aio(
-                _DEPLOYED_APP_NAME, _DEPLOYED_FUNCTION_NAME
+                CONFIG.deployed_app_name, CONFIG.deployed_function_name
             )
         except ModalNotFoundError as exc:  # デプロイ済み関数が存在しない場合
             raise ModalInvalidError(
-                f"デプロイ済みのアプリ '{_DEPLOYED_APP_NAME}' または関数 '{_DEPLOYED_FUNCTION_NAME}' が見つかりません"
+                f"デプロイ済みのアプリ '{CONFIG.deployed_app_name}' または関数 '{CONFIG.deployed_function_name}' が見つかりません"
             ) from exc
         return await _spawn_and_poll(
             remote_function.spawn.aio(
@@ -336,7 +345,7 @@ def download_model(
 
         msg_lines = [
             status_message,
-            f"- 実行モード: {'デプロイ済み関数' if _USE_DEPLOYED else 'ローカル(app.run)'}",
+            f"- 実行モード: {'デプロイ済み関数' if CONFIG.use_deployed else 'ローカル(app.run)'}",
             f"- リポジトリ: {repo_id.strip()}",
             f"- 対象ファイル: {filename.strip()}",
             f"- リビジョン: {chosen_revision}",
@@ -454,14 +463,12 @@ def build_interface() -> gr.Blocks:
 def main(argv: Optional[list[str]] = None) -> None:
     args = _parse_cli_args(argv)
 
-    global _USE_DEPLOYED, _DEPLOYED_APP_NAME, _DEPLOYED_FUNCTION_NAME
-
     if args.use_deployed is not None:
-        _USE_DEPLOYED = args.use_deployed
+        CONFIG.use_deployed = args.use_deployed
     if args.deployed_app_name:
-        _DEPLOYED_APP_NAME = args.deployed_app_name
+        CONFIG.deployed_app_name = args.deployed_app_name
     if args.deployed_function_name:
-        _DEPLOYED_FUNCTION_NAME = args.deployed_function_name
+        CONFIG.deployed_function_name = args.deployed_function_name
 
     launch_kwargs = {}
     if args.share:
