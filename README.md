@@ -48,4 +48,6 @@ uv run modal run preserve_model.py::preserve_model \
 uv run preserve_model_gui.py
 ```
 
+open:  <http://127.0.0.1:7860>
+
 ![Gradio](assets/2025-09-28-22-01-40.png)

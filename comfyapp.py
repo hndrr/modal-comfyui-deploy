@@ -7,7 +7,7 @@ from pathlib import Path
 
 import modal
 
-volume = modal.Volume.from_name("model-weights-vol", create_if_missing=True)
+volume = modal.Volume.from_name("comyfy-model", create_if_missing=True)
 custom_node_volume = modal.Volume.from_name(
     "comfy-custom-nodes", create_if_missing=True
 )

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import modal
 
 # create a Volume, or retrieve it if     it exists
-volume = modal.Volume.from_name("model-weights-vol", create_if_missing=True)
+volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
 MODEL_DIR = Path("/models")
 COMFY_MODEL_SUBDIRS = {
     "checkpoints",
@@ -79,7 +79,7 @@ def preserve_model(
     filename_path = Path(filename)
     destination_path = _resolve_destination(filename, destination_subdir)
     subfolder = (
-        filename_path.parent.as_posix() if filename_path.parent != Path('.') else None
+        filename_path.parent.as_posix() if filename_path.parent != Path(".") else None
     )
     downloaded_path = Path(
         hf_hub_download(
