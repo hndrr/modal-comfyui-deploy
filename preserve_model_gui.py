@@ -31,9 +31,15 @@ _PRESERVE_FUNCTION = _MODULE.preserve_model
 _APP = _MODULE.app
 _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
 
-_USE_DEPLOYED = os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {"1", "true", "yes"}
+_USE_DEPLOYED = os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 _DEPLOYED_APP_NAME = os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model")
-_DEPLOYED_FUNCTION_NAME = os.getenv("PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model")
+_DEPLOYED_FUNCTION_NAME = os.getenv(
+    "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"
+)
 
 
 def _run_async(coro):
@@ -58,7 +64,9 @@ async def _invoke_preserve(
     revision: Optional[str],
     destination_subdir: Optional[str],
 ) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
-    async def _spawn_and_poll(spawn_coro, app_id: Optional[str]) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
+    async def _spawn_and_poll(
+        spawn_coro, app_id: Optional[str]
+    ) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
         call = await spawn_coro
         result = None
         try:
@@ -352,7 +360,6 @@ def download_model(
     finally:
         if call is not None and not finished_normally:
             _cancel_inflight_call(call, app_id)
-
 
 
 def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
