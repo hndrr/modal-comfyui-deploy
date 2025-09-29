@@ -6,18 +6,18 @@ from typing import Tuple
 import modal
 
 
-def _build_app(old_volume_name: str, new_volume_name: str) -> Tuple[modal.App, modal.Function]:
+def _build_app(
+    old_volume_name: str, new_volume_name: str
+) -> Tuple[modal.App, modal.Function]:
     """指定されたVolume名でModalアプリとコピー関数を構築する"""
 
-    app = modal.App(name=f"volume-renamer-{old_volume_name}-to-{new_volume_name}")
+    app = modal.App(name="volume-copier")
 
     source_mount = "/source_vol"
     dest_mount = "/dest_vol"
 
     source_volume = modal.Volume.from_name(old_volume_name)
-    destination_volume = modal.Volume.from_name(
-        new_volume_name, create_if_missing=True
-    )
+    destination_volume = modal.Volume.from_name(new_volume_name, create_if_missing=True)
 
     # serialized=True を付与し、ローカルスコープ内でのデコレータ利用を許可
     @app.function(
@@ -31,7 +31,7 @@ def _build_app(old_volume_name: str, new_volume_name: str) -> Tuple[modal.App, m
     def copy_data() -> None:
         """古いVolumeから新しいVolumeへデータをコピーします。"""
 
-        if not os.path.exists(source_mount) or not os.listdir(source_mount):
+        if not os.listdir(source_mount):
             print(
                 f"Source volume '{old_volume_name}' is empty or does not exist. Nothing to copy."
             )
@@ -63,7 +63,7 @@ def _build_app(old_volume_name: str, new_volume_name: str) -> Tuple[modal.App, m
             except FileExistsError:
                 print(f"Item '{item}' already exists in destination. Skipping.")
                 skipped_items += 1
-            except Exception as exc:  # noqa: BLE001 例外内容をログへ出すために広めに捕捉
+            except (OSError, shutil.Error) as exc:
                 print(f"Could not copy '{item}'. Reason: {exc}")
                 skipped_items += 1
 
@@ -71,9 +71,7 @@ def _build_app(old_volume_name: str, new_volume_name: str) -> Tuple[modal.App, m
         print("Copy operation summary:")
         print(f"Successfully copied: {copied_items} items")
         print(f"Skipped/Failed: {skipped_items} items")
-        print(
-            f"Data copy from '{old_volume_name}' to '{new_volume_name}' is complete."
-        )
+        print(f"Data copy from '{old_volume_name}' to '{new_volume_name}' is complete.")
         print("=" * 30 + "\n")
 
     return app, copy_data
@@ -98,7 +96,7 @@ def run_copy(old_volume_name: str, new_volume_name: str, auto_confirm: bool) -> 
     try:
         with app.run():
             copy_data.remote()
-    except Exception as exc:  # noqa: BLE001 Modal APIからの例外をそのまま通知
+    except modal.exception.ModalError as exc:  except   # noqa: BLE001 Modal APIからの例外をそのまま通知
         print(f"Failed to start Modal job. Reason: {exc}")
         raise
 
@@ -111,9 +109,7 @@ def run_copy(old_volume_name: str, new_volume_name: str, auto_confirm: bool) -> 
 def parse_args() -> argparse.Namespace:
     """コマンドライン引数を解釈する"""
 
-    parser = argparse.ArgumentParser(
-        description="Modal Volume間でデータをコピーします"
-    )
+    parser = argparse.ArgumentParser(description="Modal Volume間でデータをコピーします")
     parser.add_argument(
         "source",
         help="コピー元のModal Volume名",
