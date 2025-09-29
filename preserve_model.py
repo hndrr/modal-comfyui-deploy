@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Optional
 
-import shutil
 from datetime import datetime, timezone
 
 import modal
@@ -35,10 +34,12 @@ app = modal.App()
 @app.function(
     volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
     image=download_image,
+    timeout=60 * 60 * 24,  # 24時間に延長して大容量ダウンロードを許容
+    concurrency_limit=1,  # 同時実行を制限してI/O競合を避ける
 )
 def preserve_model(
-    repo_id: str = "Comfy-Org/Qwen-Image-Edit_ComfyUI",
-    filename: str = "split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+    repo_id: Optional[str] = None,
+    filename: Optional[str] = None,
     revision: Optional[str] = None,
     destination_subdir: Optional[str] = None,
 ):
@@ -70,16 +71,32 @@ def preserve_model(
         target_root.mkdir(parents=True, exist_ok=True)
         return target_root / filename_path.name
 
+    if not repo_id:
+        raise ValueError("repo_id を必ず指定してください")
+    if not filename:
+        raise ValueError("filename を必ず指定してください")
+
+    filename_path = Path(filename)
     destination_path = _resolve_destination(filename, destination_subdir)
-    downloaded_path = hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        revision=revision,
+    subfolder = (
+        filename_path.parent.as_posix() if filename_path.parent != Path('.') else None
     )
-    shutil.copy2(downloaded_path, destination_path)
-    file_stat = destination_path.stat()
+    downloaded_path = Path(
+        hf_hub_download(
+            repo_id=repo_id,
+            filename=filename_path.name,
+            subfolder=subfolder,
+            revision=revision,
+            local_dir=str(destination_path.parent),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+    )
+    if downloaded_path != destination_path:
+        downloaded_path = downloaded_path.replace(destination_path)
+    file_stat = downloaded_path.stat()
     completed_at = datetime.now(timezone.utc).isoformat()
-    print(f"モデルファイルを {downloaded_path} から {destination_path} に保存しました")
+    print(f"モデルファイルを {downloaded_path} に保存しました")
     return {
         "destination": destination_path.as_posix(),
         "size_bytes": file_stat.st_size,
