@@ -241,4 +241,7 @@ def ui():
         if link_directory(comfy_root / "user", USER_DATA_VOLUME_MOUNT):
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
-    subprocess.Popen("comfy launch -- --listen 0.0.0.0 --port 8000", shell=True)
+    subprocess.Popen(
+        "comfy launch -- --listen 0.0.0.0 --port 8000 --use-sage-attention",
+        shell=True,
+    )
