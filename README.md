@@ -51,3 +51,15 @@ uv run preserve_model_gui.py
 open:  <http://127.0.0.1:7860>
 
 ![Gradio](assets/2025-09-28-22-01-40.png)
+
+## volume copy
+
+`rename_volume.py` は Modal の Volume リソース同士で中身をコピーし、実質的にボリューム名を移行するためのユーティリティです。コピー先が存在しない場合は自動で作成されます。
+
+```bash
+uv run python rename_volume.py <コピー元ボリューム名> <コピー先ボリューム名>
+```
+
+- 実行すると確認プロンプトが表示されます。CI などで確認を省略したい場合は `--yes` オプションを付けてください。
+- コピー完了後は Modal ダッシュボードや `modal volume list` で内容を確認してください。
+- 問題がなければ旧ボリュームを `modal volume delete <コピー元ボリューム名>` で削除できます。
