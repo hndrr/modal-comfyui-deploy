@@ -67,9 +67,21 @@ uv run modal run preserve_model.py::preserve_model \
 
 ### Gradio UI
 
+デフォルト (ローカルでmodal.App.run()を使う一時コンテナ起動):
+
 ```bash
 uv run preserve_model_gui.py
 ```
+
+デプロイ済み関数を利用する場合 (既定のアプリ名/関数名を使用):
+
+```bash
+uv run preserve_model_gui.py --use-deployed
+```
+
+- デプロイ名や関数名を変えている場合は `--deployed-app-name` / `--deployed-function-name` で上書きします。
+- ローカル起動を明示したい場合は `--use-local` を付けても同じ結果になります。
+- 共有URLやポート設定を行いたい場合は `--share`、`--server-port`、`--server-name` オプションを組み合わせてください。
 
 open:  <http://127.0.0.1:7860>
 

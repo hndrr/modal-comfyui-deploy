@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import importlib.util
 from pathlib import Path
 import threading
+import os
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import gradio as gr
-from modal import FunctionCall
+from modal import Function, FunctionCall
 from modal.exception import ConnectionError as ModalConnectionError
 from modal.exception import InvalidError as ModalInvalidError
+from modal.exception import NotFoundError as ModalNotFoundError
 from modal.exception import RemoteError as ModalRemoteError
 from modal.exception import TimeoutError as ModalTimeoutError
 from modal_proto import api_pb2
@@ -27,6 +30,10 @@ _SPEC.loader.exec_module(_MODULE)
 _PRESERVE_FUNCTION = _MODULE.preserve_model
 _APP = _MODULE.app
 _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
+
+_USE_DEPLOYED = os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {"1", "true", "yes"}
+_DEPLOYED_APP_NAME = os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model")
+_DEPLOYED_FUNCTION_NAME = os.getenv("PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model")
 
 
 def _run_async(coro):
@@ -51,20 +58,45 @@ async def _invoke_preserve(
     revision: Optional[str],
     destination_subdir: Optional[str],
 ) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
-    async with _APP.run(detach=True) as running_app:
-        call = await _PRESERVE_FUNCTION.spawn.aio(
-            repo_id=repo_id,
-            filename=filename,
-            revision=revision or None,
-            destination_subdir=destination_subdir or None,
-        )
+    async def _spawn_and_poll(spawn_coro, app_id: Optional[str]) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
+        call = await spawn_coro
         result = None
         try:
             result = await call.get.aio(timeout=0.5)
             completed = True
         except (asyncio.TimeoutError, ModalTimeoutError):
             completed = False
-        return call, completed, result, running_app.app_id
+        return call, completed, result, app_id
+
+    if _USE_DEPLOYED:
+        try:
+            remote_function: Function = await Function.from_name.aio(
+                _DEPLOYED_APP_NAME, _DEPLOYED_FUNCTION_NAME
+            )
+        except ModalNotFoundError as exc:  # デプロイ済み関数が存在しない場合
+            raise ModalInvalidError(
+                f"デプロイ済みのアプリ '{_DEPLOYED_APP_NAME}' または関数 '{_DEPLOYED_FUNCTION_NAME}' が見つかりません"
+            ) from exc
+        return await _spawn_and_poll(
+            remote_function.spawn.aio(
+                repo_id=repo_id,
+                filename=filename,
+                revision=revision or None,
+                destination_subdir=destination_subdir or None,
+            ),
+            None,
+        )
+
+    async with _APP.run(detach=True) as running_app:
+        return await _spawn_and_poll(
+            _PRESERVE_FUNCTION.spawn.aio(
+                repo_id=repo_id,
+                filename=filename,
+                revision=revision or None,
+                destination_subdir=destination_subdir or None,
+            ),
+            running_app.app_id,
+        )
 
 
 def _schedule_app_stop(call: FunctionCall, app_id: Optional[str]) -> None:
@@ -296,6 +328,7 @@ def download_model(
 
         msg_lines = [
             status_message,
+            f"- 実行モード: {'デプロイ済み関数' if _USE_DEPLOYED else 'ローカル(app.run)'}",
             f"- リポジトリ: {repo_id.strip()}",
             f"- 対象ファイル: {filename.strip()}",
             f"- リビジョン: {chosen_revision}",
@@ -321,11 +354,58 @@ def download_model(
             _cancel_inflight_call(call, app_id)
 
 
+
+def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """CLI引数を解析してGUI起動時の挙動を上書きできるようにする"""
+
+    parser = argparse.ArgumentParser(
+        description="Hugging FaceモデルをModalへ保存するGUIを起動します",
+    )
+    parser.add_argument(
+        "--use-deployed",
+        dest="use_deployed",
+        action="store_true",
+        help="デプロイ済みのModal関数を利用して実行します",
+    )
+    parser.add_argument(
+        "--use-local",
+        dest="use_deployed",
+        action="store_false",
+        help="ローカルからmodal.App.run()で一時コンテナを起動します",
+    )
+    parser.set_defaults(use_deployed=None)
+    parser.add_argument(
+        "--deployed-app-name",
+        dest="deployed_app_name",
+        help="デプロイ済みアプリの名前を指定します",
+    )
+    parser.add_argument(
+        "--deployed-function-name",
+        dest="deployed_function_name",
+        help="デプロイ済み関数の名前を指定します",
+    )
+    parser.add_argument(
+        "--share",
+        action="store_true",
+        help="Gradioの共有URLを有効化します",
+    )
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        help="GUIを起動するポートを指定します",
+    )
+    parser.add_argument(
+        "--server-name",
+        help="GUIをバインドするホスト名またはIPを指定します",
+    )
+    return parser.parse_args(argv)
+
+
 def build_interface() -> gr.Blocks:
     with gr.Blocks(title="Modal: Hugging Face モデル取り込み") as demo:
         gr.Markdown(
             """### Hugging FaceのモデルをModalボリュームに保存
-`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。"""
+`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。\n\n- デプロイ済み関数を利用したい場合は `--use-deployed` フラグ、または環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。\n- デフォルト以外のアプリ名・関数名でデプロイしているときは `--deployed-app-name` / `--deployed-function-name` あるいは環境変数 `PRESERVE_MODEL_DEPLOYED_APP` / `PRESERVE_MODEL_DEPLOYED_FUNCTION` で上書きできます。"""
         )
 
         repo_and_file_input = gr.Textbox(
@@ -363,8 +443,27 @@ def build_interface() -> gr.Blocks:
     return demo
 
 
-def main() -> None:
-    build_interface().launch()
+def main(argv: Optional[list[str]] = None) -> None:
+    args = _parse_cli_args(argv)
+
+    global _USE_DEPLOYED, _DEPLOYED_APP_NAME, _DEPLOYED_FUNCTION_NAME
+
+    if args.use_deployed is not None:
+        _USE_DEPLOYED = args.use_deployed
+    if args.deployed_app_name:
+        _DEPLOYED_APP_NAME = args.deployed_app_name
+    if args.deployed_function_name:
+        _DEPLOYED_FUNCTION_NAME = args.deployed_function_name
+
+    launch_kwargs = {}
+    if args.share:
+        launch_kwargs["share"] = True
+    if args.server_port is not None:
+        launch_kwargs["server_port"] = args.server_port
+    if args.server_name:
+        launch_kwargs["server_name"] = args.server_name
+
+    build_interface().launch(**launch_kwargs)
 
 
 if __name__ == "__main__":
