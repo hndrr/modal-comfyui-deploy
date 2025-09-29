@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import importlib.util
+from dataclasses import dataclass
 from pathlib import Path
 import threading
-from typing import Optional, Tuple
+import os
+from typing import Optional, Tuple, Any
 from urllib.parse import urlparse
 
 import gradio as gr
-from modal import FunctionCall
+from modal import Function, FunctionCall
 from modal.exception import ConnectionError as ModalConnectionError
 from modal.exception import InvalidError as ModalInvalidError
+from modal.exception import NotFoundError as ModalNotFoundError
 from modal.exception import RemoteError as ModalRemoteError
 from modal.exception import TimeoutError as ModalTimeoutError
-from modal_proto import api_pb2
 
 # preserve_model.py を動的に読み込んで、元の関数や定数を再利用する
 _MODULE_PATH = Path(__file__).with_name("preserve_model.py")
@@ -27,6 +30,61 @@ _SPEC.loader.exec_module(_MODULE)
 _PRESERVE_FUNCTION = _MODULE.preserve_model
 _APP = _MODULE.app
 _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
+
+
+@dataclass
+class AppConfig:
+    use_deployed: bool
+    deployed_app_name: str
+    deployed_function_name: str
+
+
+CONFIG = AppConfig(
+    use_deployed=os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    },
+    deployed_app_name=os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model"),
+    deployed_function_name=os.getenv("PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"),
+)
+
+
+async def _run_aio_or_sync(callable_obj, *args, **kwargs):
+    """callable_obj.aio(...) があれば await し、なければ同期版をスレッド経由で実行する"""
+
+    aio_impl = getattr(callable_obj, "aio", None)
+    if aio_impl is not None:
+        return await aio_impl(*args, **kwargs)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: callable_obj(*args, **kwargs))
+
+
+async def _spawn_modal_function(modal_function, **kwargs) -> FunctionCall:
+    """Modal関数の spawn を非同期的に扱う"""
+
+    spawn_callable = getattr(modal_function, "spawn", None)
+    if spawn_callable is None:
+        raise AttributeError("指定された Modal 関数に spawn が見つかりません")
+    return await _run_aio_or_sync(spawn_callable, **kwargs)
+
+
+async def _await_function_call(call: FunctionCall, timeout: Optional[float] = None) -> Optional[dict]:
+    """FunctionCall.get を非同期的に待ち受ける"""
+
+    get_callable = getattr(call, "get", None)
+    if get_callable is None:
+        raise AttributeError("FunctionCall に get が定義されていません")
+    return await _run_aio_or_sync(get_callable, timeout=timeout)
+
+
+async def _get_remote_function(app_name: str, function_name: str) -> Function:
+    """Function.from_name の同期/非同期差を吸収する"""
+
+    return await _run_aio_or_sync(Function.from_name, app_name, function_name)
+
+
 
 
 def _run_async(coro):
@@ -50,79 +108,80 @@ async def _invoke_preserve(
     filename: str,
     revision: Optional[str],
     destination_subdir: Optional[str],
-) -> Tuple[FunctionCall, bool, Optional[dict], Optional[str]]:
-    async with _APP.run(detach=True) as running_app:
-        call = await _PRESERVE_FUNCTION.spawn.aio(
+) -> Tuple[FunctionCall, bool, Optional[dict], Optional[Any]]:
+    async def _spawn_and_poll(
+        modal_function, app_handle: Optional[Any], **spawn_kwargs
+    ) -> Tuple[FunctionCall, bool, Optional[dict], Optional[Any]]:
+        call = await _spawn_modal_function(modal_function, **spawn_kwargs)
+        result = None
+        try:
+            result = await _await_function_call(call, timeout=0.5)
+            completed = True
+        except (asyncio.TimeoutError, ModalTimeoutError):
+            completed = False
+        return call, completed, result, app_handle
+
+    if CONFIG.use_deployed:
+        try:
+            remote_function: Function = await _get_remote_function(
+                CONFIG.deployed_app_name, CONFIG.deployed_function_name
+            )
+        except ModalNotFoundError as exc:  # デプロイ済み関数が存在しない場合
+            raise ModalInvalidError(
+                f"デプロイ済みのアプリ '{CONFIG.deployed_app_name}' または関数 '{CONFIG.deployed_function_name}' が見つかりません"
+            ) from exc
+        return await _spawn_and_poll(
+            remote_function,
+            None,
             repo_id=repo_id,
             filename=filename,
             revision=revision or None,
             destination_subdir=destination_subdir or None,
         )
-        result = None
-        try:
-            result = await call.get.aio(timeout=0.5)
-            completed = True
-        except (asyncio.TimeoutError, ModalTimeoutError):
-            completed = False
-        return call, completed, result, running_app.app_id
+
+    async with _APP.run(detach=True) as running_app:
+        return await _spawn_and_poll(
+            _PRESERVE_FUNCTION,
+            running_app,
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision or None,
+            destination_subdir=destination_subdir or None,
+        )
 
 
-def _schedule_app_stop(call: FunctionCall, app_id: Optional[str]) -> None:
+def _schedule_app_stop(call: FunctionCall, app_handle: Optional[Any]) -> None:
     """FunctionCall完了後にAppを停止する補助処理をバックグラウンドで走らせる"""
 
-    if not app_id:
-        return
-
-    call_id = getattr(call, "object_id", None)
-    if call_id is None:
+    if app_handle is None or not hasattr(app_handle, "stop"):
         return
 
     async def _wait_and_stop() -> None:
         try:
-            fc = await FunctionCall.from_id.aio(call_id)
-        except Exception:
-            return
-        try:
-            await fc.get.aio()
+            await _await_function_call(call, timeout=None)
         except Exception:
             pass
-        client = getattr(fc, "client", None)
-        if client is None:
-            return
         try:
-            await client.stub.AppStop(
-                api_pb2.AppStopRequest(
-                    app_id=app_id, source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT
-                )
-            )
+            await _run_aio_or_sync(app_handle.stop)
         except Exception:
             pass
 
     threading.Thread(target=lambda: asyncio.run(_wait_and_stop()), daemon=True).start()
 
 
-def _cancel_inflight_call(call: FunctionCall, app_id: Optional[str]) -> None:
+def _cancel_inflight_call(call: FunctionCall, app_handle: Optional[Any]) -> None:
     """GUI側が中断された場合にFunctionCallをキャンセルしAppも終了させる"""
-
-    call_id = getattr(call, "object_id", None)
-    if call_id is None:
-        return
 
     async def _cancel_and_stop() -> None:
         try:
-            await call.cancel.aio(terminate_containers=True)
+            await _run_aio_or_sync(call.cancel, terminate_containers=True)
         except Exception:
             pass
 
-        client = getattr(call, "client", None)
-        if client is None or not app_id:
+        if app_handle is None or not hasattr(app_handle, "stop"):
             return
         try:
-            await client.stub.AppStop(
-                api_pb2.AppStopRequest(
-                    app_id=app_id, source=api_pb2.APP_STOP_SOURCE_PYTHON_CLIENT
-                )
-            )
+            await _run_aio_or_sync(app_handle.stop)
         except Exception:
             pass
 
@@ -195,7 +254,7 @@ def download_model(
     destination_subdir: str,
 ):
     call: Optional[FunctionCall] = None
-    app_id: Optional[str] = None
+    app_handle: Optional[Any] = None
     finished_normally = False
     try:
         try:
@@ -243,7 +302,7 @@ def download_model(
         )
 
         try:
-            call, completed, result_info, app_id = _run_async(
+            call, completed, result_info, app_handle = _run_async(
                 _invoke_preserve(
                     repo_id=repo_id.strip(),
                     filename=filename.strip(),
@@ -251,7 +310,7 @@ def download_model(
                     destination_subdir=chosen_subdir,
                 )
             )
-            _schedule_app_stop(call, app_id)
+            _schedule_app_stop(call, app_handle)
         except ModalConnectionError:
             yield "Modalサーバーに接続できません。CLIでログイン済みか、ネットワーク設定をご確認ください。", gr.update(
                 interactive=True
@@ -280,6 +339,7 @@ def download_model(
             return
 
         call_id = getattr(call, "object_id", None)
+        app_id = getattr(app_handle, "app_id", None) if app_handle else None
         if completed:
             status_message = "Modal側でモデル保存処理が完了しました。"
         else:
@@ -288,6 +348,8 @@ def download_model(
                 "- CLI: `modal app list --limit 5` で対象のApp IDを確認し、`modal app logs <App ID>` でログを表示する",
                 "- Web: Modalのダッシュボードで該当のFunction Callを開く",
             ]
+            if app_id:
+                followups[1] = f"- CLI: `modal app logs {app_id}` でリアルタイムログを確認する"
             if call_id:
                 followups.append(
                     f'- Python: `modal.FunctionCall.from_id("{call_id}").get(timeout=120)` で状態を取得する'
@@ -296,6 +358,7 @@ def download_model(
 
         msg_lines = [
             status_message,
+            f"- 実行モード: {'デプロイ済み関数' if CONFIG.use_deployed else 'ローカル(app.run)'}",
             f"- リポジトリ: {repo_id.strip()}",
             f"- 対象ファイル: {filename.strip()}",
             f"- リビジョン: {chosen_revision}",
@@ -311,6 +374,8 @@ def download_model(
                 msg_lines.append(f"- 保存サイズ: {size_bytes} バイト")
             if completed_at:
                 msg_lines.append(f"- 完了時刻(UTC): {completed_at}")
+        if app_id:
+            msg_lines.append(f"- App ID: {app_id}")
         if call_id:
             msg_lines.append(f"- コールID: {call_id}")
 
@@ -318,14 +383,61 @@ def download_model(
         yield "\n".join(msg_lines), gr.update(interactive=True)
     finally:
         if call is not None and not finished_normally:
-            _cancel_inflight_call(call, app_id)
+            _cancel_inflight_call(call, app_handle)
+
+
+def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """CLI引数を解析してGUI起動時の挙動を上書きできるようにする"""
+
+    parser = argparse.ArgumentParser(
+        description="Hugging FaceモデルをModalへ保存するGUIを起動します",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--use-deployed",
+        dest="use_deployed",
+        action="store_true",
+        help="デプロイ済みのModal関数を利用して実行します",
+    )
+    group.add_argument(
+        "--use-local",
+        dest="use_deployed",
+        action="store_false",
+        help="ローカルからmodal.App.run()で一時コンテナを起動します",
+    )
+    parser.set_defaults(use_deployed=None)
+    parser.add_argument(
+        "--deployed-app-name",
+        dest="deployed_app_name",
+        help="デプロイ済みアプリの名前を指定します",
+    )
+    parser.add_argument(
+        "--deployed-function-name",
+        dest="deployed_function_name",
+        help="デプロイ済み関数の名前を指定します",
+    )
+    parser.add_argument(
+        "--share",
+        action="store_true",
+        help="Gradioの共有URLを有効化します",
+    )
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        help="GUIを起動するポートを指定します",
+    )
+    parser.add_argument(
+        "--server-name",
+        help="GUIをバインドするホスト名またはIPを指定します",
+    )
+    return parser.parse_args(argv)
 
 
 def build_interface() -> gr.Blocks:
     with gr.Blocks(title="Modal: Hugging Face モデル取り込み") as demo:
         gr.Markdown(
             """### Hugging FaceのモデルをModalボリュームに保存
-`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。"""
+`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。\n\n- デプロイ済み関数を利用したい場合は `--use-deployed` フラグ、または環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。\n- デフォルト以外のアプリ名・関数名でデプロイしているときは `--deployed-app-name` / `--deployed-function-name` あるいは環境変数 `PRESERVE_MODEL_DEPLOYED_APP` / `PRESERVE_MODEL_DEPLOYED_FUNCTION` で上書きできます。"""
         )
 
         repo_and_file_input = gr.Textbox(
@@ -363,8 +475,25 @@ def build_interface() -> gr.Blocks:
     return demo
 
 
-def main() -> None:
-    build_interface().launch()
+def main(argv: Optional[list[str]] = None) -> None:
+    args = _parse_cli_args(argv)
+
+    if args.use_deployed is not None:
+        CONFIG.use_deployed = args.use_deployed
+    if args.deployed_app_name:
+        CONFIG.deployed_app_name = args.deployed_app_name
+    if args.deployed_function_name:
+        CONFIG.deployed_function_name = args.deployed_function_name
+
+    launch_kwargs = {}
+    if args.share:
+        launch_kwargs["share"] = True
+    if args.server_port is not None:
+        launch_kwargs["server_port"] = args.server_port
+    if args.server_name:
+        launch_kwargs["server_name"] = args.server_name
+
+    build_interface().launch(**launch_kwargs)
 
 
 if __name__ == "__main__":

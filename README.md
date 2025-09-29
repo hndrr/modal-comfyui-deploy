@@ -67,9 +67,21 @@ uv run modal run preserve_model.py::preserve_model \
 
 ### Gradio UI
 
+デフォルト (ローカルでmodal.App.run()を使う一時コンテナ起動):
+
 ```bash
 uv run preserve_model_gui.py
 ```
+
+デプロイ済み関数を利用する場合 (既定のアプリ名/関数名を使用):
+
+```bash
+uv run preserve_model_gui.py --use-deployed
+```
+
+- デプロイ名や関数名を変えている場合は `--deployed-app-name` / `--deployed-function-name` で上書きします。
+- ローカル起動を明示したい場合は `--use-local` を付けても同じ結果になります。
+- 共有URLやポート設定を行いたい場合は `--share`、`--server-port`、`--server-name` オプションを組み合わせてください。
 
 open:  <http://127.0.0.1:7860>
 
@@ -86,3 +98,4 @@ uv run python rename_volume.py <コピー元ボリューム名> <コピー先ボ
 - 実行すると確認プロンプトが表示されます。CI などで確認を省略したい場合は `--yes` オプションを付けてください。
 - コピー完了後は Modal ダッシュボードや `modal volume list` で内容を確認してください。
 - 問題がなければ旧ボリュームを `modal volume delete <コピー元ボリューム名>` で削除できます。
+- 単体のファイル削除は `modal volume delete <コピー元ボリューム名> <ファイル名>` で可能です。
