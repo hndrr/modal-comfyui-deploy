@@ -29,14 +29,14 @@ download_image = (
     .pip_install("huggingface_hub[hf_transfer]")  # install fast Rust download client
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})  # and enable it
 )
-app = modal.App()
+app = modal.App("preserve-model")
 
 
 @app.function(
     volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
     image=download_image,
     timeout=60 * 60 * 24,  # 24時間に延長して大容量ダウンロードを許容
-    concurrency_limit=1,  # 同時実行を制限してI/O競合を避ける
+    max_containers=1,  # 同時実行を制限してI/O競合を避ける
 )
 def preserve_model(
     repo_id: Optional[str] = None,

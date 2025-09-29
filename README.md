@@ -42,6 +42,30 @@ uv run modal run preserve_model.py::preserve_model \
   --destination-subdir "text_encoders"
 ```
 
+### preserve_model をデプロイして遠隔実行する
+
+1. `uv run modal deploy preserve_model.py --name preserve-model`
+   - `preserve_model.py` 内で定義している `modal.App("preserve-model")` と CLI のデプロイ名を一致させます。
+2. デプロイ済み関数は Python から呼び出します。ワンライナーの例:
+
+```bash
+   uv run python - <<'PY'
+   import modal
+   f = modal.Function.from_name("preserve-model", "preserve_model")
+   result = f.remote(
+       repo_id="Comfy-Org/Qwen-Image-Edit_ComfyUI",
+       filename="split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors",
+       revision="main",
+       destination_subdir="diffusion_models",
+   )
+   print(result)
+   PY
+```
+
+- `remote` は非同期実行を開始し、戻り値で保存先パスとファイルサイズを確認できます。
+
+3. 実行ログは `uv run modal app logs preserve-model --tail` で追跡できます。長時間監視する場合は `--tail` を外して `--since` などを指定してください。
+
 ### Gradio UI
 
 ```bash
