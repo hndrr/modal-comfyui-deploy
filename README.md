@@ -20,7 +20,7 @@ uv run modal deploy comfyapp.py
 
 ### GPU とコンテナ設定
 
-- `comfyapp.py` 内の `@app.function` で `gpu="T4"` など Modal が提供する GPU 名を指定します。CPU のみで動かす場合は `gpu=None` にします。
+- `comfyapp.py` 内の `@app.function` で `gpu="A100-40GB"` など Modal が提供する GPU 名を指定します。CPU のみで動かす場合は `gpu=None` にします。
 - 2025年9月時点で指定できる主な GPU 名は
    `T4`、`L4`、`A10`、`A100`、`A100-40GB`、`A100-80GB`、`L40S`、`H100`、`H200`、`B200`
    です。
