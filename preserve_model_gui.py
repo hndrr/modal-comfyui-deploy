@@ -48,7 +48,7 @@ CONFIG = AppConfig(
     },
     deployed_app_name=os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model"),
     deployed_function_name=os.getenv(
-        "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve-model"
+        "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"
     ),
 )
 
