@@ -110,7 +110,7 @@ app = modal.App(name="comfyui", image=image)
     max_containers=1,
     scaledown_window=30,
     timeout=1800,
-    gpu="T4",
+    gpu="A100-40GB",
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
