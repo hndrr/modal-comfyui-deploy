@@ -86,7 +86,7 @@ def preserve_model(
             filename=filename_path.as_posix(),
             revision=revision,
             local_dir_use_symlinks=False,
-            force_download=True,
+            resume_download=True,
         )
     )
     if downloaded_path.resolve() != destination_path.resolve():
