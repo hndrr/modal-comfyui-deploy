@@ -40,13 +40,16 @@ class AppConfig:
 
 
 CONFIG = AppConfig(
-    use_deployed=os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower() in {
+    use_deployed=os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower()
+    in {
         "1",
         "true",
         "yes",
     },
     deployed_app_name=os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model"),
-    deployed_function_name=os.getenv("PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"),
+    deployed_function_name=os.getenv(
+        "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve-model"
+    ),
 )
 
 
@@ -70,7 +73,9 @@ async def _spawn_modal_function(modal_function, **kwargs) -> FunctionCall:
     return await _run_aio_or_sync(spawn_callable, **kwargs)
 
 
-async def _await_function_call(call: FunctionCall, timeout: Optional[float] = None) -> Optional[dict]:
+async def _await_function_call(
+    call: FunctionCall, timeout: Optional[float] = None
+) -> Optional[dict]:
     """FunctionCall.get を非同期的に待ち受ける"""
 
     get_callable = getattr(call, "get", None)
@@ -83,8 +88,6 @@ async def _get_remote_function(app_name: str, function_name: str) -> Function:
     """Function.from_name の同期/非同期差を吸収する"""
 
     return await _run_aio_or_sync(Function.from_name, app_name, function_name)
-
-
 
 
 def _run_async(coro):
@@ -349,7 +352,9 @@ def download_model(
                 "- Web: Modalのダッシュボードで該当のFunction Callを開く",
             ]
             if app_id:
-                followups[1] = f"- CLI: `modal app logs {app_id}` でリアルタイムログを確認する"
+                followups[1] = (
+                    f"- CLI: `modal app logs {app_id}` でリアルタイムログを確認する"
+                )
             if call_id:
                 followups.append(
                     f'- Python: `modal.FunctionCall.from_id("{call_id}").get(timeout=120)` で状態を取得する'
