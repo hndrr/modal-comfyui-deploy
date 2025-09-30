@@ -93,7 +93,7 @@ image = (
         "librosa==0.10.2.post1",
         "soundfile==0.12.1",
         "ftfy==6.2.3",
-        "sageattention",
+        "sageattention",  # TODO 2系をいれる
         "accelerate==1.1.0",
         "xformers==0.0.32.post2",
         "triton==3.4.0",
