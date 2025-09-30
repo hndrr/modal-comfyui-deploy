@@ -12,6 +12,7 @@ custom_node_volume = modal.Volume.from_name(
     "comfy-custom-nodes", create_if_missing=True
 )
 output_volume = modal.Volume.from_name("comfy-outputs", create_if_missing=True)
+input_volume = modal.Volume.from_name("comfy-inputs", create_if_missing=True)
 user_data_volume = modal.Volume.from_name("comfy-user-data", create_if_missing=True)
 MODEL_VOLUME_DIR = Path("/models")
 COMFY_ROOT_CANDIDATES = [
@@ -21,6 +22,7 @@ COMFY_ROOT_CANDIDATES = [
 ]
 CUSTOM_NODE_VOLUME_MOUNT = Path("/data/custom_nodes")
 OUTPUT_VOLUME_MOUNT = Path("/data/output")
+INPUT_VOLUME_MOUNT = Path("/data/input")
 USER_DATA_VOLUME_MOUNT = Path("/data/user")
 WORKFLOWS_PATCH_MARKER = "# MODAL_PATCH_ALLOW_WORKFLOWS_START"
 WORKFLOWS_PATCH_SNIPPET = textwrap.dedent(
@@ -95,6 +97,7 @@ app = modal.App(name="comfyui", image=image)
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
         OUTPUT_VOLUME_MOUNT.as_posix(): output_volume,
+        INPUT_VOLUME_MOUNT.as_posix(): input_volume,
         USER_DATA_VOLUME_MOUNT.as_posix(): user_data_volume,
     },
 )
@@ -103,6 +106,7 @@ app = modal.App(name="comfyui", image=image)
 def ui():
     CUSTOM_NODE_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
     OUTPUT_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
+    INPUT_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
     MODEL_VOLUME_DIR.mkdir(parents=True, exist_ok=True)
     USER_DATA_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
 
@@ -237,6 +241,9 @@ def ui():
 
         if link_directory(comfy_root / "output", OUTPUT_VOLUME_MOUNT):
             print(f"{comfy_root} の output を永続化 Volume に接続しました")
+
+        if link_directory(comfy_root / "input", INPUT_VOLUME_MOUNT):
+            print(f"{comfy_root} の input を永続化 Volume に接続しました")
 
         if link_directory(comfy_root / "user", USER_DATA_VOLUME_MOUNT):
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")

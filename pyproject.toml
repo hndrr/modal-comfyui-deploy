@@ -8,3 +8,6 @@ dependencies = [
     "gradio>=5.47.2",
     "modal>=1.1.4",
 ]
+
+[tool.flake8]
+max-line-length = 100
