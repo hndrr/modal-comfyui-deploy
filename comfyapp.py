@@ -69,7 +69,23 @@ NODES = [
 # イメージファイルの作成
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git")
+    .apt_install(
+        "git",
+        "wget",
+        "ca-certificates",
+        "build-essential",
+        "python3-dev",
+        "pkg-config",
+        "cmake",
+        "ninja-build",
+    )
+    # 1) CUDA Toolkit 12.8（SageAttention のビルド用）
+    # .run_commands(
+    #     "wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb",
+    #     "dpkg -i cuda-keyring_1.1-1_all.deb",
+    #     "apt-get update",
+    #     "apt-get install -y cuda-toolkit-12-8",
+    # )
     .pip_install(
         "comfy-cli==1.5.1",
         "diffusers==0.32.0",
@@ -79,6 +95,8 @@ image = (
         "ftfy==6.2.3",
         "sageattention",
         "accelerate==1.1.0",
+        "xformers==0.0.32.post2",
+        "triton==3.4.0",
         "gguf",
     )
     .run_commands("comfy --skip-prompt install --nvidia")
@@ -92,7 +110,7 @@ app = modal.App(name="comfyui", image=image)
     max_containers=1,
     scaledown_window=30,
     timeout=1800,
-    gpu="A100-40GB",
+    gpu="T4",
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
