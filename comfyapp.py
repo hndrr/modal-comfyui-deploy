@@ -79,13 +79,6 @@ image = (
         "cmake",
         "ninja-build",
     )
-    # 1) CUDA Toolkit 12.8（SageAttention のビルド用）
-    # .run_commands(
-    #     "wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb",
-    #     "dpkg -i cuda-keyring_1.1-1_all.deb",
-    #     "apt-get update",
-    #     "apt-get install -y cuda-toolkit-12-8",
-    # )
     .pip_install(
         "comfy-cli==1.5.1",
         "diffusers==0.32.0",
@@ -93,11 +86,37 @@ image = (
         "librosa==0.10.2.post1",
         "soundfile==0.12.1",
         "ftfy==6.2.3",
-        "sageattention",  # TODO 2系をいれる
+        "matplotlib",
+        "onnxruntime-gpu",
+        "scikit-image",
         "accelerate==1.1.0",
         "xformers==0.0.32.post2",
-        "triton==3.4.0",
         "gguf",
+    )
+    .run_commands(
+        # CUDA 12.8（nvcc）導入
+        "set -eux; "
+        "wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb; "
+        "dpkg -i cuda-keyring_1.1-1_all.deb; "
+        "apt-get update; "
+        "apt-get install -y cuda-toolkit-12-8; "
+        # 1) clone（固定ディレクトリ）
+        "rm -rf /opt/SageAttention; "
+        "git clone --depth=1 https://github.com/thu-ml/SageAttention.git /opt/SageAttention; "
+        # 2) setup.py の GPU検出ブロックを削除
+        #   - リポジトリ直下に setup.py があるので “/opt/SageAttention/setup.py” を編集
+        #   - パターンの違いに備え、2通りのレンジ削除を試し、いずれかが当たればOK
+        "sed -i '/if not compute_capabilities:/,/Detect GPUs with compute capabilities/d' /opt/SageAttention/setup.py || true; "
+        "sed -i '/# BEGIN GPU DETECTION/,/# END GPU DETECTION/d' /opt/SageAttention/setup.py || true; "
+        # 3) ビルド：環境変数は同一シェルで export → pip install
+        'export CUDA_HOME="/usr/local/cuda-12.8"; '
+        'export PATH="$CUDA_HOME/bin:$PATH"; '
+        # 4) 複数SMをサポート（T4=7.5, A100=8.0, RTX30=8.6, L4/4090=8.9, H100=9.0）
+        'export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.9;9.0"; '
+        'export CMAKE_CUDA_ARCHITECTURES="75;80;89;90"; '
+        "export FORCE_CUDA=1; "
+        "cd /opt/SageAttention; "
+        "pip install -v --no-build-isolation ."
     )
     .run_commands("comfy --skip-prompt install --nvidia")
     .run_commands(*[f"comfy node install {node}" for node in NODES])
