@@ -50,19 +50,19 @@ uv run modal run preserve_model.py::preserve_model \
 2. デプロイ済み関数は Python から呼び出します。ワンライナーの例:
    - `remote` は非同期実行を開始し、戻り値で保存先パスとファイルサイズを確認できます。
 
-```bash
-   uv run python - <<'PY'
-   import modal
-   f = modal.Function.from_name("preserve-model", "preserve_model")
-   result = f.remote(
-       repo_id="Comfy-Org/Qwen-Image-Edit_ComfyUI",
-       filename="split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors",
-       revision="main",
-       destination_subdir="diffusion_models",
-   )
-   print(result)
-   PY
-```
+   ```bash
+      uv run python - <<'PY'
+      import modal
+      f = modal.Function.from_name("preserve-model", "preserve_model")
+      result = f.remote(
+         repo_id="Comfy-Org/Qwen-Image-Edit_ComfyUI",
+         filename="split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors",
+         revision="main",
+         destination_subdir="diffusion_models",
+      )
+      print(result)
+      PY
+   ```
 
 3. 実行ログは `uv run modal app logs preserve-model --tail` で追跡できます。長時間監視する場合は `--tail` を外して `--since` などを指定してください。
 
