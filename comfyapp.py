@@ -113,15 +113,18 @@ image = (
         "set -eux; "
         # 1) clone（固定ディレクトリ）
         "rm -rf /opt/SageAttention; "
-        "git clone --depth=1 https://github.com/thu-ml/SageAttention.git /opt/SageAttention; "
+        "git clone https://github.com/thu-ml/SageAttention.git /opt/SageAttention; "
         "cd /opt/SageAttention; "
-        # 2) 環境変数を設定：A100専用に最適化
+        # 2) 特定のコミットをチェックアウト
+        "SAGE_SHA=2aecfa8; "
+        "git checkout $SAGE_SHA; "
+        # 3) 環境変数を設定：A100専用に最適化
         'export CUDA_HOME="/usr/local/cuda-12.8"; '
         'export PATH="$CUDA_HOME/bin:$PATH"; '
         'export TORCH_CUDA_ARCH_LIST="8.0"; '
         'export CMAKE_CUDA_ARCHITECTURES="80"; '
         "export FORCE_CUDA=1; "
-        # 3) pipでインストール（環境変数がGPU検出をオーバーライド）
+        # 4) pipでインストール（環境変数がGPU検出をオーバーライド）
         "python3 -m pip install --no-cache-dir --no-build-isolation -v ."
     )
     .run_commands("comfy --skip-prompt install --nvidia")
