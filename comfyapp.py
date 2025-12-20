@@ -79,25 +79,50 @@ image = (
         "cmake",
         "ninja-build",
     )
-    # 1) CUDA Toolkit 12.8（SageAttention のビルド用）
-    # .run_commands(
-    #     "wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb",
-    #     "dpkg -i cuda-keyring_1.1-1_all.deb",
-    #     "apt-get update",
-    #     "apt-get install -y cuda-toolkit-12-8",
-    # )
     .pip_install(
-        "comfy-cli==1.5.1",
+        # PyTorch 2.8.0 + CUDA 12.8とxformersを先にインストール
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "xformers==0.0.32.post2",
+        "triton==3.4.0",
+    )
+    .pip_install(
+        "comfy-cli==1.5.3",
         "diffusers==0.32.0",
         "moviepy==1.0.3",
         "librosa==0.10.2.post1",
         "soundfile==0.12.1",
         "ftfy==6.2.3",
-        "sageattention",  # TODO 2系をいれる
+        "matplotlib",
+        "onnxruntime-gpu",
+        "scikit-image",
         "accelerate==1.1.0",
-        "xformers==0.0.32.post2",
-        "triton==3.4.0",
         "gguf",
+        "taichi>=1.6,<1.8"
+    )
+    .run_commands(
+        # CUDA 12.8（nvcc）導入
+        "set -eux; "
+        "wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb; "
+        "dpkg -i cuda-keyring_1.1-1_all.deb; "
+        "apt-get update; "
+        "apt-get install -y cuda-toolkit-12-8"
+    )
+    .run_commands(
+        # SageAttention のビルド（PyTorchインストール後に実行）
+        "set -eux; "
+        # 1) clone（固定ディレクトリ）
+        "rm -rf /opt/SageAttention; "
+        "git clone --depth=1 https://github.com/thu-ml/SageAttention.git /opt/SageAttention; "
+        "cd /opt/SageAttention; "
+        # 2) 環境変数を設定：A100専用に最適化
+        'export CUDA_HOME="/usr/local/cuda-12.8"; '
+        'export PATH="$CUDA_HOME/bin:$PATH"; '
+        'export TORCH_CUDA_ARCH_LIST="8.0"; '
+        'export CMAKE_CUDA_ARCHITECTURES="80"; '
+        "export FORCE_CUDA=1; "
+        # 3) pipでインストール（環境変数がGPU検出をオーバーライド）
+        "python3 -m pip install --no-cache-dir --no-build-isolation -v ."
     )
     .run_commands("comfy --skip-prompt install --nvidia")
     .run_commands(*[f"comfy node install {node}" for node in NODES])
@@ -267,6 +292,6 @@ def ui():
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
     subprocess.Popen(
-        "comfy launch -- --listen 0.0.0.0 --port 8000 --use-sage-attention",
+        "comfy launch -- --listen 0.0.0.0 --port 8000",
         shell=True,
     )
