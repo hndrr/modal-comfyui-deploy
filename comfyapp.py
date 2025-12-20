@@ -98,6 +98,7 @@ image = (
         "scikit-image",
         "accelerate==1.1.0",
         "gguf",
+        "taichi>=1.6,<1.8"
     )
     .run_commands(
         # CUDA 12.8（nvcc）導入
