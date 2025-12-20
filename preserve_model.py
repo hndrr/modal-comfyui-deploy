@@ -21,6 +21,7 @@ COMFY_MODEL_SUBDIRS = {
     "vae",
     "embeddings",
     "upscale_models",
+    "detection"
 }
 
 # define dependencies for downloading model
