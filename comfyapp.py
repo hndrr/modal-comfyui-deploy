@@ -138,7 +138,7 @@ app = modal.App(name="comfyui", image=image)
     max_containers=1,
     scaledown_window=30,
     timeout=1800,
-    gpu="A100-40GB",
+    gpu="A100-80GB",
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
@@ -295,6 +295,6 @@ def ui():
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
     subprocess.Popen(
-        "comfy launch -- --listen 0.0.0.0 --port 8000",
+        "comfy launch -- --listen 0.0.0.0 --port 8000 --preview-method auto",
         shell=True,
     )
