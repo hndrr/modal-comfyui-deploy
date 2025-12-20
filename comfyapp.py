@@ -84,6 +84,7 @@ image = (
         "torch==2.8.0",
         "torchvision==0.23.0",
         "xformers==0.0.32.post2",
+        "triton==3.4.0",
     )
     .pip_install(
         "comfy-cli==1.5.3",
@@ -290,6 +291,6 @@ def ui():
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
     subprocess.Popen(
-        "comfy launch -- --listen 0.0.0.0 --port 8000 --use-sage-attention",
+        "comfy launch -- --listen 0.0.0.0 --port 8000",
         shell=True,
     )
