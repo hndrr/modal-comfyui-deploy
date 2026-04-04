@@ -184,7 +184,7 @@ image = (
         }
     )
     .pip_install(
-        "comfy-cli==1.5.3",
+        "comfy-cli==1.7.1",
         "diffusers==0.32.0",
         "moviepy==1.0.3",
         "librosa==0.10.2.post1",

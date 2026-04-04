@@ -21,7 +21,7 @@ uv run modal deploy comfyapp.py
 
 `comfyapp.py` の build は `Python 3.12 + PyTorch 2.10.0 (cu130)` を前提に `xformers`、`flash-attn`、`SageAttention` を組み込みます。`flash-attn` は prebuilt wheel を使い、`SageAttention` は `woct0rdho/SageAttention` の `abi3_stable` を先に wheel build してから導入します。
 
-実行 GPU はコード書き換えではなく `COMFYUI_GPU_PROFILE` で選びます。既定値は `rtx-pro-6000` で、`h100` と `a100-80gb` も選べます。SageAttention の wheel build はこのプロファイルごとに別の `TORCH_CUDA_ARCH_LIST` で行います。
+実行 GPU はコード書き換えではなく `COMFYUI_GPU_PROFILE` で選びます。既定値は `rtx-pro-6000` で、`h100` と `a100-80gb` も選べます。SageAttention の wheel build もこのプロファイルごとに分かれていて、`rtx-pro-6000` は `12.0+PTX`、`h100` は `9.0`、`a100-80gb` は `8.0` の `TORCH_CUDA_ARCH_LIST` で build します。
 
 `COMFYUI_SAGE_ATTENTION` は `on|off` を受け付けます。既定は `on` で、`off` にしない限り `--use-sage-attention` を付けて起動します。`COMFYUI_CLI_ARGS` は追加の起動引数専用です。
 
@@ -33,6 +33,10 @@ uv run modal deploy comfyapp.py
 
 - GPU は `COMFYUI_GPU_PROFILE` で切り替えます。既定は `rtx-pro-6000` です。
 - 利用可能なプロファイルは `rtx-pro-6000`、`h100`、`a100-80gb` です。
+- SageAttention の build arch はプロファイルごとに固定です。
+  - `rtx-pro-6000` -> `TORCH_CUDA_ARCH_LIST=12.0+PTX`
+  - `h100` -> `TORCH_CUDA_ARCH_LIST=9.0`
+  - `a100-80gb` -> `TORCH_CUDA_ARCH_LIST=8.0`
 - `.env.example` を `cp .env.example .env` でコピーしておくと、`uv run modal serve comfyapp.py` / `uv run modal deploy comfyapp.py` 実行時に自動で読み込みます。
 - 例:
   - `COMFYUI_GPU_PROFILE=rtx-pro-6000 uv run modal serve comfyapp.py`
