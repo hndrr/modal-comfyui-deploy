@@ -1,11 +1,14 @@
 import filecmp
 import os
+import shlex
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from typing import Final
 
 import modal
+from dotenv import load_dotenv
 
 volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
 custom_node_volume = modal.Volume.from_name(
@@ -58,6 +61,96 @@ WORKFLOWS_PATCH_SNIPPET = textwrap.dedent(
     """
 ).lstrip("\n")
 
+TORCH_WHEEL_URL = "https://download.pytorch.org/whl/cu130/torch-2.10.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl"
+TORCHVISION_WHEEL_URL = "https://download.pytorch.org/whl/cu130/torchvision-0.25.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl"
+TORCHAUDIO_WHEEL_URL = "https://download.pytorch.org/whl/cu130/torchaudio-2.10.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl"
+XFORMERS_WHEEL_URL = "https://download.pytorch.org/whl/cu130/xformers-0.0.35-py39-none-manylinux_2_28_x86_64.whl"
+FLASH_ATTN_WHEEL_URL = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl"
+SAGEATTENTION_REF = "abi3_stable"
+CUDA_ARCH_LIST = "8.0 9.0 12.0+PTX"
+COMFYUI_CLI_ARGS_ENV = "COMFYUI_CLI_ARGS"
+COMFYUI_GPU_PROFILE_ENV = "COMFYUI_GPU_PROFILE"
+COMFYUI_SAGE_ATTENTION_ENV = "COMFYUI_SAGE_ATTENTION"
+PREBUILT_WHEEL_DIR = "/opt/prebuilt-wheels"
+SAGE_ATTENTION_FLAG = "--use-sage-attention"
+DOTENV_PATH = Path(__file__).with_name(".env")
+
+load_dotenv(DOTENV_PATH, override=False)
+
+GPU_PROFILES: Final = {
+    "rtx-pro-6000": {
+        "modal_gpu": "RTX-PRO-6000",
+        "cuda_arch_list": CUDA_ARCH_LIST,
+        "sage_default": True,
+    },
+    "h100": {
+        "modal_gpu": "H100",
+        "cuda_arch_list": CUDA_ARCH_LIST,
+        "sage_default": False,
+    },
+    "a100-80gb": {
+        "modal_gpu": "A100-80GB",
+        "cuda_arch_list": CUDA_ARCH_LIST,
+        "sage_default": False,
+    },
+}
+VALID_SAGE_ATTENTION_MODES: Final = {"auto", "on", "off"}
+
+
+def _resolve_gpu_profile() -> tuple[str, dict[str, str | bool]]:
+    profile_name = os.environ.get(COMFYUI_GPU_PROFILE_ENV, "rtx-pro-6000").strip()
+    profile_name = profile_name.lower()
+    profile = GPU_PROFILES.get(profile_name)
+    if profile is None:
+        allowed = ", ".join(sorted(GPU_PROFILES))
+        raise ValueError(
+            f"Invalid {COMFYUI_GPU_PROFILE_ENV}: {profile_name!r}. Allowed values: {allowed}"
+        )
+    return profile_name, profile
+
+
+def _resolve_sage_attention_mode() -> str:
+    mode = os.environ.get(COMFYUI_SAGE_ATTENTION_ENV, "auto").strip().lower()
+    if mode not in VALID_SAGE_ATTENTION_MODES:
+        allowed = ", ".join(sorted(VALID_SAGE_ATTENTION_MODES))
+        raise ValueError(
+            f"Invalid {COMFYUI_SAGE_ATTENTION_ENV}: {mode!r}. Allowed values: {allowed}"
+        )
+    return mode
+
+
+def _should_enable_sage_attention(cli_args: list[str]) -> bool:
+    if SAGE_ATTENTION_FLAG in cli_args:
+        return False
+    if SAGE_ATTENTION_MODE == "on":
+        return True
+    if SAGE_ATTENTION_MODE == "off":
+        return False
+    return bool(GPU_PROFILE["sage_default"])
+
+
+def _build_launch_command(extra_cli_args: str) -> list[str]:
+    launch_command = [
+        "comfy",
+        "launch",
+        "--",
+        "--listen",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--preview-method",
+        "auto",
+    ]
+    cli_args = shlex.split(extra_cli_args) if extra_cli_args else []
+    if _should_enable_sage_attention(cli_args):
+        launch_command.append(SAGE_ATTENTION_FLAG)
+    launch_command.extend(cli_args)
+    return launch_command
+
+
+GPU_PROFILE_NAME, GPU_PROFILE = _resolve_gpu_profile()
+SAGE_ATTENTION_MODE = _resolve_sage_attention_mode()
+
 # 使用するカスタムノードのリスト
 NODES = [
     "https://github.com/crystian/ComfyUI-Crystools",
@@ -68,23 +161,30 @@ NODES = [
 
 # イメージファイルの作成
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.debian_slim(python_version="3.12")
     .apt_install(
         "git",
         "wget",
+        "curl",
         "ca-certificates",
         "build-essential",
         "python3-dev",
         "pkg-config",
         "cmake",
         "ninja-build",
+        "libgl1",
+        "libglib2.0-0",
     )
-    .pip_install(
-        # PyTorch 2.8.0 + CUDA 12.8とxformersを先にインストール
-        "torch==2.8.0",
-        "torchvision==0.23.0",
-        "xformers==0.0.32.post2",
-        "triton==3.4.0",
+    .env(
+        {
+            "CUDA_HOME": "/usr/local/cuda",
+            "XFORMERS_IGNORE_FLASH_VERSION_CHECK": "1",
+            "TORCH_CUDA_ARCH_LIST": CUDA_ARCH_LIST,
+            "SAGEATTENTION_CUDA_ARCH_LIST": CUDA_ARCH_LIST,
+            "MAX_JOBS": "8",
+            "NVCC_THREADS": "8",
+            "FORCE_CUDA": "1",
+        }
     )
     .pip_install(
         "comfy-cli==1.5.3",
@@ -98,36 +198,41 @@ image = (
         "scikit-image",
         "accelerate==1.1.0",
         "gguf",
-        "taichi>=1.6,<1.8"
+        "taichi>=1.6,<1.8",
     )
     .run_commands(
-        # CUDA 12.8（nvcc）導入
+        # CUDA 13.0（nvcc）導入
         "set -eux; "
         "wget https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb; "
         "dpkg -i cuda-keyring_1.1-1_all.deb; "
         "apt-get update; "
-        "apt-get install -y cuda-toolkit-12-8"
+        "apt-get install -y cuda-toolkit-13-0"
     )
     .run_commands(
-        # SageAttention のビルド（PyTorchインストール後に実行）
+        # comfy-docker と同じ Torch/cu130 系を先に入れる
         "set -eux; "
-        # 1) clone（固定ディレクトリ）
-        "rm -rf /opt/SageAttention; "
-        "git clone https://github.com/thu-ml/SageAttention.git /opt/SageAttention; "
-        "cd /opt/SageAttention; "
-        # 2) 特定のコミットをチェックアウト
-        "SAGE_SHA=2aecfa8; "
-        "git checkout $SAGE_SHA; "
-        # 3) 環境変数を設定：A100専用に最適化
-        'export CUDA_HOME="/usr/local/cuda-12.8"; '
-        'export PATH="$CUDA_HOME/bin:$PATH"; '
-        'export TORCH_CUDA_ARCH_LIST="8.0"; '
-        'export CMAKE_CUDA_ARCHITECTURES="80"; '
-        "export FORCE_CUDA=1; "
-        # 4) pipでインストール（環境変数がGPU検出をオーバーライド）
-        "python3 -m pip install --no-cache-dir --no-build-isolation -v ."
+        "python3 -m pip install --no-cache-dir -U pip setuptools wheel build uv packaging ninja; "
+        f'python3 -m pip install --no-cache-dir "{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" "{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}" "{FLASH_ATTN_WHEEL_URL}"'
+    )
+    .run_commands(
+        # SageAttention は先に wheel build して退避しておく
+        "set -eux; "
+        f'mkdir -p "{PREBUILT_WHEEL_DIR}"; '
+        "rm -rf /tmp/SageAttention; "
+        f'git clone --depth 1 --branch "{SAGEATTENTION_REF}" --recurse-submodules --shallow-submodules https://github.com/woct0rdho/SageAttention.git /tmp/SageAttention; '
+        "cd /tmp/SageAttention; "
+        "git submodule update --init --recursive; "
+        "python3 -m build --wheel --no-isolation; "
+        f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
+        "rm -rf /tmp/SageAttention"
     )
     .run_commands("comfy --skip-prompt install --nvidia")
+    .run_commands(
+        # comfy install が依存を触っても最終的には cu130 + prebuilt SageAttention で揃える
+        "set -eux; "
+        "python3 -m pip install --no-cache-dir -U pip setuptools wheel build uv packaging ninja; "
+        f'python3 -m pip install --no-cache-dir "{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" "{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}" "{FLASH_ATTN_WHEEL_URL}" {PREBUILT_WHEEL_DIR}/*.whl'
+    )
     .run_commands(*[f"comfy node install {node}" for node in NODES])
 )
 
@@ -138,7 +243,7 @@ app = modal.App(name="comfyui", image=image)
     max_containers=1,
     scaledown_window=30,
     timeout=1800,
-    gpu="A100-80GB",
+    gpu=str(GPU_PROFILE["modal_gpu"]),
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
@@ -150,6 +255,11 @@ app = modal.App(name="comfyui", image=image)
 @modal.concurrent(max_inputs=10)
 @modal.web_server(8000, startup_timeout=60)
 def ui():
+    print(
+        f"{COMFYUI_GPU_PROFILE_ENV}={GPU_PROFILE_NAME} "
+        f"({GPU_PROFILE['modal_gpu']}), {COMFYUI_SAGE_ATTENTION_ENV}={SAGE_ATTENTION_MODE}"
+    )
+
     CUSTOM_NODE_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
     OUTPUT_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
     INPUT_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
@@ -294,7 +404,10 @@ def ui():
         if link_directory(comfy_root / "user", USER_DATA_VOLUME_MOUNT):
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
-    subprocess.Popen(
-        "comfy launch -- --listen 0.0.0.0 --port 8000 --preview-method auto",
-        shell=True,
-    )
+    extra_cli_args = os.environ.get(COMFYUI_CLI_ARGS_ENV, "").strip()
+    launch_command = _build_launch_command(extra_cli_args)
+
+    if extra_cli_args:
+        print(f"{COMFYUI_CLI_ARGS_ENV}={extra_cli_args}")
+
+    subprocess.Popen(launch_command)

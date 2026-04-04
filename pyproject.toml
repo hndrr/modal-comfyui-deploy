@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "gradio>=5.47.2",
     "modal>=1.1.4",
+    "python-dotenv>=1.0.1",
 ]
 
 [tool.flake8]
