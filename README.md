@@ -21,6 +21,8 @@ uv run modal deploy comfyapp.py
 
 `comfyapp.py` の build は `Python 3.12 + PyTorch 2.10.0 (cu130)` を前提に `xformers`、`flash-attn`、`SageAttention` を組み込みます。`flash-attn` は prebuilt wheel を使い、`SageAttention` は `woct0rdho/SageAttention` の `abi3_stable` を先に wheel build してから導入します。
 
+image は `base_image` と runtime layer に分けています。CUDA / Torch / `flash-attn` / SageAttention wheel build までは `base_image` に寄せてあり、`comfy-cli` や他の Python 依存、`comfy --skip-prompt install --nvidia`、custom node install は後段です。`comfy-cli` だけの更新で重い SageAttention build を巻き込みにくくするためです。
+
 実行 GPU はコード書き換えではなく `COMFYUI_GPU_PROFILE` で選びます。既定値は `rtx-pro-6000` で、`h100` と `a100-80gb` も選べます。SageAttention の wheel build もこのプロファイルごとに分かれていて、`rtx-pro-6000` は `12.0+PTX`、`h100` は `9.0`、`a100-80gb` は `8.0` の `TORCH_CUDA_ARCH_LIST` で build します。
 
 `COMFYUI_SAGE_ATTENTION` は `on|off` を受け付けます。既定は `on` で、`off` にしない限り `--use-sage-attention` を付けて起動します。`COMFYUI_CLI_ARGS` は追加の起動引数専用です。
