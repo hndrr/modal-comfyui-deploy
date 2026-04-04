@@ -21,9 +21,9 @@ uv run modal deploy comfyapp.py
 
 `comfyapp.py` の build は `Python 3.12 + PyTorch 2.10.0 (cu130)` を前提に `xformers`、`flash-attn`、`SageAttention` を組み込みます。`flash-attn` は prebuilt wheel を使い、`SageAttention` は `woct0rdho/SageAttention` の `abi3_stable` を先に wheel build してから導入します。
 
-実行 GPU はコード書き換えではなく `COMFYUI_GPU_PROFILE` で選びます。既定値は `rtx-pro-6000` で、`h100` と `a100-80gb` も選べます。
+実行 GPU はコード書き換えではなく `COMFYUI_GPU_PROFILE` で選びます。既定値は `rtx-pro-6000` で、`h100` と `a100-80gb` も選べます。SageAttention の wheel build はこのプロファイルごとに別の `TORCH_CUDA_ARCH_LIST` で行います。
 
-`COMFYUI_SAGE_ATTENTION` は `auto|on|off` を受け付けます。既定の `auto` では `rtx-pro-6000` のときだけ `--use-sage-attention` を自動付与し、`h100` / `a100-80gb` では自動付与しません。`COMFYUI_CLI_ARGS` は追加の起動引数専用です。
+`COMFYUI_SAGE_ATTENTION` は `on|off` を受け付けます。既定は `on` で、`off` にしない限り `--use-sage-attention` を付けて起動します。`COMFYUI_CLI_ARGS` は追加の起動引数専用です。
 
 `comfyapp.py` は repo ルートの `.env` を自動読込します。環境変数がシェル側ですでに設定されている場合は、そちらを優先します。
 
@@ -46,7 +46,7 @@ uv run modal deploy comfyapp.py
 - 料金は GPU 種類ごとに異なるため、[Modal の料金ページ](https://modal.com/pricing)で最新の秒課金単価を確認してください。例: `H100` は 1秒あたり約 $0.001097。
 - 同時実行数を増やしたい場合は `max_containers` を調整します。値を大きくすると並列に立ち上がる GPU コンテナが増え、利用料金も比例して増えます。
 - 長時間の推論が必要な場合は `timeout` や `scaledown_window` を大きめに設定し、セッションが途中で停止しないようにします。
-- `COMFYUI_SAGE_ATTENTION=auto` が既定です。Blackwell 系を明示的に使うときだけ auto で `--use-sage-attention` が付与されます。強制したい場合は `COMFYUI_SAGE_ATTENTION=on`、無効化したい場合は `COMFYUI_SAGE_ATTENTION=off` を使ってください。
+- `COMFYUI_SAGE_ATTENTION=on` が既定です。`off` にした時だけ `--use-sage-attention` を付けません。
 - `COMFYUI_CLI_ARGS` は追加オプション専用です。例: `COMFYUI_CLI_ARGS="--fast fp16"`。
 
 ## model upload

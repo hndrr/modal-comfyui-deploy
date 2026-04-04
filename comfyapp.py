@@ -67,7 +67,6 @@ TORCHAUDIO_WHEEL_URL = "https://download.pytorch.org/whl/cu130/torchaudio-2.10.0
 XFORMERS_WHEEL_URL = "https://download.pytorch.org/whl/cu130/xformers-0.0.35-py39-none-manylinux_2_28_x86_64.whl"
 FLASH_ATTN_WHEEL_URL = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl"
 SAGEATTENTION_REF = "abi3_stable"
-CUDA_ARCH_LIST = "8.0 9.0 12.0+PTX"
 COMFYUI_CLI_ARGS_ENV = "COMFYUI_CLI_ARGS"
 COMFYUI_GPU_PROFILE_ENV = "COMFYUI_GPU_PROFILE"
 COMFYUI_SAGE_ATTENTION_ENV = "COMFYUI_SAGE_ATTENTION"
@@ -77,24 +76,24 @@ DOTENV_PATH = Path(__file__).with_name(".env")
 
 load_dotenv(DOTENV_PATH, override=False)
 
+GPU_PROFILE_NAME: str
+GPU_PROFILE: dict[str, str | bool]
+SAGE_ATTENTION_ENABLED: bool
+
 GPU_PROFILES: Final = {
     "rtx-pro-6000": {
         "modal_gpu": "RTX-PRO-6000",
-        "cuda_arch_list": CUDA_ARCH_LIST,
-        "sage_default": True,
+        "cuda_arch_list": "12.0+PTX",
     },
     "h100": {
         "modal_gpu": "H100",
-        "cuda_arch_list": CUDA_ARCH_LIST,
-        "sage_default": False,
+        "cuda_arch_list": "9.0",
     },
     "a100-80gb": {
         "modal_gpu": "A100-80GB",
-        "cuda_arch_list": CUDA_ARCH_LIST,
-        "sage_default": False,
+        "cuda_arch_list": "8.0",
     },
 }
-VALID_SAGE_ATTENTION_MODES: Final = {"auto", "on", "off"}
 
 
 def _resolve_gpu_profile() -> tuple[str, dict[str, str | bool]]:
@@ -109,24 +108,21 @@ def _resolve_gpu_profile() -> tuple[str, dict[str, str | bool]]:
     return profile_name, profile
 
 
-def _resolve_sage_attention_mode() -> str:
-    mode = os.environ.get(COMFYUI_SAGE_ATTENTION_ENV, "auto").strip().lower()
-    if mode not in VALID_SAGE_ATTENTION_MODES:
-        allowed = ", ".join(sorted(VALID_SAGE_ATTENTION_MODES))
-        raise ValueError(
-            f"Invalid {COMFYUI_SAGE_ATTENTION_ENV}: {mode!r}. Allowed values: {allowed}"
-        )
-    return mode
+def _resolve_sage_attention_enabled() -> bool:
+    raw = os.environ.get(COMFYUI_SAGE_ATTENTION_ENV, "on").strip().lower()
+    if raw == "on":
+        return True
+    if raw == "off":
+        return False
+    raise ValueError(
+        f"Invalid {COMFYUI_SAGE_ATTENTION_ENV}: {raw!r}. Allowed values: on, off"
+    )
 
 
 def _should_enable_sage_attention(cli_args: list[str]) -> bool:
-    if SAGE_ATTENTION_FLAG in cli_args:
+    if not SAGE_ATTENTION_ENABLED:
         return False
-    if SAGE_ATTENTION_MODE == "on":
-        return True
-    if SAGE_ATTENTION_MODE == "off":
-        return False
-    return bool(GPU_PROFILE["sage_default"])
+    return SAGE_ATTENTION_FLAG not in cli_args
 
 
 def _build_launch_command(extra_cli_args: str) -> list[str]:
@@ -149,7 +145,8 @@ def _build_launch_command(extra_cli_args: str) -> list[str]:
 
 
 GPU_PROFILE_NAME, GPU_PROFILE = _resolve_gpu_profile()
-SAGE_ATTENTION_MODE = _resolve_sage_attention_mode()
+SAGE_ATTENTION_ENABLED = _resolve_sage_attention_enabled()
+CUDA_ARCH_LIST = str(GPU_PROFILE["cuda_arch_list"])
 
 # 使用するカスタムノードのリスト
 NODES = [
@@ -257,7 +254,9 @@ app = modal.App(name="comfyui", image=image)
 def ui():
     print(
         f"{COMFYUI_GPU_PROFILE_ENV}={GPU_PROFILE_NAME} "
-        f"({GPU_PROFILE['modal_gpu']}), {COMFYUI_SAGE_ATTENTION_ENV}={SAGE_ATTENTION_MODE}"
+        f"({GPU_PROFILE['modal_gpu']}), "
+        f"TORCH_CUDA_ARCH_LIST={CUDA_ARCH_LIST}, "
+        f"{COMFYUI_SAGE_ATTENTION_ENV}={'on' if SAGE_ATTENTION_ENABLED else 'off'}"
     )
 
     CUSTOM_NODE_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
