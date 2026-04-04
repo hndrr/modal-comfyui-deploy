@@ -157,7 +157,7 @@ NODES = [
 ]
 
 # イメージファイルの作成
-image = (
+base_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
         "git",
@@ -182,20 +182,6 @@ image = (
             "NVCC_THREADS": "8",
             "FORCE_CUDA": "1",
         }
-    )
-    .pip_install(
-        "comfy-cli==1.7.1",
-        "diffusers==0.32.0",
-        "moviepy==1.0.3",
-        "librosa==0.10.2.post1",
-        "soundfile==0.12.1",
-        "ftfy==6.2.3",
-        "matplotlib",
-        "onnxruntime-gpu",
-        "scikit-image",
-        "accelerate==1.1.0",
-        "gguf",
-        "taichi>=1.6,<1.8",
     )
     .run_commands(
         # CUDA 13.0（nvcc）導入
@@ -222,6 +208,24 @@ image = (
         "python3 -m build --wheel --no-isolation; "
         f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
         "rm -rf /tmp/SageAttention"
+    )
+)
+
+image = (
+    base_image
+    .pip_install(
+        "comfy-cli==1.7.1",
+        "diffusers==0.32.0",
+        "moviepy==1.0.3",
+        "librosa==0.10.2.post1",
+        "soundfile==0.12.1",
+        "ftfy==6.2.3",
+        "matplotlib",
+        "onnxruntime-gpu",
+        "scikit-image",
+        "accelerate==1.1.0",
+        "gguf",
+        "taichi>=1.6,<1.8",
     )
     .run_commands("comfy --skip-prompt install --nvidia")
     .run_commands(
