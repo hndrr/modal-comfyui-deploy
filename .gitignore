@@ -13,3 +13,4 @@ uv.lock
 .vscode
 
 .env
+comfy-docker
