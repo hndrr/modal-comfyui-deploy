@@ -11,25 +11,43 @@ uv sync
 ## launch
 
 ```bash
+cp .env.example .env
+# 必要なら .env を編集
+
 uv run modal serve comfyapp.py
 # または常時稼働させる場合
 uv run modal deploy comfyapp.py
 ```
 
+`comfyapp.py` の build は `Python 3.12 + PyTorch 2.10.0 (cu130)` を前提に `xformers`、`flash-attn`、`SageAttention` を組み込みます。`flash-attn` は prebuilt wheel を使い、`SageAttention` は `woct0rdho/SageAttention` の `abi3_stable` を先に wheel build してから導入します。
+
+実行 GPU はコード書き換えではなく `COMFYUI_GPU_PROFILE` で選びます。既定値は `rtx-pro-6000` で、`h100` と `a100-80gb` も選べます。
+
+`COMFYUI_SAGE_ATTENTION` は `auto|on|off` を受け付けます。既定の `auto` では `rtx-pro-6000` のときだけ `--use-sage-attention` を自動付与し、`h100` / `a100-80gb` では自動付与しません。`COMFYUI_CLI_ARGS` は追加の起動引数専用です。
+
+`comfyapp.py` は repo ルートの `.env` を自動読込します。環境変数がシェル側ですでに設定されている場合は、そちらを優先します。
+
 ![ComfyUI](assets/2025-09-28-21-11-34.png)
 
 ### GPU とコンテナ設定
 
-- `comfyapp.py` 内の `@app.function` で `gpu="A100-40GB"` など Modal が提供する GPU 名を指定します。CPU のみで動かす場合は `gpu=None` にします。
+- GPU は `COMFYUI_GPU_PROFILE` で切り替えます。既定は `rtx-pro-6000` です。
+- 利用可能なプロファイルは `rtx-pro-6000`、`h100`、`a100-80gb` です。
+- `.env.example` を `cp .env.example .env` でコピーしておくと、`uv run modal serve comfyapp.py` / `uv run modal deploy comfyapp.py` 実行時に自動で読み込みます。
+- 例:
+  - `COMFYUI_GPU_PROFILE=rtx-pro-6000 uv run modal serve comfyapp.py`
+  - `COMFYUI_GPU_PROFILE=h100 uv run modal serve comfyapp.py`
+  - `COMFYUI_GPU_PROFILE=a100-80gb uv run modal serve comfyapp.py`
 - 2025年9月時点で指定できる主な GPU 名は
-   `T4`、`L4`、`A10`、`A100`、`A100-40GB`、`A100-80GB`、`L40S`、`H100`、`H200`、`B200`
-   です。
-   需要に合わせて `gpu="A100-80GB"` などと書き換えてください。
+  `T4`、`L4`、`A10`、`A100`、`A100-40GB`、`A100-80GB`、`L40S`、`H100`、`H200`、`B200`
+  です。
 - 複数 GPU を 1 コンテナに割り当てたい場合は `gpu="H100:4"` のように末尾へ `:台数` を付与します。B200/H200/H100/A100/L40S/L4/T4 は最大 8 台、A10 は最大 4 台まで指定できます。
 - GPU を複数候補で指定して可用性を高めたい場合は `gpu=["H100", "A100-40GB:2"]` のようにリストで渡すと優先順位付きフォールバックが機能します。
 - 料金は GPU 種類ごとに異なるため、[Modal の料金ページ](https://modal.com/pricing)で最新の秒課金単価を確認してください。例: `H100` は 1秒あたり約 $0.001097。
 - 同時実行数を増やしたい場合は `max_containers` を調整します。値を大きくすると並列に立ち上がる GPU コンテナが増え、利用料金も比例して増えます。
 - 長時間の推論が必要な場合は `timeout` や `scaledown_window` を大きめに設定し、セッションが途中で停止しないようにします。
+- `COMFYUI_SAGE_ATTENTION=auto` が既定です。Blackwell 系を明示的に使うときだけ auto で `--use-sage-attention` が付与されます。強制したい場合は `COMFYUI_SAGE_ATTENTION=on`、無効化したい場合は `COMFYUI_SAGE_ATTENTION=off` を使ってください。
+- `COMFYUI_CLI_ARGS` は追加オプション専用です。例: `COMFYUI_CLI_ARGS="--fast fp16"`。
 
 ## model upload
 
@@ -84,7 +102,7 @@ uv run preserve_model_gui.py --use-deployed
 - ローカル起動を明示したい場合は `--use-local` を付けても同じ結果になります。
 - 共有URLやポート設定を行いたい場合は `--share`、`--server-port`、`--server-name` オプションを組み合わせてください。
 
-open:  <http://127.0.0.1:7860>
+open: <http://127.0.0.1:7860>
 
 ![Gradio](assets/2025-09-28-22-01-40.png)
 
