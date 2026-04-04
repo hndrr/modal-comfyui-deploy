@@ -67,6 +67,8 @@ uv run modal run preserve_model.py::preserve_model \
   --destination-subdir "text_encoders"
 ```
 
+- `preserve_model.py` は Modal Secret `huggingface-secret` を使って Hugging Face へアクセスします。
+
 ### preserve_model をデプロイして遠隔実行する
 
 1. `uv run modal deploy preserve_model.py --name preserve-model`
@@ -107,6 +109,7 @@ uv run preserve_model_gui.py --use-deployed
 - デプロイ名や関数名を変えている場合は `--deployed-app-name` / `--deployed-function-name` で上書きします。
 - ローカル起動を明示したい場合は `--use-local` を付けても同じ結果になります。
 - 共有URLやポート設定を行いたい場合は `--share`、`--server-port`、`--server-name` オプションを組み合わせてください。
+- `入力をリセット` を押すと各入力欄が初期値へ戻ります。
 
 open: <http://127.0.0.1:7860>
 

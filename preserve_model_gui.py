@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib.util
+import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-import threading
-import os
 from typing import Optional, Tuple, Any
 from urllib.parse import urlparse
 
@@ -391,6 +391,16 @@ def download_model(
             _cancel_inflight_call(call, app_handle)
 
 
+def reset_form():
+    return (
+        "",
+        "main",
+        "(自動判定)",
+        "",
+        gr.update(interactive=True),
+    )
+
+
 def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """CLI引数を解析してGUI起動時の挙動を上書きできるようにする"""
 
@@ -466,6 +476,7 @@ def build_interface() -> gr.Blocks:
 
         output = gr.Markdown()
         submit_btn = gr.Button("Modalへ保存の実行")
+        reset_btn = gr.Button("入力をリセット")
 
         submit_btn.click(
             fn=download_model,
@@ -475,6 +486,16 @@ def build_interface() -> gr.Blocks:
                 destination_dropdown,
             ],
             outputs=[output, submit_btn],
+        )
+        reset_btn.click(
+            fn=reset_form,
+            outputs=[
+                repo_and_file_input,
+                revision_input,
+                destination_dropdown,
+                output,
+                submit_btn,
+            ],
         )
 
     return demo
