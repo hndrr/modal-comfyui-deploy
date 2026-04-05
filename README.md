@@ -1,6 +1,6 @@
 # modal-comfyui
 
-Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して再利用するためのリポジトリです。
+Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
 
 今の主要機能は次の 3 つです。
 
