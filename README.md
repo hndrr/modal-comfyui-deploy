@@ -8,7 +8,7 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 - `preserve_model.py`: Hugging Face の単一ファイルを Modal Volume に保存する
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す
 
-補助スクリプトとして `rename_volume.py` も含まれています。
+補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 
 ## セットアップ
 
@@ -270,10 +270,46 @@ uv run python rename_volume.py <コピー元> <コピー先> --yes
 - データコピーは `modal.App(name="volume-copier")` 経由で実行
 - コピー後、元 Volume の削除は自動では行わない
 
+## 5. Volume 内のファイルを移動する
+
+`move_volume_file.py` は Modal Volume 内の単一ファイルまたはディレクトリを移動するユーティリティです。同じ Volume 内でのリネームにも、別 Volume への移動にも使えます。
+
+```bash
+uv run python move_volume_file.py \
+  comfy-model \
+  diffusion_models/old-model.safetensors \
+  comfy-model \
+  diffusion_models/archive/old-model.safetensors
+```
+
+別 Volume へ移動する例:
+
+```bash
+uv run python move_volume_file.py \
+  comfy-inputs \
+  uploads/example.png \
+  comfy-outputs \
+  archived/example.png
+```
+
+主なオプション:
+
+- `--yes`: 確認プロンプトをスキップ
+- `--overwrite`: 移動先が存在する場合に上書き
+- `--create-destination-volume`: 移動先 Volume が存在しない場合に作成
+
+注意点:
+
+- パスは Volume 内の相対パスで指定する
+- `..` や絶対パスは受け付けない
+- 移動先に既存ファイルがある場合は `--overwrite` が必要
+- 移動先パスが既存ディレクトリなら、その配下へ元ファイル名のまま移動する
+
 ## ファイル一覧
 
 - `comfyapp.py`: ComfyUI の Modal デプロイ本体
 - `preserve_model.py`: Hugging Face モデル保存処理
 - `preserve_model_gui.py`: モデル保存 GUI
 - `rename_volume.py`: Volume コピー補助
+- `move_volume_file.py`: Volume 内ファイル移動補助
 - `main.py`: 最小のエントリーポイント
