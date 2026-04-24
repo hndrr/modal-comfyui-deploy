@@ -70,6 +70,7 @@ FLASH_ATTN_WHEEL_URL = "https://github.com/mjun0812/flash-attention-prebuild-whe
 SAGEATTENTION_REF = "abi3_stable"
 COMFYUI_CLI_ARGS_ENV = "COMFYUI_CLI_ARGS"
 COMFYUI_GPU_PROFILE_ENV = "COMFYUI_GPU_PROFILE"
+COMFYUI_REQUIRES_PROXY_AUTH_ENV = "COMFYUI_REQUIRES_PROXY_AUTH"
 COMFYUI_SAGE_ATTENTION_ENV = "COMFYUI_SAGE_ATTENTION"
 PREBUILT_WHEEL_DIR = "/opt/prebuilt-wheels"
 SAGE_ATTENTION_FLAG = "--use-sage-attention"
@@ -79,6 +80,7 @@ load_dotenv(DOTENV_PATH, override=False)
 
 GPU_PROFILE_NAME: str
 GPU_PROFILE: dict[str, str | bool]
+REQUIRES_PROXY_AUTH: bool
 SAGE_ATTENTION_ENABLED: bool
 
 GPU_PROFILES: Final = {
@@ -120,6 +122,18 @@ def _resolve_sage_attention_enabled() -> bool:
     )
 
 
+def _resolve_requires_proxy_auth() -> bool:
+    raw = os.environ.get(COMFYUI_REQUIRES_PROXY_AUTH_ENV, "off").strip().lower()
+    if raw == "on":
+        return True
+    if raw == "off":
+        return False
+    raise ValueError(
+        f"Invalid {COMFYUI_REQUIRES_PROXY_AUTH_ENV}: {raw!r}. "
+        "Allowed values: on, off"
+    )
+
+
 def _should_enable_sage_attention(cli_args: list[str]) -> bool:
     if not SAGE_ATTENTION_ENABLED:
         return False
@@ -146,8 +160,14 @@ def _build_launch_command(extra_cli_args: str) -> list[str]:
 
 
 GPU_PROFILE_NAME, GPU_PROFILE = _resolve_gpu_profile()
+REQUIRES_PROXY_AUTH = _resolve_requires_proxy_auth()
 SAGE_ATTENTION_ENABLED = _resolve_sage_attention_enabled()
 CUDA_ARCH_LIST = str(GPU_PROFILE["cuda_arch_list"])
+SAGE_ATTENTION_BUILD_PREFIX = (
+    "export LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH:-}; "
+    if GPU_PROFILE_NAME == "h100"
+    else ""
+)
 
 # 使用するカスタムノードのリスト
 NODES = [
@@ -201,6 +221,7 @@ base_image = (
     .run_commands(
         # SageAttention は先に wheel build して退避しておく
         "set -eux; "
+        f"{SAGE_ATTENTION_BUILD_PREFIX}"
         f'mkdir -p "{PREBUILT_WHEEL_DIR}"; '
         "rm -rf /tmp/SageAttention; "
         f'git clone --depth 1 --branch "{SAGEATTENTION_REF}" --recurse-submodules --shallow-submodules https://github.com/woct0rdho/SageAttention.git /tmp/SageAttention; '
@@ -255,13 +276,19 @@ app = modal.App(name="comfyui", image=image)
     },
 )
 @modal.concurrent(max_inputs=10)
-@modal.web_server(8000, startup_timeout=60)
+@modal.web_server(
+    8000,
+    startup_timeout=60,
+    requires_proxy_auth=REQUIRES_PROXY_AUTH,
+)
 def ui():
     print(
         f"{COMFYUI_GPU_PROFILE_ENV}={GPU_PROFILE_NAME} "
         f"({GPU_PROFILE['modal_gpu']}), "
         f"TORCH_CUDA_ARCH_LIST={CUDA_ARCH_LIST}, "
-        f"{COMFYUI_SAGE_ATTENTION_ENV}={'on' if SAGE_ATTENTION_ENABLED else 'off'}"
+        f"{COMFYUI_SAGE_ATTENTION_ENV}={'on' if SAGE_ATTENTION_ENABLED else 'off'}, "
+        f"{COMFYUI_REQUIRES_PROXY_AUTH_ENV}="
+        f"{'on' if REQUIRES_PROXY_AUTH else 'off'}"
     )
 
     CUSTOM_NODE_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)
