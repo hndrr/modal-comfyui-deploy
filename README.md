@@ -93,6 +93,7 @@ COMFYUI_GPU_PROFILE=h100 uv run modal serve comfyapp.py
 ```env
 COMFYUI_GPU_PROFILE=rtx-pro-6000
 COMFYUI_SAGE_ATTENTION=on
+COMFYUI_REQUIRES_PROXY_AUTH=off
 COMFYUI_CLI_ARGS=
 ```
 
@@ -100,9 +101,18 @@ COMFYUI_CLI_ARGS=
 
 - `COMFYUI_GPU_PROFILE`: 使用する GPU プロファイル
 - `COMFYUI_SAGE_ATTENTION`: `on` または `off`
+- `COMFYUI_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`
 - `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
 
 `COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
+
+Modal の公開 URL に `Modal-Key` / `Modal-Secret` ヘッダーを必須にする場合:
+
+```bash
+COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
+```
+
+`COMFYUI_REQUIRES_PROXY_AUTH=off` が既定です。`on` にすると通常のブラウザアクセスでは開けないため、ヘッダーを付与できるクライアントやプロキシ経由で利用します。
 
 ### 追加される custom nodes
 
