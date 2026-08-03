@@ -1,0 +1,312 @@
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { AssetManager, defaultAssetManager } from "./lib/assetManager.js";
+import {
+  INPUT_VOLUME,
+  MODEL_VOLUME,
+  OUTPUT_VOLUME,
+  SORT_CHOICES,
+  VOLUME_LABELS,
+  type SortMode,
+} from "./lib/types.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WEB_ROOT = path.resolve(__dirname, "..");
+const DIST_DIR = path.join(WEB_ROOT, "dist");
+
+export type AppDeps = {
+  manager?: AssetManager;
+};
+
+function httpError(error: unknown, status: ContentfulStatusCode = 400): HTTPException {
+  const message = error instanceof Error ? error.message : String(error);
+  return new HTTPException(status, { message });
+}
+
+export function createApp(deps: AppDeps = {}) {
+  const manager = deps.manager ?? defaultAssetManager;
+  const app = new Hono();
+
+  app.use(
+    "/api/*",
+    cors({
+      origin: ["http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:7860"],
+    }),
+  );
+
+  app.onError((error, c) => {
+    if (error instanceof HTTPException) {
+      return c.json({ detail: error.message }, error.status);
+    }
+    console.error(error);
+    return c.json(
+      { detail: error instanceof Error ? error.message : "Internal Server Error" },
+      500,
+    );
+  });
+
+  app.get("/api/health", (c) => c.json({ status: "ok" }));
+
+  app.get("/api/volumes", (c) =>
+    c.json(
+      [INPUT_VOLUME, OUTPUT_VOLUME, MODEL_VOLUME].map((id) => ({
+        id,
+        label: VOLUME_LABELS[id],
+      })),
+    ),
+  );
+
+  app.get("/api/assets", async (c) => {
+    try {
+      const volume = c.req.query("volume");
+      if (!volume) throw new Error("volume is required");
+      const sort = (c.req.query("sort") ?? "name_asc") as SortMode;
+      if (!SORT_CHOICES.includes(sort)) {
+        throw new Error(`Unsupported sort mode: ${sort}`);
+      }
+      const page = Number(c.req.query("page") ?? "1");
+      const pageSize = Number(c.req.query("page_size") ?? "48");
+      const result = await manager.listAssets(volume, c.req.query("path") ?? "", {
+        search: c.req.query("search") ?? "",
+        sort,
+        page: Number.isFinite(page) ? page : 1,
+        pageSize: Number.isFinite(pageSize) ? pageSize : 48,
+      });
+      return c.json(result);
+    } catch (error) {
+      throw httpError(error, 400);
+    }
+  });
+
+  app.get("/api/assets/content", async (c) => {
+    try {
+      const volume = c.req.query("volume");
+      const remotePath = c.req.query("path");
+      if (!volume || !remotePath) throw new Error("volume and path are required");
+      const download = c.req.query("download") === "true" || c.req.query("download") === "1";
+      // Optional metadata from list response skips a re-listdir on the Python side.
+      const entryMeta = {
+        name: c.req.query("name") ?? undefined,
+        kind: c.req.query("kind") ?? undefined,
+        size: c.req.query("size") ? Number(c.req.query("size")) : undefined,
+        modified_at: c.req.query("modified_at") ?? undefined,
+        media_type: c.req.query("media_type") ?? undefined,
+      };
+      const hasMeta = Boolean(entryMeta.modified_at && entryMeta.kind);
+      const file = await manager.materialize(volume, remotePath, {
+        entry: hasMeta
+          ? {
+              volume,
+              path: remotePath,
+              name: entryMeta.name || remotePath.split("/").pop() || remotePath,
+              kind: (entryMeta.kind as "file" | "directory" | "symlink") || "file",
+              size: entryMeta.size || 0,
+              modified_at: entryMeta.modified_at || new Date(0).toISOString(),
+              media_type: entryMeta.media_type || "file",
+              is_directory: entryMeta.kind === "directory",
+            }
+          : null,
+      });
+      const data = await fs.promises.readFile(file.localPath);
+      return new Response(data, {
+        headers: {
+          "Content-Type": file.mediaType,
+          ...(download
+            ? {
+                "Content-Disposition": `attachment; filename="${file.name.replace(/"/g, "")}"`,
+              }
+            : {}),
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status: ContentfulStatusCode = message.includes("does not exist") ? 404 : 400;
+      throw httpError(error, status);
+    }
+  });
+
+  app.get("/api/assets/thumbnail", async (c) => {
+    try {
+      const volume = c.req.query("volume");
+      const remotePath = c.req.query("path");
+      if (!volume || !remotePath) throw new Error("volume and path are required");
+      const entryMeta = {
+        name: c.req.query("name") ?? undefined,
+        kind: c.req.query("kind") ?? "file",
+        size: c.req.query("size") ? Number(c.req.query("size")) : 0,
+        modified_at: c.req.query("modified_at") ?? undefined,
+        media_type: c.req.query("media_type") ?? "image",
+      };
+      const hasMeta = Boolean(entryMeta.modified_at);
+      const file = await manager.materialize(volume, remotePath, {
+        imageOnly: true,
+        entry: hasMeta
+          ? {
+              volume,
+              path: remotePath,
+              name: entryMeta.name || remotePath.split("/").pop() || remotePath,
+              kind: "file",
+              size: entryMeta.size || 0,
+              modified_at: entryMeta.modified_at || new Date(0).toISOString(),
+              media_type: "image",
+              is_directory: false,
+            }
+          : null,
+      });
+      const data = await fs.promises.readFile(file.localPath);
+      return new Response(data, {
+        headers: {
+          "Content-Type": file.mediaType,
+          "Cache-Control": "private, max-age=3600",
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status: ContentfulStatusCode = message.includes("does not exist") ? 404 : 400;
+      throw httpError(error, status);
+    }
+  });
+
+  app.post("/api/assets/upload", async (c) => {
+    try {
+      const body = await c.req.parseBody({ all: true });
+      const volume = String(body.volume ?? "");
+      const destination = String(body.destination ?? "");
+      const overwriteRaw = body.overwrite;
+      const overwrite =
+        overwriteRaw === "true" ||
+        overwriteRaw === "1" ||
+        (typeof overwriteRaw === "string" && overwriteRaw.toLowerCase() === "on");
+
+      const filesField = body.files;
+      const fileList = Array.isArray(filesField)
+        ? filesField
+        : filesField
+          ? [filesField]
+          : [];
+      if (!fileList.length) throw new Error("Select at least one file to upload.");
+
+      const tmpDir = await fs.promises.mkdtemp(path.join(path.dirname(DIST_DIR), ".upload-"));
+      try {
+        const localPaths: string[] = [];
+        for (const item of fileList) {
+          if (typeof item === "string" || !item || typeof item !== "object") {
+            throw new Error("Invalid upload payload.");
+          }
+          const file = item as File;
+          const safeName = path.basename(file.name || "upload.bin");
+          const localPath = path.join(tmpDir, safeName);
+          const buffer = Buffer.from(await file.arrayBuffer());
+          await fs.promises.writeFile(localPath, buffer);
+          localPaths.push(localPath);
+        }
+        const result = await manager.upload(volume, destination, localPaths, overwrite);
+        return c.json(result);
+      } finally {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      }
+    } catch (error) {
+      throw httpError(error, 400);
+    }
+  });
+
+  app.post("/api/assets/move", async (c) => {
+    try {
+      const body = await c.req.json<{
+        source_volume: string;
+        source_path: string;
+        destination_volume: string;
+        destination_path: string;
+        overwrite?: boolean;
+      }>();
+      const result = await manager.move({
+        sourceVolume: body.source_volume,
+        sourcePath: body.source_path,
+        destinationVolume: body.destination_volume,
+        destinationPath: body.destination_path,
+        overwrite: body.overwrite,
+      });
+      return c.json(result);
+    } catch (error) {
+      throw httpError(error, 400);
+    }
+  });
+
+  app.delete("/api/assets", async (c) => {
+    try {
+      const body = await c.req.json<{
+        volume: string;
+        path: string;
+        recursive?: boolean;
+      }>();
+      const result = await manager.delete(body.volume, body.path, Boolean(body.recursive));
+      return c.json(result);
+    } catch (error) {
+      throw httpError(error, 400);
+    }
+  });
+
+  // Serve React production build when present.
+  app.get("*", async (c) => {
+    const urlPath = new URL(c.req.url).pathname;
+    if (urlPath.startsWith("/api/")) {
+      return c.json({ detail: "Not found" }, 404);
+    }
+
+    if (!fs.existsSync(DIST_DIR)) {
+      return c.json(
+        {
+          detail:
+            "Frontend not built. Run: cd web && npm install && npm run build",
+          api: "/api/health",
+        },
+        503,
+      );
+    }
+
+    const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
+    const candidate = path.normalize(path.join(DIST_DIR, relative));
+    if (!candidate.startsWith(DIST_DIR)) {
+      return c.json({ detail: "Invalid path" }, 400);
+    }
+
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      const data = await fs.promises.readFile(candidate);
+      return new Response(data, {
+        headers: { "Content-Type": contentTypeFor(candidate) },
+      });
+    }
+
+    const indexPath = path.join(DIST_DIR, "index.html");
+    const data = await fs.promises.readFile(indexPath);
+    return new Response(data, {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  });
+
+  return app;
+}
+
+function contentTypeFor(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const map: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+  };
+  return map[ext] ?? "application/octet-stream";
+}

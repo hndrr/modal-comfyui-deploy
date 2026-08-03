@@ -7,7 +7,7 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
 - `preserve_model.py`: Hugging Face の単一ファイルを Modal Volume に保存する
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す
-- `asset_manager_gui.py`: ComfyUI のモデル・入力・出力を Gradio UI から管理する
+- `web/`: ComfyUI のモデル・入力・出力を React + Hono 管理画面から操作する（`modal volume` CLI 経由）
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 
@@ -297,45 +297,74 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 
 ## 4. ComfyUI 資産を管理する
 
-`asset_manager_gui.py` は、次の Modal Volume に保存されたファイルやフォルダをローカルの管理画面から操作します。
+`web/` の React + Hono アプリが、次の Modal Volume をローカル管理画面から操作します。
 
 - `comfy-model`
 - `comfy-inputs`
 - `comfy-outputs`
 
-Modal CLI でログインした状態で起動してください。
+前提:
+
+- Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
+- Node.js 22+ 推奨
+
+初回ビルドと起動:
 
 ```bash
-uv run asset_manager_gui.py
+cd web
+npm install
+npm run build
+npm start
 ```
 
 既定 URL:
 
 `http://127.0.0.1:7860`
 
-ポートや待受アドレスを変更する場合:
+開発時（Vite が UI、Hono が API）:
 
 ```bash
-uv run asset_manager_gui.py --server-port 7861 --server-name 127.0.0.1
+cd web
+npm run dev
 ```
+
+- UI: `http://127.0.0.1:5173`（`/api` は Hono `:7860` へ proxy）
+- API: `http://127.0.0.1:7860`
+
+ポート変更:
+
+```bash
+PORT=7861 npm start
+```
+
+構成:
+
+- **GUI**: React + React Aria Components + Tailwind
+- **API**: Hono（Node）
+- **Volume I/O**: 常駐 Python ワーカー（`asset_rpc.py` + `asset_manager.py` / Modal SDK）  
+  list はメタデータのみ。一覧はプロセス内キャッシュ。サムネ/本文は on-demand + ディスクキャッシュ。  
+  （`modal volume` CLI は使わない。CLI 毎回起動だと Gradio より遅くなるため）
 
 管理画面では次の操作ができます。
 
-- Volume とフォルダを切り替えて、名前・サイズ・更新日時を確認
-- `comfy-inputs` / `comfy-outputs` の画像を1ページ24件のギャラリーで表示
+- Volume タブとフォルダを切り替えて、名前・サイズ・更新日時を確認
+- `comfy-inputs` / `comfy-outputs` の画像ギャラリー（遅延ロード）
 - 画像・動画・音声のプレビューとファイルのダウンロード
 - ローカルファイルの複数アップロード
 - 同一 Volume 内での名前変更・移動
 - `comfy-inputs` と `comfy-outputs` の間での移動
 - ファイル・フォルダの完全削除
-- Hugging Face から `comfy-model` へのモデル取り込み
+
+Hugging Face からのモデル取り込みは別途 `preserve_model_gui.py`（Gradio）を使います。
 
 Models へのアップロードと移動は、ComfyUI が認識するモデル種別ディレクトリ配下だけに制限されます。上書きは既定で無効です。
 
 > [!WARNING]
-> 削除はゴミ箱を経由しない完全削除です。管理画面に対象パスが表示された後、もう一度「完全に削除する」を押した場合だけ実行されます。Volume ルート自体は削除できません。
+> 削除はゴミ箱を経由しない完全削除です。確認ダイアログで「完全に削除する」を押した場合だけ実行されます。Volume ルート自体は削除できません。
 
-管理画面はローカル利用を前提としており、Gradio の共有 URL は有効化しません。更新系操作は直列実行されます。
+管理画面はローカル利用前提です。更新系操作はサーバー内で直列化されます。
+
+旧 Gradio の `asset_manager_gui.py` は廃止済みです（起動すると移行手順を表示して終了します）。
 
 ## 5. Volume を別名へコピーする
 
@@ -397,8 +426,9 @@ uv run python move_volume_file.py \
 - `comfyapp.py`: ComfyUI の Modal デプロイ本体
 - `preserve_model.py`: Hugging Face モデル保存処理
 - `preserve_model_gui.py`: モデル保存 GUI
-- `asset_manager.py`: Modal Volume 資産の CRUD サービス
-- `asset_manager_gui.py`: モデル・入力・出力の統合管理 GUI
+- `asset_manager.py`: Modal Volume 資産の CRUD サービス（Python / テスト・CLI 向け）
+- `web/`: React GUI + Hono API（`modal volume` CLI 経由の資産管理画面）
+- `asset_manager_gui.py`: 旧 Gradio 起動の廃止スタブ
 - `rename_volume.py`: Volume コピー補助
 - `move_volume_file.py`: Volume 内ファイル移動補助
 - `main.py`: 最小のエントリーポイント

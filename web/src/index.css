@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  font-family:
+    "Inter",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #09090b;
+  color: #fafafa;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* React Aria focus rings */
+[data-focus-visible] {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
