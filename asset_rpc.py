@@ -9,15 +9,17 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os
 import shutil
 import sys
 import tempfile
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from asset_manager import (
     ALLOWED_VOLUMES,
@@ -45,12 +47,19 @@ SORT_CHOICES = {
 DEFAULT_PAGE_SIZE = 48
 MAX_PAGE_SIZE = 200
 LIST_CACHE_TTL_SEC = 60.0
+# Modal Volume delete is rate-limited / flaky under high concurrency.
+# Keep this low (2–3). Override with ASSET_DELETE_WORKERS if needed.
+DEFAULT_DELETE_WORKERS = max(1, min(8, int(os.getenv("ASSET_DELETE_WORKERS", "4"))))
+DELETE_RETRIES = max(1, int(os.getenv("ASSET_DELETE_RETRIES", "3")))
 
 MANAGER = AssetManager()
 LOCK = threading.Lock()
+STDOUT_LOCK = threading.Lock()
 WORKSPACE = Path(tempfile.mkdtemp(prefix="comfy-asset-rpc-"))
 CACHE_DIR = WORKSPACE / "cache"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+EmitFn = Callable[[dict[str, Any]], None]
 
 # volume:path -> (monotonic expires, entries)
 _list_cache: dict[str, tuple[float, list[AssetEntry]]] = {}
@@ -95,14 +104,18 @@ def _sort_entries(entries: list[AssetEntry], sort_mode: str) -> list[AssetEntry]
     return sorted(sorted_entries, key=lambda item: not item.is_directory)
 
 
-def _load_entries(volume: str, path: str) -> list[AssetEntry]:
+def _load_entries(volume: str, path: str, *, refresh: bool = False) -> list[AssetEntry]:
     key = f"{volume}:{path}"
-    cached = _list_cache.get(key)
-    if cached and cached[0] > _now():
-        return cached[1]
+    if not refresh:
+        cached = _list_cache.get(key)
+        if cached and cached[0] > _now():
+            return list(cached[1])
+    elif key in _list_cache:
+        del _list_cache[key]
     entries = MANAGER.list_assets(volume, path)
-    _list_cache[key] = (_now() + LIST_CACHE_TTL_SEC, entries)
-    return entries
+    # Store a shallow copy so later in-place filtering never mutates the cache.
+    _list_cache[key] = (_now() + LIST_CACHE_TTL_SEC, list(entries))
+    return list(entries)
 
 
 def _invalidate_list_cache(volume: str | None = None) -> None:
@@ -111,7 +124,8 @@ def _invalidate_list_cache(volume: str | None = None) -> None:
         return
     prefix = f"{volume}:"
     for key in list(_list_cache):
-        if key.startswith(prefix):
+        # Match "comfy-inputs:" (root) and "comfy-inputs:subdir/..."
+        if key == volume or key.startswith(prefix):
             del _list_cache[key]
 
 
@@ -164,7 +178,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             if volume not in ALLOWED_VOLUMES:
                 raise ValueError(f"Unsupported volume: {volume}")
             path = normalize_volume_path(params.get("path", ""), allow_root=True)
-            entries = list(_load_entries(volume, path))
+            refresh = bool(params.get("refresh", False))
+            entries = _load_entries(volume, path, refresh=refresh)
             query = str(params.get("search", "")).strip().casefold()
             if query:
                 entries = [e for e in entries if query in e.name.casefold()]
@@ -242,7 +257,11 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             result = {
                 "message": f"削除完了: {params['volume']}:{params['path']}",
                 "paths": [params["path"]],
+                "failed": [],
             }
+        elif method == "delete_many":
+            # Handled by handle_delete_many (supports progress emits + parallelism).
+            raise RuntimeError("delete_many must be routed via handle_delete_many")
         elif method == "shutdown":
             result = {"status": "bye"}
         else:
@@ -257,6 +276,142 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+def _delete_one_with_retry(
+    volume: str,
+    item_path: str,
+    recursive: bool,
+    *,
+    retries: int = DELETE_RETRIES,
+) -> tuple[str, str, str | None]:
+    """Return (status, path, error). Retries transient Modal failures."""
+    import time
+
+    last_error = "unknown"
+    for attempt in range(retries):
+        try:
+            MANAGER.delete_asset(volume, item_path, recursive=recursive)
+            return ("ok", item_path, None)
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            # Back off briefly; Modal often recovers after concurrent pressure.
+            time.sleep(0.15 * (attempt + 1))
+    return ("err", item_path, last_error)
+
+
+def handle_delete_many(
+    request: dict[str, Any],
+    *,
+    emit: EmitFn | None = None,
+) -> dict[str, Any]:
+    """Delete many paths with modest concurrency + retries."""
+    request_id = request.get("id")
+    params = request.get("params") or {}
+    try:
+        volume = params["volume"]
+        items = params.get("items") or []
+        if not items:
+            raise ValueError("削除対象が空です。")
+        if volume not in ALLOWED_VOLUMES:
+            raise ValueError(f"Unsupported volume: {volume}")
+
+        # Cap concurrency hard — high values (e.g. 16) fail against Modal.
+        workers = int(params.get("workers") or DEFAULT_DELETE_WORKERS)
+        workers = max(1, min(8, workers))
+        total = len(items)
+        deleted: list[str] = []
+        failed: list[dict[str, str]] = []
+        lock = threading.Lock()
+        done_count = 0
+
+        def _emit_progress() -> None:
+            if emit is None:
+                return
+            emit(
+                {
+                    "id": request_id,
+                    "ok": True,
+                    "partial": True,
+                    "result": {
+                        "done": len(deleted),
+                        "failed": len(failed),
+                        "total": total,
+                        "processed": done_count,
+                    },
+                }
+            )
+
+        def _one(item: dict[str, Any]) -> tuple[str, str, str | None]:
+            item_path = str(item.get("path") or "")
+            recursive = bool(item.get("recursive", False))
+            return _delete_one_with_retry(volume, item_path, recursive)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, item) for item in items]
+            for future in as_completed(futures):
+                status, item_path, error = future.result()
+                with lock:
+                    if status == "ok":
+                        deleted.append(item_path)
+                    else:
+                        failed.append({"path": item_path, "error": error or "unknown"})
+                    done_count += 1
+                _emit_progress()
+
+        # One more sequential pass for leftovers (often recovers after burst).
+        if failed:
+            retry_items = list(failed)
+            failed = []
+            for item in retry_items:
+                item_path = item["path"]
+                # Guess recursive from original payload when possible.
+                recursive = any(
+                    str(raw.get("path") or "") == item_path
+                    and bool(raw.get("recursive", False))
+                    for raw in items
+                )
+                status, path_value, error = _delete_one_with_retry(
+                    volume, item_path, recursive, retries=2
+                )
+                with lock:
+                    if status == "ok":
+                        deleted.append(path_value)
+                    else:
+                        failed.append({"path": path_value, "error": error or "unknown"})
+                _emit_progress()
+
+        _invalidate_list_cache(volume)
+        msg = f"削除完了: {len(deleted)}件"
+        if failed:
+            msg += f" / 失敗 {len(failed)}件"
+        return {
+            "id": request_id,
+            "ok": True,
+            "result": {
+                "message": msg,
+                "paths": deleted,
+                "failed": failed,
+                "done": len(deleted),
+                "failed_count": len(failed),
+                "total": total,
+                "workers": workers,
+            },
+        }
+    except Exception as exc:
+        return {
+            "id": request_id,
+            "ok": False,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+
+def _write_response(response: dict[str, Any]) -> None:
+    payload = json.dumps(response, ensure_ascii=False) + "\n"
+    with STDOUT_LOCK:
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+
+
 def main() -> None:
     try:
         for raw in sys.stdin:
@@ -266,12 +421,18 @@ def main() -> None:
             try:
                 request = json.loads(line)
             except json.JSONDecodeError as exc:
-                response = {"id": None, "ok": False, "error": f"Invalid JSON: {exc}"}
+                response: dict[str, Any] = {
+                    "id": None,
+                    "ok": False,
+                    "error": f"Invalid JSON: {exc}",
+                }
             else:
-                response = handle(request)
+                if isinstance(request, dict) and request.get("method") == "delete_many":
+                    response = handle_delete_many(request, emit=_write_response)
+                else:
+                    response = handle(request)
             try:
-                sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-                sys.stdout.flush()
+                _write_response(response)
             except BrokenPipeError:
                 break
             if isinstance(request, dict) and request.get("method") == "shutdown":

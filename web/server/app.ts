@@ -71,11 +71,16 @@ export function createApp(deps: AppDeps = {}) {
       }
       const page = Number(c.req.query("page") ?? "1");
       const pageSize = Number(c.req.query("page_size") ?? "48");
+      const refresh =
+        c.req.query("refresh") === "1" ||
+        c.req.query("refresh") === "true" ||
+        c.req.query("refresh") === "yes";
       const result = await manager.listAssets(volume, c.req.query("path") ?? "", {
         search: c.req.query("search") ?? "",
         sort,
         page: Number.isFinite(page) ? page : 1,
         pageSize: Number.isFinite(pageSize) ? pageSize : 48,
+        refresh,
       });
       return c.json(result);
     } catch (error) {
@@ -241,9 +246,57 @@ export function createApp(deps: AppDeps = {}) {
     try {
       const body = await c.req.json<{
         volume: string;
-        path: string;
+        path?: string;
         recursive?: boolean;
+        items?: { path: string; recursive?: boolean }[];
+        workers?: number;
+        /** When true (default for multi-delete), stream NDJSON progress lines. */
+        stream?: boolean;
       }>();
+      if (body.items?.length) {
+        const wantStream = body.stream !== false;
+        if (!wantStream) {
+          const result = await manager.deleteMany(body.volume, body.items, {
+            workers: body.workers,
+          });
+          return c.json(result);
+        }
+
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const write = (obj: unknown) => {
+              controller.enqueue(encoder.encode(`${JSON.stringify(obj)}\n`));
+            };
+            void manager
+              .deleteMany(body.volume, body.items!, {
+                workers: body.workers,
+                onProgress: (progress) => {
+                  write({ type: "progress", ...progress });
+                },
+              })
+              .then((result) => {
+                write({ type: "done", ...result });
+                controller.close();
+              })
+              .catch((error: unknown) => {
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                write({ type: "error", detail: message });
+                controller.close();
+              });
+          },
+        });
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+      if (!body.path) {
+        throw new Error("path or items is required");
+      }
       const result = await manager.delete(body.volume, body.path, Boolean(body.recursive));
       return c.json(result);
     } catch (error) {
