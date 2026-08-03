@@ -448,55 +448,57 @@ def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def build_model_import_panel() -> None:
+    """Render the reusable Hugging Face import controls in the current Blocks."""
+
+    gr.Markdown(
+        """### Hugging FaceのモデルをModalボリュームに保存
+`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。\n\n- デプロイ済み関数を利用したい場合は `--use-deployed` フラグ、または環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。\n- デフォルト以外のアプリ名・関数名でデプロイしているときは `--deployed-app-name` / `--deployed-function-name` あるいは環境変数 `PRESERVE_MODEL_DEPLOYED_APP` / `PRESERVE_MODEL_DEPLOYED_FUNCTION` で上書きできます。"""
+    )
+
+    repo_and_file_input = gr.Textbox(
+        label="リポジトリとファイルの指定",
+        value="",
+        placeholder="Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensors",
+        info="'リポジトリID::ファイルパス'またはスペース区切り、もしくはresolve URLを指定できます",
+    )
+    revision_input = gr.Textbox(
+        label="リビジョン(ブランチ名/タグ/コミット)",
+        value="main",
+        info="空欄の場合はmainを使用します (URLにresolveが含まれていた場合はその指定を優先)",
+    )
+    subdir_choices = ["(自動判定)"] + _COMFY_MODEL_SUBDIRS
+    destination_dropdown = gr.Dropdown(
+        label="保存先サブディレクトリ",
+        choices=subdir_choices,
+        value="(自動判定)",
+        info="空欄の場合はファイルパスから自動で判定します",
+    )
+
+    output = gr.Markdown()
+    submit_btn = gr.Button("Modalへ保存の実行")
+    reset_btn = gr.Button("入力をリセット")
+
+    submit_btn.click(
+        fn=download_model,
+        inputs=[repo_and_file_input, revision_input, destination_dropdown],
+        outputs=[output, submit_btn],
+    )
+    reset_btn.click(
+        fn=reset_form,
+        outputs=[
+            repo_and_file_input,
+            revision_input,
+            destination_dropdown,
+            output,
+            submit_btn,
+        ],
+    )
+
+
 def build_interface() -> gr.Blocks:
     with gr.Blocks(title="Modal: Hugging Face モデル取り込み") as demo:
-        gr.Markdown(
-            """### Hugging FaceのモデルをModalボリュームに保存
-`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。\n\n- デプロイ済み関数を利用したい場合は `--use-deployed` フラグ、または環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。\n- デフォルト以外のアプリ名・関数名でデプロイしているときは `--deployed-app-name` / `--deployed-function-name` あるいは環境変数 `PRESERVE_MODEL_DEPLOYED_APP` / `PRESERVE_MODEL_DEPLOYED_FUNCTION` で上書きできます。"""
-        )
-
-        repo_and_file_input = gr.Textbox(
-            label="リポジトリとファイルの指定",
-            value="",
-            placeholder="Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensors",
-            info="'リポジトリID::ファイルパス'またはスペース区切り、もしくはresolve URLを指定できます",
-        )
-        revision_input = gr.Textbox(
-            label="リビジョン(ブランチ名/タグ/コミット)",
-            value="main",
-            info="空欄の場合はmainを使用します (URLにresolveが含まれていた場合はその指定を優先)",
-        )
-        subdir_choices = ["(自動判定)"] + _COMFY_MODEL_SUBDIRS
-        destination_dropdown = gr.Dropdown(
-            label="保存先サブディレクトリ",
-            choices=subdir_choices,
-            value="(自動判定)",
-            info="空欄の場合はファイルパスから自動で判定します",
-        )
-
-        output = gr.Markdown()
-        submit_btn = gr.Button("Modalへ保存の実行")
-        reset_btn = gr.Button("入力をリセット")
-
-        submit_btn.click(
-            fn=download_model,
-            inputs=[
-                repo_and_file_input,
-                revision_input,
-                destination_dropdown,
-            ],
-            outputs=[output, submit_btn],
-        )
-        reset_btn.click(
-            fn=reset_form,
-            outputs=[
-                repo_and_file_input,
-                revision_input,
-                destination_dropdown,
-                output,
-                submit_btn,
-            ],
-        )
+        build_model_import_panel()
 
     return demo
 
