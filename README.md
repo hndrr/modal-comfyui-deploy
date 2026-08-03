@@ -2,11 +2,12 @@
 
 Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
 
-今の主要機能は次の 3 つです。
+今の主要機能は次の 4 つです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
 - `preserve_model.py`: Hugging Face の単一ファイルを Modal Volume に保存する
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す
+- `asset_manager_gui.py`: ComfyUI のモデル・入力・出力を Gradio UI から管理する
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 
@@ -294,7 +295,49 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 
 ![Gradio](assets/2025-09-28-22-01-40.png)
 
-## 4. Volume を別名へコピーする
+## 4. ComfyUI 資産を管理する
+
+`asset_manager_gui.py` は、次の Modal Volume に保存されたファイルやフォルダをローカルの管理画面から操作します。
+
+- `comfy-model`
+- `comfy-inputs`
+- `comfy-outputs`
+
+Modal CLI でログインした状態で起動してください。
+
+```bash
+uv run asset_manager_gui.py
+```
+
+既定 URL:
+
+`http://127.0.0.1:7860`
+
+ポートや待受アドレスを変更する場合:
+
+```bash
+uv run asset_manager_gui.py --server-port 7861 --server-name 127.0.0.1
+```
+
+管理画面では次の操作ができます。
+
+- Volume とフォルダを切り替えて、名前・サイズ・更新日時を確認
+- `comfy-inputs` / `comfy-outputs` の画像を1ページ24件のギャラリーで表示
+- 画像・動画・音声のプレビューとファイルのダウンロード
+- ローカルファイルの複数アップロード
+- 同一 Volume 内での名前変更・移動
+- `comfy-inputs` と `comfy-outputs` の間での移動
+- ファイル・フォルダの完全削除
+- Hugging Face から `comfy-model` へのモデル取り込み
+
+Models へのアップロードと移動は、ComfyUI が認識するモデル種別ディレクトリ配下だけに制限されます。上書きは既定で無効です。
+
+> [!WARNING]
+> 削除はゴミ箱を経由しない完全削除です。管理画面に対象パスが表示された後、もう一度「完全に削除する」を押した場合だけ実行されます。Volume ルート自体は削除できません。
+
+管理画面はローカル利用を前提としており、Gradio の共有 URL は有効化しません。更新系操作は直列実行されます。
+
+## 5. Volume を別名へコピーする
 
 `rename_volume.py` は Modal Volume 間でデータをコピーするユーティリティです。実質的に Volume 名を移行したい時に使います。
 
@@ -314,7 +357,7 @@ uv run python rename_volume.py <コピー元> <コピー先> --yes
 - データコピーは `modal.App(name="volume-copier")` 経由で実行
 - コピー後、元 Volume の削除は自動では行わない
 
-## 5. Volume 内のファイルを移動する
+## 6. Volume 内のファイルを移動する
 
 `move_volume_file.py` は Modal Volume 内の単一ファイルまたはディレクトリを移動するユーティリティです。同じ Volume 内でのリネームにも、別 Volume への移動にも使えます。
 
@@ -354,6 +397,8 @@ uv run python move_volume_file.py \
 - `comfyapp.py`: ComfyUI の Modal デプロイ本体
 - `preserve_model.py`: Hugging Face モデル保存処理
 - `preserve_model_gui.py`: モデル保存 GUI
+- `asset_manager.py`: Modal Volume 資産の CRUD サービス
+- `asset_manager_gui.py`: モデル・入力・出力の統合管理 GUI
 - `rename_volume.py`: Volume コピー補助
 - `move_volume_file.py`: Volume 内ファイル移動補助
 - `main.py`: 最小のエントリーポイント
