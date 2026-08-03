@@ -41,6 +41,7 @@ export class AssetManager {
       sort?: SortMode;
       page?: number;
       pageSize?: number;
+      refresh?: boolean;
     } = {},
   ): Promise<AssetListResponse> {
     validateVolume(volume);
@@ -52,6 +53,7 @@ export class AssetManager {
       sort: options.sort ?? "name_asc",
       page: options.page ?? 1,
       page_size: options.pageSize ?? 48,
+      refresh: Boolean(options.refresh),
     });
   }
 
@@ -141,13 +143,55 @@ export class AssetManager {
     volume: string,
     remotePath: string,
     recursive = false,
-  ): Promise<{ message: string; paths: string[] }> {
+  ): Promise<{ message: string; paths: string[]; failed: { path: string; error: string }[] }> {
     return this.runWithLock(() =>
       this.bridge.call("delete", {
         volume,
         path: remotePath,
         recursive,
       }),
+    );
+  }
+
+  async deleteMany(
+    volume: string,
+    items: { path: string; recursive?: boolean }[],
+    options: {
+      workers?: number;
+      onProgress?: (progress: {
+        done: number;
+        failed: number;
+        total: number;
+        processed: number;
+      }) => void;
+    } = {},
+  ): Promise<{
+    message: string;
+    paths: string[];
+    failed: { path: string; error: string }[];
+    done?: number;
+    failed_count?: number;
+    total?: number;
+  }> {
+    // Do not hold mutationTail across the whole batch — parallelism lives in Python.
+    return this.bridge.call(
+      "delete_many",
+      {
+        volume,
+        items,
+        workers: options.workers ?? 4,
+      },
+      {
+        onProgress: (value) => {
+          const progress = value as {
+            done: number;
+            failed: number;
+            total: number;
+            processed: number;
+          };
+          options.onProgress?.(progress);
+        },
+      },
     );
   }
 }

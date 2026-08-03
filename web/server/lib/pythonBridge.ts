@@ -8,11 +8,15 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  onProgress?: (value: unknown) => void;
+};
+
+export type BridgeCallOptions = {
+  onProgress?: (value: unknown) => void;
 };
 
 /**
  * One warm Python process running asset_rpc.py (Modal SDK in-process).
- * Avoids `modal volume` CLI cold-start on every list/get.
  */
 export class PythonAssetBridge {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -21,7 +25,11 @@ export class PythonAssetBridge {
   private pending = new Map<number, Pending>();
   private starting: Promise<void> | null = null;
 
-  async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  async call<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: BridgeCallOptions = {},
+  ): Promise<T> {
     await this.ensureStarted();
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params });
@@ -29,6 +37,7 @@ export class PythonAssetBridge {
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,
+        onProgress: options.onProgress,
       });
       if (!this.child?.stdin.writable) {
         this.pending.delete(id);
@@ -95,7 +104,6 @@ export class PythonAssetBridge {
         this.starting = null;
       });
 
-      // First RPC validates the worker is alive.
       const id = this.nextId++;
       this.pending.set(id, {
         resolve: () => {
@@ -126,6 +134,7 @@ export class PythonAssetBridge {
     let message: {
       id?: number;
       ok?: boolean;
+      partial?: boolean;
       result?: unknown;
       error?: string;
     };
@@ -139,6 +148,13 @@ export class PythonAssetBridge {
     if (id == null) return;
     const pending = this.pending.get(id);
     if (!pending) return;
+
+    // Streaming progress for long-running methods (e.g. delete_many).
+    if (message.partial) {
+      if (message.ok) pending.onProgress?.(message.result);
+      return;
+    }
+
     this.pending.delete(id);
     if (message.ok) {
       pending.resolve(message.result);
