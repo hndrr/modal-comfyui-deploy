@@ -94,7 +94,10 @@ COMFYUI_GPU_PROFILE=h100 uv run modal serve comfyapp.py
 COMFYUI_GPU_PROFILE=rtx-pro-6000
 COMFYUI_SAGE_ATTENTION=on
 COMFYUI_REQUIRES_PROXY_AUTH=off
+COMFYUI_SCALEDOWN_WINDOW=30
+COMFYUI_FUNCTION_TIMEOUT=1800
 COMFYUI_CLI_ARGS=
+COMFYUI_FORCE_BUILD=on
 ```
 
 意味:
@@ -102,7 +105,10 @@ COMFYUI_CLI_ARGS=
 - `COMFYUI_GPU_PROFILE`: 使用する GPU プロファイル
 - `COMFYUI_SAGE_ATTENTION`: `on` または `off`
 - `COMFYUI_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`
+- `COMFYUI_SCALEDOWN_WINDOW`: 接続終了後にコンテナを縮退するまでの最大秒数（`2`〜`1200`、既定値 `30`）
+- `COMFYUI_FUNCTION_TIMEOUT`: 1入力または接続の最大実行秒数（`1`〜`86400`、既定値 `1800`）
 - `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
+- `COMFYUI_FORCE_BUILD`: ComfyUIのインストール層以降を再ビルドする場合は `on`
 
 `COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
 
@@ -121,6 +127,26 @@ COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
 ```
 
 `COMFYUI_REQUIRES_PROXY_AUTH=off` が既定です。`on` にすると通常のブラウザアクセスでは開けないため、ヘッダーを付与できるクライアントやプロキシ経由で利用します。
+
+### アイドル時のscale-to-zero
+
+ComfyUI用Functionは `min_containers=0` のため、アクティブな入力がなければGPUコンテナをゼロ台まで縮退できます。`COMFYUI_SCALEDOWN_WINDOW` は、最後の入力が終了してから縮退するまでの最大アイドル時間です。短くするとアイドル中のコンピュート消費を抑えやすくなりますが、次回アクセス時のコールドスタートが増えます。
+
+`COMFYUI_FUNCTION_TIMEOUT` はアイドル停止時間ではありません。生成処理を含む1入力やWebSocket接続を継続できる最大時間です。長時間の生成を行う場合は、想定する処理時間より長い値を指定してください。
+
+例として、接続終了から10秒で縮退対象にし、Function timeoutを1時間にする場合:
+
+```bash
+COMFYUI_SCALEDOWN_WINDOW=10 \
+COMFYUI_FUNCTION_TIMEOUT=3600 \
+uv run modal deploy comfyapp.py
+```
+
+これらはデプロイ時に決まる設定なので、変更後は再デプロイが必要です。不正な整数や許容範囲外の値を指定すると、イメージビルド前にエラーになります。
+
+ComfyUIはブラウザとの状態同期にWebSocketを使います。生成が終わっていてもComfyUIのタブやAPIクライアントが接続中だと、Modalではアクティブな入力として扱われ、scale-to-zeroしない可能性があります。確実に停止させる場合は、生成完了後にすべてのComfyUIタブとクライアントを閉じてください。再アクセス時は同じURLからコールドスタートします。
+
+GPUコンテナがゼロ台になった後も、モデル、入力、出力、workflowなどを保持するModal Volumeのストレージは維持されます。
 
 ### 追加される custom nodes
 
