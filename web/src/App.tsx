@@ -591,21 +591,45 @@ export default function App() {
                   </Button>
                 </div>
 
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap items-end gap-3">
                   <SearchField
                     value={searchInput}
                     onChange={setSearchInput}
                     onSubmit={() => {
                       setPage(1);
-                      setSearch(searchInput);
+                      setSearch(searchInput.trim());
                     }}
                     className="min-w-[16rem] flex-1"
                   >
-                    <Label className="mb-1 block text-xs text-zinc-400">検索</Label>
-                    <Input
-                      className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
-                      placeholder="現在のフォルダを検索（Enter）"
-                    />
+                    <Label className="mb-1 block text-xs text-zinc-400">
+                      検索（現在のフォルダ内・名前の部分一致）
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
+                        placeholder="例: camera-stream / .png"
+                      />
+                      <Button
+                        className="shrink-0 rounded-md bg-sky-600 px-3 py-2 text-sm text-white hover:bg-sky-500"
+                        onPress={() => {
+                          setPage(1);
+                          setSearch(searchInput.trim());
+                        }}
+                      >
+                        検索
+                      </Button>
+                      <Button
+                        className="shrink-0 rounded-md border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800"
+                        onPress={() => {
+                          setSearchInput("");
+                          setPage(1);
+                          setSearch("");
+                        }}
+                        isDisabled={!search && !searchInput}
+                      >
+                        クリア
+                      </Button>
+                    </div>
                   </SearchField>
 
                   <Select
