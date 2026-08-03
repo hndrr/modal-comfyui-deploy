@@ -106,6 +106,14 @@ COMFYUI_CLI_ARGS=
 
 `COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
 
+ComfyUI をその時点の最新版に更新してデプロイする場合:
+
+```bash
+COMFYUI_FORCE_BUILD=on uv run modal deploy comfyapp.py
+```
+
+この指定では CUDA、PyTorch、SageAttention のビルド層には既存キャッシュを利用し、ComfyUI のインストール層とそれ以降の層だけを再ビルドします。
+
 Modal の公開 URL に `Modal-Key` / `Modal-Secret` ヘッダーを必須にする場合:
 
 ```bash

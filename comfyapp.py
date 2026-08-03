@@ -69,6 +69,7 @@ XFORMERS_WHEEL_URL = "https://download.pytorch.org/whl/cu130/xformers-0.0.34-cp3
 FLASH_ATTN_WHEEL_URL = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.9.0/flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl"
 SAGEATTENTION_REF = "abi3_stable"
 COMFYUI_CLI_ARGS_ENV = "COMFYUI_CLI_ARGS"
+COMFYUI_FORCE_BUILD_ENV = "COMFYUI_FORCE_BUILD"
 COMFYUI_GPU_PROFILE_ENV = "COMFYUI_GPU_PROFILE"
 COMFYUI_REQUIRES_PROXY_AUTH_ENV = "COMFYUI_REQUIRES_PROXY_AUTH"
 COMFYUI_SAGE_ATTENTION_ENV = "COMFYUI_SAGE_ATTENTION"
@@ -80,6 +81,7 @@ load_dotenv(DOTENV_PATH, override=False)
 
 GPU_PROFILE_NAME: str
 GPU_PROFILE: dict[str, str | bool]
+COMFYUI_FORCE_BUILD: bool
 REQUIRES_PROXY_AUTH: bool
 SAGE_ATTENTION_ENABLED: bool
 
@@ -122,6 +124,17 @@ def _resolve_sage_attention_enabled() -> bool:
     )
 
 
+def _resolve_comfyui_force_build() -> bool:
+    raw = os.environ.get(COMFYUI_FORCE_BUILD_ENV, "off").strip().lower()
+    if raw == "on":
+        return True
+    if raw == "off":
+        return False
+    raise ValueError(
+        f"Invalid {COMFYUI_FORCE_BUILD_ENV}: {raw!r}. Allowed values: on, off"
+    )
+
+
 def _resolve_requires_proxy_auth() -> bool:
     raw = os.environ.get(COMFYUI_REQUIRES_PROXY_AUTH_ENV, "off").strip().lower()
     if raw == "on":
@@ -160,6 +173,7 @@ def _build_launch_command(extra_cli_args: str) -> list[str]:
 
 
 GPU_PROFILE_NAME, GPU_PROFILE = _resolve_gpu_profile()
+COMFYUI_FORCE_BUILD = _resolve_comfyui_force_build()
 REQUIRES_PROXY_AUTH = _resolve_requires_proxy_auth()
 SAGE_ATTENTION_ENABLED = _resolve_sage_attention_enabled()
 CUDA_ARCH_LIST = str(GPU_PROFILE["cuda_arch_list"])
@@ -249,7 +263,10 @@ image = (
         "gguf",
         "taichi>=1.6,<1.8",
     )
-    .run_commands("comfy --skip-prompt install --nvidia")
+    .run_commands(
+        "comfy --skip-prompt install --nvidia",
+        force_build=COMFYUI_FORCE_BUILD,
+    )
     .run_commands(
         # comfy install が依存を触っても最終的には cu130 + prebuilt SageAttention で揃える
         "set -eux; "
@@ -287,6 +304,7 @@ def ui():
         f"({GPU_PROFILE['modal_gpu']}), "
         f"TORCH_CUDA_ARCH_LIST={CUDA_ARCH_LIST}, "
         f"{COMFYUI_SAGE_ATTENTION_ENV}={'on' if SAGE_ATTENTION_ENABLED else 'off'}, "
+        f"{COMFYUI_FORCE_BUILD_ENV}={'on' if COMFYUI_FORCE_BUILD else 'off'}, "
         f"{COMFYUI_REQUIRES_PROXY_AUTH_ENV}="
         f"{'on' if REQUIRES_PROXY_AUTH else 'off'}"
     )
