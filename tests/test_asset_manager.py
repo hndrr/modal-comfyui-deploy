@@ -44,8 +44,11 @@ class FakeVolume:
     def listdir(self, path: str, recursive: bool = False):
         if path == "/":
             return list(self.entries.values())
-        entry = self.entries.get(path)
-        return [entry] if entry else []
+        return [
+            value
+            for key, value in self.entries.items()
+            if Path(key).parent.as_posix() == path
+        ]
 
     def read_file_into_fileobj(self, path: str, file_obj) -> None:
         file_obj.write(self.contents[path])

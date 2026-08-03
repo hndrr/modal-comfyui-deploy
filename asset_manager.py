@@ -180,7 +180,11 @@ class AssetManager:
 
     def _find_entry(self, volume: str, path: str) -> AssetEntry:
         normalized = normalize_volume_path(path, allow_root=False)
-        entries = self._volume(volume).listdir(normalized, recursive=False)
+        parent = PurePosixPath(normalized).parent.as_posix()
+        entries = self._volume(volume).listdir(
+            "/" if parent == "." else parent,
+            recursive=False,
+        )
         for entry in entries:
             asset = _to_asset_entry(volume, entry)
             if asset.path == normalized:
@@ -196,13 +200,24 @@ class AssetManager:
     def download_asset(self, volume: str, path: str, destination: str | Path) -> Path:
         normalized = normalize_volume_path(path, allow_root=False)
         entry = self._find_entry(volume, normalized)
+        return self.download_listed_asset(entry, destination)
+
+    def download_listed_asset(
+        self,
+        entry: AssetEntry,
+        destination: str | Path,
+    ) -> Path:
+        """Download an entry already returned by ``list_assets`` without relisting."""
+
+        validate_volume(entry.volume)
+        normalized = normalize_volume_path(entry.path, allow_root=False)
         if entry.is_directory:
             raise IsADirectoryError("Directories cannot be downloaded as a single asset.")
 
         destination_path = Path(destination)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         with destination_path.open("wb") as file_obj:
-            self._volume(volume).read_file_into_fileobj(normalized, file_obj)
+            self._volume(entry.volume).read_file_into_fileobj(normalized, file_obj)
         return destination_path
 
     def upload_assets(

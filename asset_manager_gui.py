@@ -116,7 +116,7 @@ def _cached_asset_path(workspace: str, entry: AssetEntry) -> Path:
 def _local_asset(entry: AssetEntry, workspace: str) -> Path:
     destination = _cached_asset_path(workspace, entry)
     if not destination.exists():
-        ASSET_MANAGER.download_asset(entry.volume, entry.path, destination)
+        ASSET_MANAGER.download_listed_asset(entry, destination)
     return destination
 
 
@@ -135,12 +135,12 @@ def build_browser_view(
         entries = [entry for entry in entries if query in entry.name.casefold()]
     entries = _sort_entries(entries, sort_mode)
 
-    gallery_entries = (
-        [entry for entry in entries if entry.media_type == "image"]
-        if volume in {INPUT_VOLUME, OUTPUT_VOLUME}
-        else []
-    )
-    table_entries = [entry for entry in entries if entry not in gallery_entries]
+    if volume in {INPUT_VOLUME, OUTPUT_VOLUME}:
+        gallery_entries = [entry for entry in entries if entry.media_type == "image"]
+        table_entries = [entry for entry in entries if entry.media_type != "image"]
+    else:
+        gallery_entries = []
+        table_entries = entries
     page_count = max(1, (len(gallery_entries) + PAGE_SIZE - 1) // PAGE_SIZE)
     safe_page = min(max(int(page or 1), 1), page_count)
     page_start = (safe_page - 1) * PAGE_SIZE
@@ -425,7 +425,28 @@ def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def build_interface() -> gr.Blocks:
-    with gr.Blocks(title="Modal ComfyUI Asset Manager") as demo:
+    css = """
+    .asset-manager-root { max-width: 1400px; margin: 0 auto; }
+    .asset-browser-pane, .asset-side-pane { gap: 0.65rem !important; }
+    .asset-side-pane {
+        border-left: 1px solid var(--border-color-primary, #e5e7eb);
+        padding-left: 1rem;
+    }
+    .asset-toolbar .wrap { gap: 0.5rem; }
+    .asset-page-label {
+        text-align: center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 2rem;
+    }
+    .asset-section-title { margin: 0.15rem 0 0 !important; }
+    .asset-section-title h3, .asset-section-title h4 {
+        margin: 0.25rem 0 !important;
+        font-size: 1rem;
+    }
+    """
+    with gr.Blocks(title="Modal ComfyUI Asset Manager", css=css, elem_classes=["asset-manager-root"]) as demo:
         workspace = gr.State(
             value=create_session_workspace,
             time_to_live=60 * 60 * 12,
@@ -444,91 +465,148 @@ def build_interface() -> gr.Blocks:
         )
         with gr.Tabs():
             with gr.Tab("資産ブラウザ"):
-                with gr.Row():
-                    volume = gr.Radio(
-                        choices=[(VOLUME_LABELS[name], name) for name in sorted(ALLOWED_VOLUMES)],
-                        value=INPUT_VOLUME,
-                        label="Volume",
-                    )
-                    breadcrumb = gr.Dropdown(
-                        choices=[("/", "")],
-                        value="",
-                        label="現在のフォルダ",
-                        interactive=True,
-                    )
-                    parent_button = gr.Button("一つ上へ", size="sm")
-                    refresh_button = gr.Button("更新", size="sm")
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=7, min_width=520, elem_classes=["asset-browser-pane"]):
+                        with gr.Row(elem_classes=["asset-toolbar"]):
+                            volume = gr.Radio(
+                                choices=[
+                                    (VOLUME_LABELS[name], name)
+                                    for name in sorted(ALLOWED_VOLUMES)
+                                ],
+                                value=INPUT_VOLUME,
+                                label="Volume",
+                                scale=3,
+                            )
+                            breadcrumb = gr.Dropdown(
+                                choices=[("/", "")],
+                                value="",
+                                label="現在のフォルダ",
+                                interactive=True,
+                                scale=4,
+                            )
+                            with gr.Column(scale=1, min_width=100):
+                                parent_button = gr.Button("一つ上へ", size="sm")
+                                refresh_button = gr.Button("更新", size="sm")
 
-                with gr.Row():
-                    search = gr.Textbox(label="現在のフォルダを検索", scale=2)
-                    sort_mode = gr.Dropdown(
-                        choices=[(label, value) for label, value in SORT_CHOICES.items()],
-                        value="name_asc",
-                        label="並べ替え",
-                    )
-                browser_status = gr.Markdown()
-                gallery = gr.Gallery(
-                    label="画像",
-                    columns=4,
-                    rows=6,
-                    height="auto",
-                    object_fit="contain",
-                    show_download_button=False,
-                )
-                with gr.Row():
-                    previous_page = gr.Button("前へ", interactive=False, size="sm")
-                    page_label = gr.Markdown("1 / 1")
-                    next_page = gr.Button("次へ", interactive=False, size="sm")
-                table = gr.Dataframe(
-                    headers=["種類", "名前", "サイズ", "更新日時", "パス"],
-                    datatype=["str", "str", "str", "str", "str"],
-                    value=[],
-                    interactive=False,
-                    show_search="search",
-                    show_row_numbers=False,
-                    label="フォルダ・その他のファイル",
-                )
+                        with gr.Row():
+                            search = gr.Textbox(
+                                label="現在のフォルダを検索",
+                                scale=3,
+                                show_label=True,
+                            )
+                            sort_mode = gr.Dropdown(
+                                choices=[
+                                    (label, value) for label, value in SORT_CHOICES.items()
+                                ],
+                                value="name_asc",
+                                label="並べ替え",
+                                scale=2,
+                            )
+                        browser_status = gr.Markdown()
+                        gallery = gr.Gallery(
+                            label="画像",
+                            columns=4,
+                            rows=3,
+                            height=360,
+                            object_fit="contain",
+                            show_download_button=False,
+                        )
+                        with gr.Row():
+                            previous_page = gr.Button("前へ", interactive=False, size="sm", scale=1)
+                            with gr.Column(scale=1, min_width=80):
+                                page_label = gr.Markdown(
+                                    "1 / 1",
+                                    elem_classes=["asset-page-label"],
+                                )
+                            next_page = gr.Button("次へ", interactive=False, size="sm", scale=1)
+                        table = gr.Dataframe(
+                            headers=["種類", "名前", "サイズ", "更新日時", "パス"],
+                            datatype=["str", "str", "str", "str", "str"],
+                            value=[],
+                            interactive=False,
+                            show_search="search",
+                            show_row_numbers=False,
+                            label="フォルダ・その他のファイル",
+                            max_height=280,
+                        )
 
-                gr.Markdown("### 選択した資産")
-                selected_info = gr.Markdown("資産を選択してください。")
-                preview_image = gr.Image(label="画像プレビュー", visible=False)
-                preview_video = gr.Video(label="動画プレビュー", visible=False)
-                preview_audio = gr.Audio(label="音声プレビュー", visible=False)
-                download_button = gr.DownloadButton("ダウンロード", visible=False)
-                prepare_download_button = gr.Button("ダウンロードを準備", visible=False)
-                open_folder_button = gr.Button("フォルダを開く", visible=False)
+                    with gr.Column(scale=4, min_width=340, elem_classes=["asset-side-pane"]):
+                        gr.Markdown("### 選択した資産", elem_classes=["asset-section-title"])
+                        selected_info = gr.Markdown("資産を選択してください。")
+                        preview_image = gr.Image(
+                            label="画像プレビュー",
+                            visible=False,
+                            height=220,
+                        )
+                        preview_video = gr.Video(label="動画プレビュー", visible=False)
+                        preview_audio = gr.Audio(label="音声プレビュー", visible=False)
+                        with gr.Row():
+                            download_button = gr.DownloadButton("ダウンロード", visible=False)
+                            prepare_download_button = gr.Button(
+                                "ダウンロードを準備", visible=False, size="sm"
+                            )
+                            open_folder_button = gr.Button(
+                                "フォルダを開く", visible=False, size="sm"
+                            )
 
-                with gr.Group(visible=False) as action_group:
-                    gr.Markdown("#### 名前変更・移動")
-                    destination_volume = gr.Dropdown(
-                        choices=[(VOLUME_LABELS[name], name) for name in sorted(ALLOWED_VOLUMES)],
-                        label="移動先Volume",
-                    )
-                    destination_path = gr.Textbox(
-                        label="移動先パス",
-                        info="ファイル名を含むVolume内の相対パスを指定してください",
-                    )
-                    move_overwrite = gr.Checkbox(label="移動先を上書きする", value=False)
-                    move_button = gr.Button("名前変更・移動を実行")
-                    delete_button = gr.Button("削除の確認へ", variant="stop")
+                        with gr.Group(visible=False) as action_group:
+                            gr.Markdown(
+                                "#### 名前変更・移動",
+                                elem_classes=["asset-section-title"],
+                            )
+                            with gr.Row():
+                                destination_volume = gr.Dropdown(
+                                    choices=[
+                                        (VOLUME_LABELS[name], name)
+                                        for name in sorted(ALLOWED_VOLUMES)
+                                    ],
+                                    label="移動先Volume",
+                                    scale=2,
+                                )
+                                destination_path = gr.Textbox(
+                                    label="移動先パス",
+                                    info="ファイル名を含む相対パス",
+                                    scale=3,
+                                )
+                            with gr.Row():
+                                move_overwrite = gr.Checkbox(
+                                    label="移動先を上書き", value=False, scale=2
+                                )
+                                move_button = gr.Button(
+                                    "名前変更・移動", scale=2, size="sm"
+                                )
+                                delete_button = gr.Button(
+                                    "削除", variant="stop", scale=2, size="sm"
+                                )
 
-                with gr.Group(visible=False) as delete_group:
-                    delete_message = gr.Markdown()
-                    confirm_delete_button = gr.Button("完全に削除する", variant="stop")
-                    cancel_delete_button = gr.Button("キャンセル")
+                        with gr.Group(visible=False) as delete_group:
+                            delete_message = gr.Markdown()
+                            with gr.Row():
+                                confirm_delete_button = gr.Button(
+                                    "完全に削除する", variant="stop", scale=2
+                                )
+                                cancel_delete_button = gr.Button("キャンセル", scale=1)
 
-                gr.Markdown("### ローカルファイルを追加")
-                upload_files = gr.File(label="ファイル", file_count="multiple", type="filepath")
-                upload_destination = gr.Textbox(
-                    label="保存先フォルダ",
-                    info="ModelsではComfyUIモデル種別ディレクトリを指定してください",
-                )
-                upload_overwrite = gr.Checkbox(label="同名ファイルを上書きする", value=False)
-                upload_button = gr.Button("アップロード")
-                operation_status = gr.Markdown()
+                        with gr.Accordion("ローカルファイルを追加", open=True):
+                            upload_files = gr.File(
+                                label="ファイル",
+                                file_count="multiple",
+                                type="filepath",
+                                height=120,
+                            )
+                            upload_destination = gr.Textbox(
+                                label="保存先フォルダ",
+                                info="Modelsではモデル種別ディレクトリを指定",
+                            )
+                            with gr.Row():
+                                upload_overwrite = gr.Checkbox(
+                                    label="同名を上書き", value=False, scale=2
+                                )
+                                upload_button = gr.Button("アップロード", scale=2)
+                        operation_status = gr.Markdown()
 
             with gr.Tab("Hugging Faceからモデル追加"):
-                build_model_import_panel()
+                build_model_import_panel(show_standalone_options=False)
 
         refresh_inputs = [volume, current_path, search, sort_mode, page, workspace]
         refresh_outputs = [

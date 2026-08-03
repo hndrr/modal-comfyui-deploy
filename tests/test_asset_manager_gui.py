@@ -20,11 +20,11 @@ class FakeGuiManager:
     def list_assets(self, volume, path):
         return list(self.entries)
 
-    def download_asset(self, volume, path, destination):
+    def download_listed_asset(self, entry, destination):
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"preview")
-        self.downloaded.append((volume, path))
+        self.downloaded.append((entry.volume, entry.path))
         return destination
 
     def delete_asset(self, volume, path, recursive=False):
