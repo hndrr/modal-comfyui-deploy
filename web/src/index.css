@@ -34,3 +34,14 @@ textarea {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Asset list drag-range selection */
+body.is-drag-selecting {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+body.is-drag-selecting img {
+  -webkit-user-drag: none;
+}

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Breadcrumb,
   Breadcrumbs,
@@ -43,6 +50,24 @@ const VOLUMES: { id: VolumeId; label: string }[] = [
   { id: "comfy-model", label: "Models" },
 ];
 
+const ASSET_PATH_ATTR = "data-asset-path";
+
+type DragSelectState = {
+  startPath: string;
+  /** true = check range, false = uncheck range */
+  select: boolean;
+  base: Map<string, AssetEntry>;
+  lastPath: string;
+  moved: boolean;
+};
+
+function isDragExemptTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('input, a, label, [data-no-drag-select]'),
+  );
+}
+
 export default function App() {
   const [volume, setVolume] = useState<VolumeId>("comfy-inputs");
   const [path, setPath] = useState("");
@@ -79,6 +104,11 @@ export default function App() {
   const lastRangeAnchor = useRef<string | null>(null);
   /** Paths removed locally; keep filtering them out until Modal list catches up. */
   const suppressedPaths = useRef<Set<string>>(new Set());
+  const dragSelectRef = useRef<DragSelectState | null>(null);
+  /** After a drag-select, ignore the synthetic click that follows pointerup. */
+  const suppressClickRef = useRef(false);
+  const pageEntriesRef = useRef<AssetEntry[]>([]);
+  const checkedRef = useRef<Map<string, AssetEntry>>(new Map());
 
   const applyListResult = useCallback((result: AssetListResponse) => {
     const hidden = suppressedPaths.current;
@@ -176,6 +206,8 @@ export default function App() {
     () => [...displayGallery, ...displayTable],
     [displayGallery, displayTable],
   );
+  pageEntriesRef.current = pageEntries;
+  checkedRef.current = checked;
 
   const checkedList = useMemo(() => [...checked.values()], [checked]);
   const checkedCount = checkedList.length;
@@ -186,6 +218,76 @@ export default function App() {
   useEffect(() => {
     setPageInput(String(page));
   }, [page]);
+
+  useEffect(() => {
+    function entryFromPoint(clientX: number, clientY: number): AssetEntry | null {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (!(el instanceof Element)) return null;
+      const host = el.closest(`[${ASSET_PATH_ATTR}]`);
+      if (!(host instanceof HTMLElement)) return null;
+      const path = host.getAttribute(ASSET_PATH_ATTR);
+      if (!path) return null;
+      return pageEntriesRef.current.find((entry) => entry.path === path) ?? null;
+    }
+
+    function applyDragTo(entry: AssetEntry) {
+      const drag = dragSelectRef.current;
+      if (!drag) return;
+      const entries = pageEntriesRef.current;
+      const from = entries.findIndex((item) => item.path === drag.startPath);
+      const to = entries.findIndex((item) => item.path === entry.path);
+      if (from < 0 || to < 0) return;
+      // Require leaving the start item so a plain click still goes through onClick.
+      if (entry.path !== drag.startPath) drag.moved = true;
+      if (!drag.moved) return;
+      if (entry.path === drag.lastPath) return;
+      drag.lastPath = entry.path;
+      const [start, end] = from < to ? [from, to] : [to, from];
+      setChecked(() => {
+        const map = new Map(drag.base);
+        for (let i = start; i <= end; i += 1) {
+          const item = entries[i];
+          if (!item) continue;
+          if (drag.select) map.set(item.path, item);
+          else map.delete(item.path);
+        }
+        return map;
+      });
+      lastRangeAnchor.current = entry.path;
+      setFocused(entry);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (!dragSelectRef.current) return;
+      if (event.buttons === 0) {
+        endDragSelect();
+        return;
+      }
+      const entry = entryFromPoint(event.clientX, event.clientY);
+      if (entry) applyDragTo(entry);
+    }
+
+    function endDragSelect() {
+      const drag = dragSelectRef.current;
+      if (!drag) return;
+      if (drag.moved) suppressClickRef.current = true;
+      dragSelectRef.current = null;
+      document.body.classList.remove("is-drag-selecting");
+    }
+
+    function onPointerUp() {
+      endDragSelect();
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []);
 
   function goToPageInput() {
     if (!data) {
@@ -209,6 +311,28 @@ export default function App() {
 
   function focusEntry(entry: AssetEntry) {
     setFocused(entry);
+  }
+
+  function consumeSuppressedClick(): boolean {
+    if (!suppressClickRef.current) return false;
+    suppressClickRef.current = false;
+    return true;
+  }
+
+  function beginDragSelect(entry: AssetEntry, event: ReactPointerEvent) {
+    if (event.button !== 0) return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey) return;
+    if (isDragExemptTarget(event.target)) return;
+
+    // Always check the painted range. Uncheck via checkbox / ⌘·Ctrl+click.
+    dragSelectRef.current = {
+      startPath: entry.path,
+      select: true,
+      base: new Map(checkedRef.current),
+      lastPath: entry.path,
+      moved: false,
+    };
+    document.body.classList.add("is-drag-selecting");
   }
 
   function toggleCheck(entry: AssetEntry, next?: boolean) {
@@ -784,7 +908,7 @@ export default function App() {
                     </ModalOverlay>
                   </DialogTrigger>
                   <span className="text-[11px] text-zinc-600">
-                    Shift+クリックで範囲選択
+                    ドラッグまたは Shift+クリックで範囲選択
                   </span>
                 </div>
 
@@ -810,6 +934,7 @@ export default function App() {
                         return (
                           <div
                             key={entry.path}
+                            {...{ [ASSET_PATH_ATTR]: entry.path }}
                             className={`relative overflow-hidden rounded-md border bg-zinc-900 text-left ${
                               isChecked
                                 ? "border-sky-500 ring-1 ring-sky-500/40"
@@ -817,6 +942,7 @@ export default function App() {
                                   ? "border-sky-700"
                                   : "border-zinc-800 hover:border-zinc-600"
                             }`}
+                            onPointerDown={(event) => beginDragSelect(entry, event)}
                           >
                             <label className="absolute left-1.5 top-1.5 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded bg-black/60">
                               <input
@@ -833,6 +959,7 @@ export default function App() {
                               type="button"
                               className="block w-full text-left"
                               onClick={(event) => {
+                                if (consumeSuppressedClick()) return;
                                 if (event.shiftKey) selectRange(entry);
                                 else if (event.metaKey || event.ctrlKey) {
                                   toggleCheck(entry);
@@ -850,9 +977,10 @@ export default function App() {
                                   media_type: entry.media_type,
                                 })}
                                 alt={entry.name}
+                                draggable={false}
                                 loading="lazy"
                                 decoding="async"
-                                className="aspect-square w-full object-contain bg-black/40"
+                                className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
                               />
                               <div className="truncate px-2 py-1 text-xs text-zinc-300">
                                 {entry.name}
@@ -948,6 +1076,7 @@ export default function App() {
                         return (
                           <tr
                             key={entry.path}
+                            {...{ [ASSET_PATH_ATTR]: entry.path }}
                             className={`cursor-pointer border-t border-zinc-800/80 ${
                               isChecked
                                 ? "bg-sky-500/15"
@@ -955,7 +1084,9 @@ export default function App() {
                                   ? "bg-sky-500/10"
                                   : "hover:bg-zinc-900/70"
                             }`}
+                            onPointerDown={(event) => beginDragSelect(entry, event)}
                             onClick={(event) => {
+                              if (consumeSuppressedClick()) return;
                               if (event.shiftKey) selectRange(entry);
                               else if (event.metaKey || event.ctrlKey) toggleCheck(entry);
                               else {
@@ -981,6 +1112,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="text-sky-300 hover:underline"
+                                  data-no-drag-select
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     void openFolder(entry);
