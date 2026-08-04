@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
 /**
  * Cloudflare Access で認証済みのリクエストだけを、Modal 上の ComfyUI へ中継する
@@ -37,21 +37,40 @@ const REQUIRED_CONFIG_KEYS = [
   "MODAL_SECRET",
 ] as const satisfies readonly (keyof Env)[];
 
-/**
- * JWKS の取得結果は jose がキャッシュする。isolate をまたいで再利用したいので
- * モジュールスコープに保持し、TEAM_DOMAIN が変わったときだけ作り直す。
- */
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | undefined;
-let cachedJwksTeamDomain: string | undefined;
+const JWKS_TTL_MS = 10 * 60 * 1000;
 
-function getJwks(teamDomain: string): ReturnType<typeof createRemoteJWKSet> {
-  if (!cachedJwks || cachedJwksTeamDomain !== teamDomain) {
-    cachedJwks = createRemoteJWKSet(
-      new URL(`${teamDomain}/cdn-cgi/access/certs`)
-    );
-    cachedJwksTeamDomain = teamDomain;
+/**
+ * キャッシュするのは JWKS の **JSON（プレーンなオブジェクト）だけ**。
+ *
+ * `createRemoteJWKSet` の戻り値をモジュールスコープに置いてはいけない。Workers は
+ * あるリクエストのコンテキストで生成された I/O オブジェクトを別のリクエストから
+ * 使うことを禁じており、2 回目以降の検証が必ず例外になる。
+ * 素の JSON なら I/O を持たないので、リクエストをまたいで再利用してよい。
+ */
+let cachedJwks: { teamDomain: string; fetchedAt: number; keys: JSONWebKeySet } | undefined;
+
+async function getKeySet(teamDomain: string) {
+  const now = Date.now();
+  const stale =
+    !cachedJwks ||
+    cachedJwks.teamDomain !== teamDomain ||
+    now - cachedJwks.fetchedAt > JWKS_TTL_MS;
+
+  if (stale) {
+    const url = `${teamDomain}/cdn-cgi/access/certs`;
+    const res = await fetch(url, { cf: { cacheTtl: 600, cacheEverything: true } });
+    if (!res.ok) {
+      throw new Error(`JWKS fetch failed: ${res.status} ${url}`);
+    }
+    cachedJwks = {
+      teamDomain,
+      fetchedAt: now,
+      keys: await res.json<JSONWebKeySet>(),
+    };
   }
-  return cachedJwks;
+
+  // 検証キーはリクエストごとに組み立てる（使い回さない）。
+  return createLocalJWKSet(cachedJwks!.keys);
 }
 
 function normalizeTeamDomain(raw: string): string {
@@ -104,17 +123,23 @@ function readAccessToken(request: Request): string | null {
 async function isAuthenticated(request: Request, env: Env): Promise<boolean> {
   const token = readAccessToken(request);
   if (!token) {
+    console.warn("Access token not found on request (neither header nor cookie)");
     return false;
   }
 
   const teamDomain = normalizeTeamDomain(env.TEAM_DOMAIN);
   try {
-    await jwtVerify(token, getJwks(teamDomain), {
+    await jwtVerify(token, await getKeySet(teamDomain), {
       issuer: teamDomain,
       audience: env.POLICY_AUD.trim(),
     });
     return true;
-  } catch {
+  } catch (error) {
+    // 失敗理由を残す。握り潰すと 403 の原因が追えなくなる。
+    // トークン本体は出さない。
+    console.warn(
+      `Access token rejected: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
+    );
     return false;
   }
 }
@@ -147,10 +172,17 @@ function isWebSocketUpgrade(request: Request): boolean {
 }
 
 /**
- * ComfyUI の /ws を透過する。
+ * ComfyUI の /ws を素通しする。
  *
- * パススルーなので accept() は呼ばない。呼ぶとこの Worker が接続を終端して
- * しまい、ブラウザまでフレームが届かなくなる。
+ * **upstream のレスポンスをそのまま返すこと。** ここで
+ * `new Response(null, { status: 101, webSocket: upstream.webSocket })` と
+ * ソケットを取り出して包み直すと、その瞬間から Worker がソケットの保持者になる。
+ * stateless Worker はレスポンスを返した時点で実行コンテキストが終わるため、
+ * 保持したソケットは破棄され `Error: Network connection lost.` を出して
+ * 0.5 秒ほどで切断される。`ctx.waitUntil()` でも延命できない。
+ *
+ * upstream の Response を素通しすれば Worker は何も保持せず、
+ * runtime がブラウザと Modal を直結する。
  */
 async function proxyWebSocket(
   request: Request,
@@ -158,26 +190,32 @@ async function proxyWebSocket(
   upstreamUrl: URL
 ): Promise<Response> {
   const headers = buildUpstreamHeaders(request, env);
-  // Headers をコピーし直した際に Upgrade が落ちる runtime があるため明示的に付け直す。
+
+  // ブラウザのハンドシェイク用ヘッダーは上流へ持ち越さない。
+  //
+  // workerd は `Upgrade: websocket` を見て**自前で**ハンドシェイクを行う。
+  // ブラウザの Sec-WebSocket-Key / Version / Extensions をコピーすると
+  // それと衝突し、101 は返るのにフレームが流れないソケットができあがる。
+  // Cloudflare の例が `headers: { Upgrade: "websocket" }` だけを渡しているのも同じ理由。
+  headers.delete("Sec-WebSocket-Key");
+  headers.delete("Sec-WebSocket-Version");
+  headers.delete("Sec-WebSocket-Extensions");
+  headers.delete("Sec-WebSocket-Accept");
+  headers.delete("Connection");
   headers.set("Upgrade", "websocket");
 
   const upstream = await fetch(
     new Request(upstreamUrl, { method: request.method, headers })
   );
 
-  const webSocket = upstream.webSocket;
-  if (!webSocket) {
-    // Modal 側が 101 を返さなかった場合（401 など）はそのまま返してブラウザに見せる。
-    return upstream;
+  if (!upstream.webSocket) {
+    // Modal が 101 を返さなかった場合（Proxy Auth 失敗時の 401 など）。
+    console.warn(
+      `WebSocket upgrade did not produce a socket: upstream status=${upstream.status}`
+    );
   }
 
-  const responseHeaders = new Headers();
-  const protocol = upstream.headers.get("Sec-WebSocket-Protocol");
-  if (protocol) {
-    responseHeaders.set("Sec-WebSocket-Protocol", protocol);
-  }
-
-  return new Response(null, { status: 101, webSocket, headers: responseHeaders });
+  return upstream;
 }
 
 /**
