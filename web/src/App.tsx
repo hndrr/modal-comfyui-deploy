@@ -50,6 +50,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortMode>("name_asc");
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
   const [data, setData] = useState<AssetListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadStartedAt, setLoadStartedAt] = useState(() => Date.now());
@@ -181,6 +182,25 @@ export default function App() {
   const pageAllChecked =
     pageEntries.length > 0 && pageEntries.every((entry) => checked.has(entry.path));
   const pageSomeChecked = pageEntries.some((entry) => checked.has(entry.path));
+
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
+
+  function goToPageInput() {
+    if (!data) {
+      setPageInput(String(page));
+      return;
+    }
+    const parsed = Number.parseInt(pageInput.trim(), 10);
+    if (!Number.isFinite(parsed)) {
+      setPageInput(String(page));
+      return;
+    }
+    const clamped = Math.min(data.page_count, Math.max(1, parsed));
+    setPageInput(String(clamped));
+    if (clamped !== page) setPage(clamped);
+  }
 
   function clearChecks() {
     setChecked(new Map());
@@ -845,7 +865,14 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="flex items-center justify-center gap-3">
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <Button
+                    className="rounded-md border border-zinc-700 px-3 py-1 text-sm disabled:opacity-40"
+                    isDisabled={!data || data.page <= 1 || loading}
+                    onPress={() => setPage(1)}
+                  >
+                    最初
+                  </Button>
                   <Button
                     className="rounded-md border border-zinc-700 px-3 py-1 text-sm disabled:opacity-40"
                     isDisabled={!data || data.page <= 1 || loading}
@@ -853,15 +880,51 @@ export default function App() {
                   >
                     前へ
                   </Button>
-                  <span className="text-sm text-zinc-400">
-                    {data ? `${data.page} / ${data.page_count}` : "—"}
-                  </span>
+                  <div className="flex items-center gap-1.5 text-sm text-zinc-400">
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={data?.page_count ?? 1}
+                      value={pageInput}
+                      onChange={(event) => setPageInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          goToPageInput();
+                        }
+                      }}
+                      onBlur={goToPageInput}
+                      disabled={!data || loading}
+                      aria-label="ページ番号"
+                      className="w-16 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-center text-sm text-zinc-100 tabular-nums disabled:opacity-40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                    />
+                    <span className="tabular-nums">
+                      / {data ? data.page_count : "—"}
+                    </span>
+                    <Button
+                      className="rounded-md border border-zinc-700 px-2.5 py-1 text-sm disabled:opacity-40"
+                      isDisabled={!data || loading}
+                      onPress={goToPageInput}
+                    >
+                      移動
+                    </Button>
+                  </div>
                   <Button
                     className="rounded-md border border-zinc-700 px-3 py-1 text-sm disabled:opacity-40"
                     isDisabled={!data || data.page >= data.page_count || loading}
                     onPress={() => setPage((value) => value + 1)}
                   >
                     次へ
+                  </Button>
+                  <Button
+                    className="rounded-md border border-zinc-700 px-3 py-1 text-sm disabled:opacity-40"
+                    isDisabled={!data || data.page >= data.page_count || loading}
+                    onPress={() => {
+                      if (data) setPage(data.page_count);
+                    }}
+                  >
+                    最後
                   </Button>
                 </div>
 
