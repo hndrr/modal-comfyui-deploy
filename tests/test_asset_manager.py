@@ -218,6 +218,32 @@ class AssetManagerOperationTests(unittest.TestCase):
                 "folder/nested",
             )
 
+    def test_create_directory_uploads_hidden_placeholder(self) -> None:
+        from asset_manager import DIR_PLACEHOLDER_NAME
+
+        created = self.manager.create_directory(INPUT_VOLUME, "archive/shots")
+        self.assertEqual(created, "archive/shots")
+        self.assertEqual(len(self.input.uploads), 1)
+        _local_path, remote_path = self.input.uploads[0]
+        self.assertEqual(remote_path, f"archive/shots/{DIR_PLACEHOLDER_NAME}")
+
+    def test_create_directory_rejects_existing_file_or_dir(self) -> None:
+        with self.assertRaises(FileExistsError):
+            self.manager.create_directory(INPUT_VOLUME, "folder")
+        self.input.entries["archive.txt"] = entry("archive.txt")
+        with self.assertRaises(FileExistsError):
+            self.manager.create_directory(INPUT_VOLUME, "archive.txt")
+
+    def test_list_hides_directory_placeholder(self) -> None:
+        from asset_manager import DIR_PLACEHOLDER_NAME
+
+        self.input.entries[f"folder/{DIR_PLACEHOLDER_NAME}"] = entry(
+            f"folder/{DIR_PLACEHOLDER_NAME}",
+            size=0,
+        )
+        assets = self.manager.list_assets(INPUT_VOLUME, "folder")
+        self.assertEqual([asset.path for asset in assets], [])
+
 
 if __name__ == "__main__":
     unittest.main()

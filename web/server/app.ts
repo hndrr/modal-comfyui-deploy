@@ -65,7 +65,7 @@ export function createApp(deps: AppDeps = {}) {
     try {
       const volume = c.req.query("volume");
       if (!volume) throw new Error("volume is required");
-      const sort = (c.req.query("sort") ?? "name_asc") as SortMode;
+      const sort = (c.req.query("sort") ?? "modified_desc") as SortMode;
       if (!SORT_CHOICES.includes(sort)) {
         throw new Error(`Unsupported sort mode: ${sort}`);
       }
@@ -236,6 +236,22 @@ export function createApp(deps: AppDeps = {}) {
         destinationPath: body.destination_path,
         overwrite: body.overwrite,
       });
+      return c.json(result);
+    } catch (error) {
+      throw httpError(error, 400);
+    }
+  });
+
+  app.post("/api/assets/mkdir", async (c) => {
+    try {
+      const body = await c.req.json<{
+        volume: string;
+        path: string;
+      }>();
+      if (!body.path?.trim()) {
+        throw new Error("path is required");
+      }
+      const result = await manager.mkdir(body.volume, body.path);
       return c.json(result);
     } catch (error) {
       throw httpError(error, 400);

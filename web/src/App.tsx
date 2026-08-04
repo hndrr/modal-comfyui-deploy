@@ -34,13 +34,14 @@ import {
 } from "react-aria-components";
 import {
   contentUrl,
+  createDirectory,
   deleteAssets,
   fetchAssets,
   moveAsset,
   thumbnailUrl,
   uploadFiles,
 } from "./api/client";
-import { formatDate, humanSize } from "./lib/format";
+import { formatDate, humanSize, joinVolumePath } from "./lib/format";
 import type { AssetEntry, AssetListResponse, SortMode, VolumeId } from "./types";
 import { SORT_OPTIONS } from "./types";
 
@@ -61,6 +62,19 @@ type DragSelectState = {
   moved: boolean;
 };
 
+type ViewParams = {
+  volume: VolumeId;
+  path: string;
+  search: string;
+  sort: SortMode;
+  page: number;
+};
+
+/** Volume-scoped key so Inputs suppressions never hide Outputs paths. */
+function suppressKey(volume: string, path: string): string {
+  return `${volume}\0${path}`;
+}
+
 function isDragExemptTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
@@ -73,7 +87,7 @@ export default function App() {
   const [path, setPath] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<SortMode>("name_asc");
+  const [sort, setSort] = useState<SortMode>("modified_desc");
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [data, setData] = useState<AssetListResponse | null>(null);
@@ -92,6 +106,8 @@ export default function App() {
   const [uploadDest, setUploadDest] = useState("");
   const [uploadOverwrite, setUploadOverwrite] = useState(false);
   const [uploadFilesState, setUploadFilesState] = useState<File[] | null>(null);
+  /** Folder name (or relative path) to create under the current directory. */
+  const [newFolderName, setNewFolderName] = useState("");
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("");
   /** Live delete progress for the toast. */
@@ -101,14 +117,28 @@ export default function App() {
     failed: number;
   } | null>(null);
   const requestId = useRef(0);
+  /** Latest non-quiet list request — used so quiet refresh can't leave loading stuck. */
+  const loadingRequestId = useRef(0);
   const lastRangeAnchor = useRef<string | null>(null);
-  /** Paths removed locally; keep filtering them out until Modal list catches up. */
+  /**
+   * Paths removed optimistically; keys are `${volume}\0${path}` so a delete on
+   * Inputs never filters the same relative path on Outputs/Models.
+   */
   const suppressedPaths = useRef<Set<string>>(new Set());
   const dragSelectRef = useRef<DragSelectState | null>(null);
   /** After a drag-select, ignore the synthetic click that follows pointerup. */
   const suppressClickRef = useRef(false);
   const pageEntriesRef = useRef<AssetEntry[]>([]);
   const checkedRef = useRef<Map<string, AssetEntry>>(new Map());
+  /** Always-current view; load/delete must not use a stale volume from an older render. */
+  const viewRef = useRef<ViewParams>({
+    volume,
+    path,
+    search,
+    sort,
+    page,
+  });
+  viewRef.current = { volume, path, search, sort, page };
 
   const applyListResult = useCallback((result: AssetListResponse) => {
     const hidden = suppressedPaths.current;
@@ -116,12 +146,22 @@ export default function App() {
       setData(result);
       return;
     }
-    const entries = result.entries.filter((entry) => !hidden.has(entry.path));
+    const entries = result.entries.filter(
+      (entry) => !hidden.has(suppressKey(result.volume, entry.path)),
+    );
     const removedHere = result.entries.length - entries.length;
-    // Drop suppressions that Modal no longer returns (fully gone).
-    for (const pathValue of [...hidden]) {
-      const stillListed = result.entries.some((entry) => entry.path === pathValue);
-      if (!stillListed) hidden.delete(pathValue);
+    // Drop suppressions for this volume that Modal no longer returns (fully gone).
+    for (const key of [...hidden]) {
+      const sep = key.indexOf("\0");
+      if (sep < 0) {
+        hidden.delete(key);
+        continue;
+      }
+      const keyVolume = key.slice(0, sep);
+      const keyPath = key.slice(sep + 1);
+      if (keyVolume !== result.volume) continue;
+      const stillListed = result.entries.some((entry) => entry.path === keyPath);
+      if (!stillListed) hidden.delete(key);
     }
     setData({
       ...result,
@@ -133,41 +173,70 @@ export default function App() {
 
   const load = useCallback(
     async (options: { refresh?: boolean; quiet?: boolean } = {}) => {
+      // Snapshot at call time so post-delete refresh uses the tab the user is on now,
+      // not the Inputs/Outputs/Models tab from when the delete started.
+      const view = { ...viewRef.current };
       const id = ++requestId.current;
       if (!options.quiet) {
+        loadingRequestId.current = id;
         setLoading(true);
         setLoadStartedAt(Date.now());
       }
       setError(null);
       try {
         const result = await fetchAssets({
-          volume,
-          path,
-          search,
-          sort,
-          page,
+          volume: view.volume,
+          path: view.path,
+          search: view.search,
+          sort: view.sort,
+          page: view.page,
           pageSize: 100,
           refresh: options.refresh,
         });
         if (id !== requestId.current) return;
+        const current = viewRef.current;
+        // User switched volume/folder/page while this request was in flight.
+        if (
+          current.volume !== view.volume ||
+          current.path !== view.path ||
+          current.search !== view.search ||
+          current.sort !== view.sort ||
+          current.page !== view.page
+        ) {
+          return;
+        }
         applyListResult(result);
-        if (result.page !== page) {
+        if (result.page !== view.page) {
           setPage(result.page);
         }
       } catch (err) {
         if (id !== requestId.current) return;
+        const current = viewRef.current;
+        if (
+          current.volume !== view.volume ||
+          current.path !== view.path ||
+          current.search !== view.search ||
+          current.sort !== view.sort ||
+          current.page !== view.page
+        ) {
+          return;
+        }
         setError(err instanceof Error ? err.message : String(err));
         if (!options.refresh && !options.quiet) setData(null);
       } finally {
-        if (id === requestId.current && !options.quiet) setLoading(false);
+        // Quiet (background) loads must not leave a superseded non-quiet load stuck.
+        if (!options.quiet && loadingRequestId.current === id) {
+          setLoading(false);
+        }
       }
     },
-    [volume, path, search, sort, page, applyListResult],
+    [applyListResult],
   );
 
+  // Reload when the visible view changes (volume tab, folder, search, sort, page).
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [volume, path, search, sort, page, load]);
 
   useEffect(() => {
     if (!loading && !busy) return;
@@ -182,24 +251,19 @@ export default function App() {
     setUploadDest(path);
   }, [path]);
 
-  useEffect(() => {
-    if (focused) {
-      setDestVolume(focused.volume as VolumeId);
-      setDestPath(focused.path);
-    } else {
-      setDestPath("");
-    }
-  }, [focused]);
-
-  // Inputs/Outputs: images in gallery, others in table. Models: all in table.
+  // Inputs/Outputs: images + videos in gallery, others in table. Models: all in table.
   const displayTable = useMemo(() => {
     if (volume === "comfy-model") return data?.entries ?? [];
-    return (data?.entries ?? []).filter((entry) => entry.media_type !== "image");
+    return (data?.entries ?? []).filter(
+      (entry) => entry.media_type !== "image" && entry.media_type !== "video",
+    );
   }, [data, volume]);
 
   const displayGallery = useMemo(() => {
     if (volume === "comfy-model") return [];
-    return (data?.entries ?? []).filter((entry) => entry.media_type === "image");
+    return (data?.entries ?? []).filter(
+      (entry) => entry.media_type === "image" || entry.media_type === "video",
+    );
   }, [data, volume]);
 
   const pageEntries = useMemo(
@@ -214,6 +278,36 @@ export default function App() {
   const pageAllChecked =
     pageEntries.length > 0 && pageEntries.every((entry) => checked.has(entry.path));
   const pageSomeChecked = pageEntries.some((entry) => checked.has(entry.path));
+
+  const wasMultiMoveRef = useRef(false);
+  // Single-select: default dest to the focused/checked item path (rename/move).
+  // Multi-select: default dest to the current folder once when bulk mode starts.
+  useEffect(() => {
+    const multi = checkedCount > 1;
+    if (multi) {
+      if (!wasMultiMoveRef.current) {
+        setDestVolume(volume);
+        setDestPath(path);
+      }
+      wasMultiMoveRef.current = true;
+      return;
+    }
+    wasMultiMoveRef.current = false;
+    if (focused) {
+      setDestVolume(focused.volume as VolumeId);
+      setDestPath(focused.path);
+      return;
+    }
+    if (checkedCount === 1) {
+      const only = checkedList[0];
+      if (only) {
+        setDestVolume(only.volume as VolumeId);
+        setDestPath(only.path);
+      }
+      return;
+    }
+    setDestPath("");
+  }, [focused, checkedCount, checkedList, path, volume]);
 
   useEffect(() => {
     setPageInput(String(page));
@@ -409,14 +503,15 @@ export default function App() {
     await navigateTo(entry.path);
   }
 
-  function removePathsFromView(paths: string[]) {
+  function removePathsFromView(volumeId: string, paths: string[]) {
     if (!paths.length) return;
     for (const pathValue of paths) {
-      suppressedPaths.current.add(pathValue);
+      suppressedPaths.current.add(suppressKey(volumeId, pathValue));
     }
     const removed = new Set(paths);
     setData((prev) => {
-      if (!prev) return prev;
+      // Only touch the list if we're still looking at the volume we mutated.
+      if (!prev || prev.volume !== volumeId) return prev;
       const entries = prev.entries.filter((entry) => !removed.has(entry.path));
       const removedCount = prev.entries.length - entries.length;
       if (!removedCount) return prev;
@@ -425,7 +520,7 @@ export default function App() {
         (entry) => removed.has(entry.path) && entry.media_type === "image",
       ).length;
       const imageTotal = Math.max(0, prev.image_total - imageRemoved);
-      const label = VOLUMES.find((item) => item.id === volume)?.label ?? volume;
+      const label = VOLUMES.find((item) => item.id === volumeId)?.label ?? volumeId;
       return {
         ...prev,
         entries,
@@ -436,18 +531,83 @@ export default function App() {
     });
   }
 
+  function clearSuppressedFor(volumeId: string, paths: string[]) {
+    for (const pathValue of paths) {
+      suppressedPaths.current.delete(suppressKey(volumeId, pathValue));
+    }
+  }
+
+  /** Bust list cache for a volume the user is no longer viewing (e.g. deleted while on another tab). */
+  function bustVolumeListCache(volumeId: string) {
+    void fetchAssets({
+      volume: volumeId,
+      path: "",
+      page: 1,
+      pageSize: 1,
+      refresh: true,
+    }).catch(() => {
+      /* best-effort cache invalidation */
+    });
+  }
+
+  async function syncListAfterMutation(sourceVolume: string) {
+    const current = viewRef.current;
+    if (current.volume === sourceVolume) {
+      await load({ refresh: true, quiet: true });
+      return;
+    }
+    // User switched Inputs/Outputs/Models mid-flight: don't overwrite the new tab
+    // with the source volume's list; just invalidate the source cache.
+    bustVolumeListCache(sourceVolume);
+  }
+
+  async function handleCreateFolder() {
+    const name = newFolderName.trim().replace(/^\/+|\/+$/g, "");
+    if (!name) {
+      setStatusMessage("フォルダ名を入力してください。");
+      return;
+    }
+    if (name.includes("\\") || name.includes("\0") || name.split("/").some((part) => part === "..")) {
+      setStatusMessage("フォルダ名に .. や不正な文字は使えません。");
+      return;
+    }
+    const mkdirVolume = volume;
+    const fullPath = joinVolumePath(path, name);
+    setBusy(true);
+    setDeleteProgress(null);
+    setBusyLabel("フォルダ作成中…");
+    setStatusMessage(`フォルダ作成中: ${fullPath}`);
+    try {
+      const result = await createDirectory({
+        volume: mkdirVolume,
+        path: fullPath,
+      });
+      setStatusMessage(result.message);
+      setNewFolderName("");
+      setBusyLabel("一覧を同期中…");
+      await syncListAfterMutation(mkdirVolume);
+      setStatusMessage(result.message);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+      setBusyLabel("");
+    }
+  }
+
   async function handleUpload() {
     if (!uploadFilesState?.length) {
       setStatusMessage("アップロードするファイルを選択してください。");
       return;
     }
+    const uploadVolume = volume;
     setBusy(true);
     setDeleteProgress(null);
     setBusyLabel(`アップロード中（${uploadFilesState.length}件）…`);
     setStatusMessage(`アップロード中（${uploadFilesState.length}件）…`);
     try {
       const result = await uploadFiles({
-        volume,
+        volume: uploadVolume,
         destination: uploadDest,
         overwrite: uploadOverwrite,
         files: uploadFilesState,
@@ -455,7 +615,7 @@ export default function App() {
       setStatusMessage(result.message);
       setUploadFilesState(null);
       setBusyLabel("一覧を同期中…");
-      await load({ refresh: true, quiet: true });
+      await syncListAfterMutation(uploadVolume);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -465,39 +625,122 @@ export default function App() {
   }
 
   async function handleMove() {
-    if (!focused || checkedCount > 1) {
-      setStatusMessage(
-        checkedCount > 1
-          ? "複数選択時の移動は未対応です。1件だけ選択するか、フォーカス中の1件で移動してください。"
-          : "移動する資産を1件選択してください。",
-      );
+    const targets = checkedCount > 0 ? checkedList : focused ? [focused] : [];
+    if (!targets.length) {
+      setStatusMessage("移動する項目を選択してください。");
       return;
     }
+    const volumes = new Set(targets.map((entry) => entry.volume));
+    if (volumes.size !== 1) {
+      setStatusMessage("複数 Volume をまたいだ一括移動はできません。同じ Volume 内で選択してください。");
+      return;
+    }
+    const sourceVolume = targets[0]!.volume;
+    const multi = targets.length > 1;
+    const destFolder = destPath.trim();
+    if (!multi && !destFolder) {
+      setStatusMessage("移動先パスを入力してください。");
+      return;
+    }
+
+    const jobs = targets.map((entry) => ({
+      entry,
+      destinationPath: multi
+        ? joinVolumePath(destFolder, entry.name)
+        : destFolder,
+    }));
+
+    // Same-path no-ops waste API calls; drop them early.
+    const actionable = jobs.filter(
+      (job) =>
+        !(
+          sourceVolume === destVolume &&
+          job.entry.path === job.destinationPath
+        ),
+    );
+    if (!actionable.length) {
+      setStatusMessage("移動元と移動先が同じです。");
+      return;
+    }
+
+    const total = actionable.length;
     setBusy(true);
-    setDeleteProgress(null);
-    setBusyLabel("移動中…");
-    setStatusMessage(`移動中: ${focused.path}`);
+    setDeleteProgress({ total, done: 0, failed: 0 });
+    setBusyLabel(multi ? `移動中 0/${total}` : `移動中: ${actionable[0]!.entry.path}`);
+    setStatusMessage(
+      multi
+        ? `${total}件を ${destVolume}:${destFolder || "/"} へ移動中…`
+        : `移動中: ${actionable[0]!.entry.path}`,
+    );
+
+    const movedPaths = actionable.map((job) => job.entry.path);
+    // Optimistic: drop from current folder view immediately.
+    removePathsFromView(sourceVolume, movedPaths);
+    setFocused(null);
+    clearChecks();
+
+    let done = 0;
+    let failed = 0;
+    const failures: { path: string; error: string }[] = [];
     try {
-      const movedPath = focused.path;
-      // Optimistic: drop from current folder view immediately.
-      removePathsFromView([movedPath]);
-      setFocused(null);
-      clearChecks();
-      const result = await moveAsset({
-        source_volume: focused.volume,
-        source_path: focused.path,
-        destination_volume: destVolume,
-        destination_path: destPath,
-        overwrite: moveOverwrite,
-      });
-      setStatusMessage(result.message);
-      setBusyLabel("一覧を同期中…");
-      await load({ refresh: true, quiet: true });
+      for (const job of actionable) {
+        try {
+          await moveAsset({
+            source_volume: sourceVolume,
+            source_path: job.entry.path,
+            destination_volume: destVolume,
+            destination_path: job.destinationPath,
+            overwrite: moveOverwrite,
+          });
+          done += 1;
+        } catch (err) {
+          failed += 1;
+          const error = err instanceof Error ? err.message : String(err);
+          failures.push({ path: job.entry.path, error });
+          // Put failed items back into the list.
+          clearSuppressedFor(sourceVolume, [job.entry.path]);
+        }
+        const processed = done + failed;
+        setDeleteProgress({ total, done, failed });
+        setBusyLabel(
+          `移動中 ${processed}/${total}（成功 ${done}${failed ? ` / 失敗 ${failed}` : ""}）`,
+        );
+        setStatusMessage(
+          `移動進捗: 成功 ${done} / 失敗 ${failed} / 合計 ${total}`,
+        );
+      }
+
+      let message =
+        failed === 0
+          ? multi
+            ? `${done}件を移動しました → ${destVolume}:${destFolder || "/"}`
+            : `移動完了: ${destVolume}:${actionable[0]!.destinationPath}`
+          : `移動: 成功 ${done}件 / 失敗 ${failed}件`;
+      if (failures.length) {
+        message +=
+          " — " +
+          failures
+            .slice(0, 3)
+            .map((item) => `${item.path}: ${item.error}`)
+            .join("; ");
+      }
+      setDeleteProgress({ total, done, failed });
+      setStatusMessage(message);
+      setBusyLabel(
+        failed === 0
+          ? `移動完了 ${done}件 · 一覧同期中…`
+          : `成功 ${done} / 失敗 ${failed} · 一覧同期中…`,
+      );
+      await syncListAfterMutation(sourceVolume);
+      if (destVolume !== sourceVolume) bustVolumeListCache(destVolume);
+      setStatusMessage(message);
+      setBusyLabel(
+        failed === 0 ? `移動完了: ${done}件` : `成功 ${done}件 / 失敗 ${failed}件`,
+      );
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : String(err));
-      // Restore list if move failed after optimistic remove.
-      suppressedPaths.current.clear();
-      await load({ refresh: true, quiet: true });
+      clearSuppressedFor(sourceVolume, movedPaths);
+      await syncListAfterMutation(sourceVolume);
     } finally {
       setBusy(false);
       setBusyLabel("");
@@ -510,19 +753,22 @@ export default function App() {
       setStatusMessage("削除する項目を選択してください。");
       return;
     }
+    // Capture volume at start — user may switch Inputs/Outputs/Models during delete.
+    const deleteVolume = volume;
+    const targetPaths = targets.map((entry) => entry.path);
     const total = targets.length;
     setBusy(true);
     setDeleteProgress({ total, done: 0, failed: 0 });
     setBusyLabel(`削除中 0/${total}（成功 0）`);
     setStatusMessage(`${total}件を削除中…`);
-    // Optimistic: drop from view up front.
-    removePathsFromView(targets.map((entry) => entry.path));
+    // Optimistic: drop from view up front (no-op for list if user already left this tab).
+    removePathsFromView(deleteVolume, targetPaths);
     setFocused(null);
     clearChecks();
 
     try {
       const result = await deleteAssets({
-        volume,
+        volume: deleteVolume,
         items: targets.map((entry) => ({
           path: entry.path,
           recursive: entry.is_directory,
@@ -548,10 +794,10 @@ export default function App() {
       const done = result.paths?.length ?? result.done ?? 0;
       const failed = result.failed?.length ?? result.failed_count ?? 0;
       for (const pathValue of result.paths ?? []) {
-        suppressedPaths.current.add(pathValue);
+        suppressedPaths.current.add(suppressKey(deleteVolume, pathValue));
       }
       for (const item of result.failed ?? []) {
-        suppressedPaths.current.delete(item.path);
+        suppressedPaths.current.delete(suppressKey(deleteVolume, item.path));
       }
 
       let message = result.message;
@@ -570,15 +816,15 @@ export default function App() {
           ? `削除完了 ${done}件 · 一覧同期中…`
           : `成功 ${done} / 失敗 ${failed} · 一覧同期中…`,
       );
-      await load({ refresh: true, quiet: true });
+      await syncListAfterMutation(deleteVolume);
       setStatusMessage(message);
       setBusyLabel(
         failed === 0 ? `削除完了: ${done}件` : `成功 ${done}件 / 失敗 ${failed}件`,
       );
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : String(err));
-      suppressedPaths.current.clear();
-      await load({ refresh: true, quiet: true });
+      clearSuppressedFor(deleteVolume, targetPaths);
+      await syncListAfterMutation(deleteVolume);
     } finally {
       setBusy(false);
       setBusyLabel("");
@@ -926,11 +1172,14 @@ export default function App() {
 
                 {displayGallery.length > 0 && (
                   <div>
-                    <h2 className="mb-2 text-sm font-medium text-zinc-300">画像</h2>
+                    <h2 className="mb-2 text-sm font-medium text-zinc-300">
+                      画像・動画
+                    </h2>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
                       {displayGallery.map((entry) => {
                         const isChecked = checked.has(entry.path);
                         const isFocused = focused?.path === entry.path;
+                        const isVideo = entry.media_type === "video";
                         return (
                           <div
                             key={entry.path}
@@ -955,6 +1204,11 @@ export default function App() {
                                 onClick={(event) => event.stopPropagation()}
                               />
                             </label>
+                            {isVideo && (
+                              <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-zinc-100">
+                                VIDEO
+                              </span>
+                            )}
                             <button
                               type="button"
                               className="block w-full text-left"
@@ -969,19 +1223,36 @@ export default function App() {
                                 }
                               }}
                             >
-                              <img
-                                src={thumbnailUrl(entry.volume, entry.path, {
-                                  name: entry.name,
-                                  size: entry.size,
-                                  modified_at: entry.modified_at,
-                                  media_type: entry.media_type,
-                                })}
-                                alt={entry.name}
-                                draggable={false}
-                                loading="lazy"
-                                decoding="async"
-                                className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
-                              />
+                              {isVideo ? (
+                                <video
+                                  src={contentUrl(entry.volume, entry.path, false, {
+                                    name: entry.name,
+                                    kind: entry.kind,
+                                    size: entry.size,
+                                    modified_at: entry.modified_at,
+                                    media_type: entry.media_type,
+                                  })}
+                                  muted
+                                  playsInline
+                                  preload="metadata"
+                                  draggable={false}
+                                  className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
+                                />
+                              ) : (
+                                <img
+                                  src={thumbnailUrl(entry.volume, entry.path, {
+                                    name: entry.name,
+                                    size: entry.size,
+                                    modified_at: entry.modified_at,
+                                    media_type: entry.media_type,
+                                  })}
+                                  alt={entry.name}
+                                  draggable={false}
+                                  loading="lazy"
+                                  decoding="async"
+                                  className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
+                                />
+                              )}
                               <div className="truncate px-2 py-1 text-xs text-zinc-300">
                                 {entry.name}
                               </div>
@@ -1220,9 +1491,19 @@ export default function App() {
                   )}
                 </div>
 
-                {focused && checkedCount <= 1 && (
+                {(checkedCount > 0 || focused) && (
                   <div className="space-y-2 border-t border-zinc-800 pt-3">
-                    <h3 className="text-sm font-semibold">名前変更・移動（1件）</h3>
+                    <h3 className="text-sm font-semibold">
+                      {checkedCount > 1
+                        ? `一括移動（${checkedCount}件）`
+                        : "名前変更・移動（1件）"}
+                    </h3>
+                    {checkedCount > 1 && (
+                      <p className="text-xs leading-relaxed text-zinc-500">
+                        移動先フォルダを指定すると、各ファイルは元の名前のままその中へ移動します。
+                        Inputs ↔ Outputs の Volume 間移動にも対応しています。
+                      </p>
+                    )}
                     <Select
                       selectedKey={destVolume}
                       onSelectionChange={(key) => setDestVolume(String(key) as VolumeId)}
@@ -1247,8 +1528,17 @@ export default function App() {
                       </Popover>
                     </Select>
                     <TextField value={destPath} onChange={setDestPath}>
-                      <Label className="mb-1 block text-xs text-zinc-400">移動先パス</Label>
-                      <Input className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm" />
+                      <Label className="mb-1 block text-xs text-zinc-400">
+                        {checkedCount > 1 ? "移動先フォルダ" : "移動先パス"}
+                      </Label>
+                      <Input
+                        className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
+                        placeholder={
+                          checkedCount > 1
+                            ? "例: archive または video/done（空 = Volume 直下）"
+                            : "例: folder/new-name.png"
+                        }
+                      />
                     </TextField>
                     <Checkbox
                       isSelected={moveOverwrite}
@@ -1266,11 +1556,49 @@ export default function App() {
                         onPress={() => void handleMove()}
                         isDisabled={busy}
                       >
-                        名前変更・移動を実行
+                        {checkedCount > 1
+                          ? `${checkedCount}件を移動`
+                          : "名前変更・移動を実行"}
                       </Button>
                     </div>
                   </div>
                 )}
+
+                <div className="space-y-2 border-t border-zinc-800 pt-3">
+                  <h3 className="text-sm font-semibold">空フォルダを作成</h3>
+                  <p className="text-xs leading-relaxed text-zinc-500">
+                    現在のフォルダ
+                    {path ? (
+                      <>
+                        （<span className="text-zinc-400">{path}</span>）
+                      </>
+                    ) : (
+                      "（Volume 直下）"
+                    )}
+                    に作成します。ネストする場合は <code className="text-zinc-400">a/b</code>{" "}
+                    のように入力できます。
+                  </p>
+                  <TextField value={newFolderName} onChange={setNewFolderName}>
+                    <Label className="mb-1 block text-xs text-zinc-400">フォルダ名</Label>
+                    <Input
+                      className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
+                      placeholder="例: archive または shots/take-01"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void handleCreateFolder();
+                        }
+                      }}
+                    />
+                  </TextField>
+                  <Button
+                    className="rounded-md bg-violet-700 px-3 py-1.5 text-sm text-white hover:bg-violet-600 disabled:opacity-50"
+                    onPress={() => void handleCreateFolder()}
+                    isDisabled={busy || !newFolderName.trim()}
+                  >
+                    フォルダを作成
+                  </Button>
+                </div>
 
                 <div className="space-y-2 border-t border-zinc-800 pt-3">
                   <h3 className="text-sm font-semibold">ローカルファイルを追加</h3>

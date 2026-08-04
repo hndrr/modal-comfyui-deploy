@@ -50,7 +50,7 @@ export class AssetManager {
       volume,
       path,
       search: options.search ?? "",
-      sort: options.sort ?? "name_asc",
+      sort: options.sort ?? "modified_desc",
       page: options.page ?? 1,
       page_size: options.pageSize ?? 100,
       refresh: Boolean(options.refresh),
@@ -139,6 +139,20 @@ export class AssetManager {
     );
   }
 
+  async mkdir(
+    volume: string,
+    remotePath: string,
+  ): Promise<{ message: string; path: string; paths: string[] }> {
+    validateVolume(volume);
+    const path = normalizeVolumePath(remotePath, { allowRoot: false });
+    return this.runWithLock(() =>
+      this.bridge.call("mkdir", {
+        volume,
+        path,
+      }),
+    );
+  }
+
   async delete(
     volume: string,
     remotePath: string,
@@ -196,6 +210,12 @@ export class AssetManager {
   }
 }
 
+function extensionOf(name: string): string {
+  const idx = name.lastIndexOf(".");
+  if (idx <= 0 || idx === name.length - 1) return "";
+  return name.slice(idx).toLowerCase();
+}
+
 export function sortEntries(entries: AssetEntry[], sortMode: SortMode): AssetEntry[] {
   const reverse = sortMode.endsWith("_desc");
   const sorted = [...entries].sort((a, b) => {
@@ -204,6 +224,13 @@ export function sortEntries(entries: AssetEntry[], sortMode: SortMode): AssetEnt
       cmp = a.modified_at.localeCompare(b.modified_at);
     } else if (sortMode.startsWith("size")) {
       cmp = a.size - b.size;
+    } else if (sortMode.startsWith("type")) {
+      const extA = a.is_directory ? "" : extensionOf(a.name);
+      const extB = b.is_directory ? "" : extensionOf(b.name);
+      cmp = extA.localeCompare(extB, undefined, { sensitivity: "base" });
+      if (cmp === 0) {
+        cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      }
     } else {
       cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     }

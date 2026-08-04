@@ -43,6 +43,8 @@ SORT_CHOICES = {
     "modified_asc",
     "size_desc",
     "size_asc",
+    "type_asc",
+    "type_desc",
 }
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 200
@@ -90,7 +92,7 @@ def _breadcrumb(path: str) -> list[dict[str, str]]:
 
 def _sort_entries(entries: list[AssetEntry], sort_mode: str) -> list[AssetEntry]:
     if sort_mode not in SORT_CHOICES:
-        sort_mode = "name_asc"
+        sort_mode = "modified_desc"
     reverse = sort_mode.endswith("_desc")
 
     def sort_key(item: AssetEntry):
@@ -98,6 +100,12 @@ def _sort_entries(entries: list[AssetEntry], sort_mode: str) -> list[AssetEntry]
             return item.modified_at
         if sort_mode.startswith("size"):
             return item.size
+        if sort_mode.startswith("type"):
+            # Extension first (e.g. .mp4 / .png), then name for stable groups.
+            suffix = PurePosixPath(item.name).suffix.casefold()
+            if item.is_directory:
+                suffix = ""
+            return (suffix, item.name.casefold())
         return item.name.casefold()
 
     sorted_entries = sorted(entries, key=sort_key, reverse=reverse)
@@ -183,7 +191,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             query = str(params.get("search", "")).strip().casefold()
             if query:
                 entries = [e for e in entries if query in e.name.casefold()]
-            entries = _sort_entries(entries, str(params.get("sort", "name_asc")))
+            entries = _sort_entries(entries, str(params.get("sort", "modified_desc")))
 
             page_size = min(
                 max(int(params.get("page_size") or DEFAULT_PAGE_SIZE), 1),
@@ -245,6 +253,18 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             result = {
                 "message": f"移動完了: {params['destination_volume']}:{moved}",
                 "paths": [moved],
+            }
+        elif method == "mkdir":
+            with LOCK:
+                created = MANAGER.create_directory(
+                    params["volume"],
+                    params["path"],
+                )
+            _invalidate_list_cache(params["volume"])
+            result = {
+                "message": f"フォルダ作成: {params['volume']}:{created}",
+                "path": created,
+                "paths": [created],
             }
         elif method == "delete":
             with LOCK:

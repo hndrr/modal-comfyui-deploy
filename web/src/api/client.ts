@@ -119,6 +119,19 @@ export async function moveAsset(params: {
   return response.json();
 }
 
+export async function createDirectory(params: {
+  volume: string;
+  path: string;
+}): Promise<{ message: string; path: string; paths: string[] }> {
+  const response = await fetch("/api/assets/mkdir", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
+}
+
 export async function deleteAsset(params: {
   volume: string;
   path: string;
