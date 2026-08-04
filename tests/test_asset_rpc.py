@@ -57,6 +57,31 @@ class MaterializeConcurrencyTests(unittest.TestCase):
             self.assertEqual(cached.read_bytes(), b"content")
             self.assertTrue(all(result["path"] == cached.as_posix() for result in results))
 
+    def test_stream_lease_survives_cache_file_eviction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "cached.mp4"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            source.write_bytes(b"video-bytes")
+
+            with mock.patch.object(asset_rpc, "WORKSPACE", workspace):
+                leased = asset_rpc._lease_materialized(
+                    {
+                        "path": source.as_posix(),
+                        "name": "example.mp4",
+                        "media_type": "video/mp4",
+                        "size": source.stat().st_size,
+                    }
+                )
+
+            lease_path = Path(leased["path"])
+            self.assertNotEqual(lease_path, source)
+            self.assertTrue(leased["cleanup"])
+            source.unlink()
+            self.assertEqual(lease_path.read_bytes(), b"video-bytes")
+            lease_path.unlink()
+
 
 class QueueShutdownTests(unittest.TestCase):
     def test_waits_for_in_progress_work_after_queue_becomes_empty(self) -> None:

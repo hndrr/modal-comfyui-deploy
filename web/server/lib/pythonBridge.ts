@@ -40,6 +40,9 @@ export type BridgeCallOptions = {
 
 export function defaultTimeoutFor(method: string): number {
   const methodDefault = DEFAULT_TIMEOUT_MS[method] ?? FALLBACK_TIMEOUT_MS;
+  // Startup readiness must fail quickly even when long asset operations use a
+  // larger process-wide timeout.
+  if (method === "health") return methodDefault;
   const envDefault = process.env.COMFY_ASSET_RPC_TIMEOUT_MS;
   if (envDefault && Number.isFinite(Number(envDefault))) {
     const n = Number(envDefault);
@@ -61,12 +64,17 @@ export class PythonAssetBridge {
   /** Bumps on each spawn so late replies from a killed process are ignored. */
   private generation = 0;
   private restarting = false;
+  private closing = false;
+  private closed = false;
 
   async call<T>(
     method: string,
     params: Record<string, unknown> = {},
     options: BridgeCallOptions = {},
   ): Promise<T> {
+    if (this.closed || (this.closing && method !== "shutdown")) {
+      throw new Error("Python asset bridge is closed");
+    }
     await this.ensureStarted();
     const id = this.nextId++;
     const timeoutMs = Math.max(
@@ -105,16 +113,26 @@ export class PythonAssetBridge {
   }
 
   async close(): Promise<void> {
-    if (!this.child) return;
+    if (this.closed || this.closing) return;
+    this.closing = true;
     try {
-      await this.call("shutdown", {}, { timeoutMs: DEFAULT_TIMEOUT_MS.shutdown });
-    } catch {
-      // ignore — force kill below
+      if (this.child) {
+        try {
+          await this.call("shutdown", {}, {
+            timeoutMs: DEFAULT_TIMEOUT_MS.shutdown,
+          });
+        } catch {
+          // ignore — force kill below
+        }
+      }
+    } finally {
+      this.closed = true;
+      this.forceKillWorker(
+        new Error("Python asset worker closed"),
+        { restart: false },
+      );
+      this.closing = false;
     }
-    this.forceKillWorker(
-      new Error("Python asset worker closed"),
-      { restart: false },
-    );
   }
 
   private finishPending(
@@ -143,14 +161,18 @@ export class PythonAssetBridge {
     // Reject this call first, then recycle the worker so a stuck Modal op
     // cannot block every subsequent HTTP request forever.
     this.finishPending(id, { error });
-    console.error(`[asset_rpc] ${error.message}; restarting worker`);
-    this.forceKillWorker(error, { restart: true });
+    const restart = !this.closing && !this.closed;
+    console.error(
+      `[asset_rpc] ${error.message}; ${restart ? "restarting" : "stopping"} worker`,
+    );
+    this.forceKillWorker(error, { restart });
   }
 
   private forceKillWorker(
     error: Error,
     options: { restart: boolean },
   ): void {
+    const shouldRestart = options.restart && !this.closing && !this.closed;
     if (this.restarting) {
       this.failAll(error);
       return;
@@ -187,7 +209,7 @@ export class PythonAssetBridge {
       this.restarting = false;
     }
     // Next call() will spawn a fresh worker via ensureStarted().
-    if (options.restart) {
+    if (shouldRestart) {
       // Do not await here — callers already got their reject.
       void this.ensureStarted().catch((err) => {
         console.error(
@@ -200,6 +222,9 @@ export class PythonAssetBridge {
 
   private ensureStarted(): Promise<void> {
     if (this.child && !this.child.killed) return Promise.resolve();
+    if (this.closed || this.closing) {
+      return Promise.reject(new Error("Python asset bridge is closed"));
+    }
     if (this.starting) return this.starting;
 
     this.starting = new Promise<void>((resolve, reject) => {

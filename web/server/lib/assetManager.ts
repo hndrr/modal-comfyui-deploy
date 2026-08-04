@@ -17,7 +17,6 @@ export type AssetManagerOptions = {
  */
 export class AssetManager {
   private readonly bridge: PythonAssetBridge;
-  private readonly materializeInflight = new Map<string, Promise<MaterializedFile>>();
   private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(options: AssetManagerOptions = {}) {
@@ -67,11 +66,6 @@ export class AssetManager {
   ): Promise<MaterializedFile> {
     validateVolume(volume);
     const normalized = normalizeVolumePath(remotePath, { allowRoot: false });
-    const mediaHint = options.entry?.media_type ?? (options.imageOnly ? "image" : "bin");
-    const key = `${volume}:${normalized}:${options.imageOnly ? `thumb:${mediaHint}` : "bin"}`;
-    const existing = this.materializeInflight.get(key);
-    if (existing) return existing;
-
     const params: Record<string, unknown> = {
       volume,
       path: normalized,
@@ -87,24 +81,21 @@ export class AssetManager {
       params.media_type = entry.media_type;
     }
 
-    const request = this.bridge
+    return this.bridge
       .call<{
         path: string;
         name: string;
         media_type: string;
         size: number;
+        cleanup?: boolean;
       }>("materialize", params)
       .then((result) => ({
         localPath: result.path,
         name: result.name,
         mediaType: result.media_type,
         size: result.size,
-      }))
-      .finally(() => {
-        this.materializeInflight.delete(key);
-      });
-    this.materializeInflight.set(key, request);
-    return request;
+        cleanupAfterStream: Boolean(result.cleanup),
+      }));
   }
 
   async upload(

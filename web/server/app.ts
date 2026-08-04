@@ -16,6 +16,7 @@ import {
   OUTPUT_VOLUME,
   SORT_CHOICES,
   VOLUME_LABELS,
+  type MaterializedFile,
   type SortMode,
 } from "./lib/types.js";
 
@@ -220,14 +221,106 @@ async function parseAndStageUpload(
   };
 }
 
-/** Stream a local file without buffering the whole asset in memory. */
-function streamFileResponse(
+type ByteRange = { start: number; end: number };
+
+function parseByteRange(
+  value: string | undefined,
+  size: number,
+): ByteRange | null | "invalid" {
+  if (!value) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(value.trim());
+  if (!match || (!match[1] && !match[2]) || size <= 0) return "invalid";
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return "invalid";
+    }
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start < 0 ||
+    start >= size ||
+    requestedEnd < start
+  ) {
+    return "invalid";
+  }
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+async function removeStreamLease(localPath: string): Promise<void> {
+  try {
+    await fs.promises.rm(localPath, { force: true });
+  } catch (error) {
+    console.error(`[asset_stream] failed to remove ${localPath}:`, error);
+  }
+}
+
+async function cleanupMaterializedFile(file: MaterializedFile): Promise<void> {
+  if (file.cleanupAfterStream) await removeStreamLease(file.localPath);
+}
+
+/** Stream a local file without buffering it, with single-range seek support. */
+async function streamFileResponse(
   localPath: string,
   headers: Record<string, string>,
-): Response {
-  const nodeStream = fs.createReadStream(localPath);
-  const webStream = Readable.toWeb(nodeStream) as ReadableStream;
-  return new Response(webStream, { headers });
+  options: { range?: string; cleanup?: boolean } = {},
+): Promise<Response> {
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(localPath);
+    if (!stat.isFile()) throw new Error(`Not a file: ${localPath}`);
+  } catch (error) {
+    if (options.cleanup) await removeStreamLease(localPath);
+    throw error;
+  }
+
+  const range = parseByteRange(options.range, stat.size);
+  if (range === "invalid") {
+    if (options.cleanup) await removeStreamLease(localPath);
+    return new Response(null, {
+      status: 416,
+      headers: {
+        ...headers,
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes */${stat.size}`,
+        "Content-Length": "0",
+      },
+    });
+  }
+
+  const start = range?.start ?? 0;
+  const end = range?.end ?? Math.max(0, stat.size - 1);
+  const nodeStream = fs.createReadStream(
+    localPath,
+    range ? { start, end } : undefined,
+  );
+  let cleanupStarted = false;
+  const cleanup = () => {
+    if (!options.cleanup || cleanupStarted) return;
+    cleanupStarted = true;
+    void removeStreamLease(localPath);
+  };
+  nodeStream.once("error", (error) => {
+    console.error(`[asset_stream] failed to stream ${localPath}:`, error);
+    cleanup();
+  });
+  nodeStream.once("close", cleanup);
+  const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+  return new Response(webStream, {
+    status: range ? 206 : 200,
+    headers: {
+      ...headers,
+      "Accept-Ranges": "bytes",
+      "Content-Length": String(range ? end - start + 1 : stat.size),
+      ...(range ? { "Content-Range": `bytes ${start}-${end}/${stat.size}` } : {}),
+    },
+  });
 }
 
 export function createApp(deps: AppDeps = {}) {
@@ -329,14 +422,21 @@ export function createApp(deps: AppDeps = {}) {
             }
           : null,
       });
-      return streamFileResponse(file.localPath, {
-        "Content-Type": file.mediaType,
-        ...(download
-          ? {
-              "Content-Disposition": attachmentContentDisposition(file.name),
-            }
-          : {}),
-      });
+      return await streamFileResponse(
+        file.localPath,
+        {
+          "Content-Type": file.mediaType,
+          ...(download
+            ? {
+                "Content-Disposition": attachmentContentDisposition(file.name),
+              }
+            : {}),
+        },
+        {
+          range: c.req.header("range"),
+          cleanup: file.cleanupAfterStream,
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const status: ContentfulStatusCode = message.includes("does not exist") ? 404 : 400;
@@ -381,6 +481,7 @@ export function createApp(deps: AppDeps = {}) {
       const etag = createAssetEtag(etagSource);
       const inm = c.req.header("if-none-match");
       if (inm && inm === etag) {
+        await cleanupMaterializedFile(file);
         return new Response(null, {
           status: 304,
           headers: {
@@ -389,11 +490,18 @@ export function createApp(deps: AppDeps = {}) {
           },
         });
       }
-      return streamFileResponse(file.localPath, {
-        "Content-Type": file.mediaType || "image/jpeg",
-        "Cache-Control": "private, max-age=604800, immutable",
-        ETag: etag,
-      });
+      return await streamFileResponse(
+        file.localPath,
+        {
+          "Content-Type": file.mediaType || "image/jpeg",
+          "Cache-Control": "private, max-age=604800, immutable",
+          ETag: etag,
+        },
+        {
+          range: c.req.header("range"),
+          cleanup: file.cleanupAfterStream,
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const status: ContentfulStatusCode = message.includes("does not exist") ? 404 : 400;
