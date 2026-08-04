@@ -129,6 +129,12 @@ COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
 
 `COMFYUI_REQUIRES_PROXY_AUTH=off` が既定です。`on` にすると通常のブラウザアクセスでは開けないため、ヘッダーを付与できるクライアントやプロキシ経由で利用します。
 
+### Cloudflare Access でログイン画面を付ける
+
+ブラウザからそのまま使いたい場合は、Cloudflare Access を ComfyUI の手前に置き、Cloudflare Worker に `Modal-Key` / `Modal-Secret` を付与させる構成が使えます。ComfyUI 本体にも Modal にもログイン機能を足さずに、メールのワンタイム PIN や Google ログインで利用者を制限できます。
+
+構成の説明とセットアップ手順は [docs/cloudflare-access.md](docs/cloudflare-access.md) にまとめています。
+
 ### アイドル時のscale-to-zero
 
 ComfyUI用Functionは `min_containers=0` のため、アクティブな入力がなければGPUコンテナをゼロ台まで縮退できます。`COMFYUI_SCALEDOWN_WINDOW` は、最後の入力が終了してから縮退するまでの最大アイドル時間です。短くするとアイドル中のコンピュート消費を抑えやすくなりますが、次回アクセス時のコールドスタートが増えます。
@@ -437,3 +443,10 @@ uv run python move_volume_file.py \
 - `rename_volume.py`: Volume コピー補助
 - `move_volume_file.py`: Volume 内ファイル移動補助
 - `main.py`: 最小のエントリーポイント
+- `worker/`: Cloudflare Access 用のリバースプロキシ Worker（[docs/cloudflare-access.md](docs/cloudflare-access.md)）
+
+## ドキュメント
+
+- [docs/cloudflare-access.md](docs/cloudflare-access.md): Cloudflare Access + Worker で ComfyUI にログイン画面を付ける
+- [docs/modal-idle-scale-to-zero.md](docs/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
+- [docs/modal-power-control.md](docs/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
