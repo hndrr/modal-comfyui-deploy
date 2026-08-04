@@ -52,7 +52,7 @@ export class AssetManager {
       search: options.search ?? "",
       sort: options.sort ?? "name_asc",
       page: options.page ?? 1,
-      page_size: options.pageSize ?? 48,
+      page_size: options.pageSize ?? 100,
       refresh: Boolean(options.refresh),
     });
   }

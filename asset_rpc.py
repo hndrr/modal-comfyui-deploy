@@ -44,7 +44,7 @@ SORT_CHOICES = {
     "size_desc",
     "size_asc",
 }
-DEFAULT_PAGE_SIZE = 48
+DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 200
 LIST_CACHE_TTL_SEC = 60.0
 # Modal Volume delete is rate-limited / flaky under high concurrency.
