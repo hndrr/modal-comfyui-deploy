@@ -337,6 +337,10 @@ npm run dev
 PORT=7861 npm start
 ```
 
+管理画面はローカル利用専用です。`HOST` は `127.0.0.1`、`localhost`、`::1` などのloopbackアドレスだけを受け付けます。`0.0.0.0`、LANアドレス、公開アドレスを指定するとサーバーは起動を拒否します。リバースプロキシやトンネルを使った外部公開もサポートしません。
+
+アップロード上限は `ASSET_UPLOAD_MAX_FILE_BYTES`（1ファイル、既定10 GiB）と `ASSET_UPLOAD_MAX_TOTAL_BYTES`（multipartリクエスト全体、既定20 GiB）で変更できます。どちらも正のバイト数で指定します。
+
 構成:
 
 - **GUI**: React + React Aria Components + Tailwind

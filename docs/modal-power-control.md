@@ -65,6 +65,7 @@ Wake / Queue
 - 生成中・待機中キューがある場合のSleep拒否
 - 同一オリジンで開かれた複数タブへの一括Sleep通知
 - Sleep中にQueueを実行した場合の自動Wake
+- Queue投入とSleep予約をサーバー側で原子的に直列化
 - Wake失敗時のエラー表示とRetry
 - ComfyUI設定画面からの自動Sleep有効化・待機時間変更
 
@@ -147,16 +148,17 @@ awake-idle <── queue becomes empty ── awake-busy
 1. WebSocketの `status`、実行完了、失敗、中断イベントからキュー状態を追跡する。
 2. runningとpendingが両方ゼロになったら60秒タイマーを開始する。
 3. タイマー中に新しい実行が始まった場合はタイマーをキャンセルする。
-4. タイマー満了時に `GET /queue` を呼び、サーバー全体のrunningとpendingが空であることを再確認する。
-5. キューが存在する場合はSleepせず、次のステータス更新を待つ。
-6. キューが空なら、同一オリジンの他タブへSleepを通知する。
-7. 各タブが自身のWebSocketを再接続対象から外してからcloseする。
-8. Modalがアクティブな入力なしと判定すると、`scaledown_window` に従ってGPUコンテナを停止する。
+4. タイマー満了時に `POST /modal/power/sleep/reserve` を呼ぶ。
+5. サーバーは共有lock内でrunning/pendingが空かを確認し、空の場合だけSleep予約を作成する。同じlockを通るQueue投入は、予約中には受理しない。
+6. キューが存在する場合は予約を作成せず、次のステータス更新を待つ。
+7. 予約に成功した場合だけ、同一オリジンの他タブへSleepを通知する。
+8. 各タブが自身のWebSocketを再接続対象から外してからcloseする。
+9. Modalがアクティブな入力なしと判定すると、`scaledown_window` に従ってGPUコンテナを停止する。
 
 ### 手動Sleep
 
-1. `Sleep GPU` 操作時に `GET /queue` で最新状態を取得する。
-2. runningまたはpendingが存在する場合はSleepを拒否する。
+1. `Sleep GPU` 操作時に `POST /modal/power/sleep/reserve` を呼ぶ。
+2. サーバーはQueue投入と共通のlock内でrunning/pendingを再確認し、キューが存在する場合はSleepを拒否する。
 3. 拒否理由としてrunning/pending件数を表示し、生成やキューは変更しない。
 4. キューが空なら全タブへSleepを通知し、WebSocketを閉じる。
 5. `/interrupt`、キュー削除、コンテナ強制終了は行わない。
@@ -175,7 +177,7 @@ Wakeは操作したタブだけで行う。他のタブはSleep状態を維持�
 ### Sleep中のQueue実行
 
 1. ComfyUIのQueue処理を互換ラッパーで受ける。
-2. 現在が `sleeping` ならWakeを開始する。
+2. 現在が `sleeping` なら `POST /modal/power/sleep/release` でSleep予約を解除してからWakeを開始する。
 3. WebSocket接続が成功するまで元のQueue送信を保留する。
 4. 接続成功後、元の引数と戻り値を維持してQueueを1回だけ送信する。
 5. Wakeに失敗した場合はQueueを送信せず、ユーザーへエラーを表示する。
@@ -189,16 +191,28 @@ Wakeは操作したタブだけで行う。他のタブはSleep状態を維持�
 ```text
 modal_power_control/
   __init__.py
+  server.py
   js/
     power_control.js
     power_state.js
 ```
 
-- `__init__.py` は `WEB_DIRECTORY = "./js"` を公開する。
+- `__init__.py` は `WEB_DIRECTORY = "./js"` を公開し、`server.py` のルートとmiddlewareを登録する。
+- `server.py` はQueue投入とSleep予約で共有する `asyncio.Lock`、予約状態、`reserve` / `release` APIを提供する。
 - `power_state.js` は状態機械とタイマーをDOMやComfyUI APIから分離して実装する。
 - `power_control.js` はComfyUI API、UI、WebSocket、BroadcastChannelとの接続を担当する。
 - ComfyUIの計算ノードは追加しない。
-- 新しい公開HTTPエンドポイントは追加せず、キュー確認には既存の `GET /queue` を使う。
+
+### QueueとSleepの直列化
+
+クライアント側の `GET /queue` とWebSocket切断だけでは、確認直後に別タブやAPIクライアントが `/prompt` へ投入する競合を防げない。v1では次を同じサーバー側lock内で行う。
+
+1. `/prompt` middlewareはlockを取得し、Sleep予約がなければ既存のQueue処理へ進む。予約中は `409 modal_power_sleeping` を返し、promptを受理しない。
+2. `POST /modal/power/sleep/reserve` はlockを取得し、running/pendingを再確認する。
+3. キューが空の場合だけ予約状態を `sleeping` に変更し、予約IDを返す。空でない場合は `409 queue_not_empty` を返す。
+4. `POST /modal/power/sleep/release` は予約IDを検証して予約を解除する。Wake後のQueueラッパーは解除完了後に元のpromptを1回だけ再送する。
+
+このlockを通らないQueue投入経路が検出された場合はSleep機能を有効にしない。これにより、キュー確認とSleep遷移の間に別クライアントのpromptが受理される時間差を残さない。
 
 ### Modalイメージへの組み込み
 
@@ -221,6 +235,8 @@ modal_power_control/
 ## 安全条件
 
 - runningまたはpendingキューが1件でもあればSleepしない。
+- Queue投入とSleep予約は同じサーバー側lockで直列化する。
+- Sleep予約中のQueue投入は受理せず、Wakeと予約解除後にクライアントが明示的に再送する。
 - Sleep機能から `/interrupt` を呼ばない。
 - Sleep機能からキューや履歴を削除しない。
 - Sleep機能からModal Appをstopまたはdeleteしない。
@@ -241,6 +257,9 @@ Node標準のtest runnerとfake timerを使い、外部JavaScriptテスト依存
 - タイマー中に実行が始まるとSleepがキャンセルされる
 - 設定変更時にタイマーが再計算される
 - Sleep直前の再確認でキューが見つかった場合は接続を閉じない
+- Sleep予約と同時に到着したQueue投入が、lock取得順に直列化される
+- Sleep予約中の `/prompt` が `409 modal_power_sleeping` になる
+- 予約解除後のQueue操作が1回だけ受理される
 - 生成中の手動Sleepを拒否する
 - 複数タブへのSleep通知で各タブのsocketが閉じる
 - Wakeは操作タブだけで実行される
@@ -255,6 +274,9 @@ Node標準のtest runnerとfake timerを使い、外部JavaScriptテスト依存
 - 再同期で管理ファイルが更新される
 - 他のcustom nodeやユーザーファイルが維持される
 - custom nodeの `WEB_DIRECTORY` が正しく公開される
+- Queue投入とSleep予約が同じlockを利用する
+- running/pendingが存在する場合にSleep予約APIが `409` を返す
+- 予約IDが一致しない解除要求を拒否する
 - PythonコンパイルチェックとRuffが成功する
 
 ### Modal上での手動検証
@@ -293,7 +315,7 @@ custom nodeがWebSocket以外のHTTPリクエストを定期送信すると、Sl
 
 ### 複数クライアント
 
-BroadcastChannelは同じブラウザ・同じオリジンのタブ間でのみ機能する。別ブラウザ、別端末、APIクライアントがWebSocketを維持している場合、その接続は別途閉じる必要がある。
+BroadcastChannelは同じブラウザ・同じオリジンのタブ間でのみ機能する。別ブラウザ、別端末、APIクライアントのWebSocketは自動では閉じられないが、サーバー側Sleep予約後はそれらの `/prompt` も受理されない。既存接続が残っている場合はModalのscale-to-zeroを妨げるため、予約APIはアクティブな接続数も確認し、予約元以外の接続が残る場合はSleepを拒否する。
 
 ## 厳密なCPU/GPU分離案
 
@@ -363,6 +385,7 @@ Volumeはコンテナが停止しても永続化され、モデル、workflow、
 - タブを開いたまま手動Sleepできる
 - キュー完了から60秒後に自動Sleepできる
 - 生成中・待機中キューがある場合はSleepしない
+- Queue投入とSleep遷移がサーバー側で原子的に直列化される
 - Sleep後にブラウザのWebSocketが再接続しない
 - 複数タブのWebSocketを一括で閉じられる
 - Modal DashboardでGPUコンテナがゼロ台になる

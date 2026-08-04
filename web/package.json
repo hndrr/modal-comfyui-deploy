@@ -8,12 +8,13 @@
     "dev:client": "vite",
     "dev:server": "tsx watch server/index.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "start": "NODE_ENV=production node server-dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
+    "busboy": "^1.6.0",
     "hono": "^4.7.7",
     "react": "^19.0.0",
     "react-aria-components": "^1.8.0",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.4",
+    "@types/busboy": "^1.5.4",
     "@types/node": "^22.14.1",
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
