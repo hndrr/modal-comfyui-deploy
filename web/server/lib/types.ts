@@ -105,4 +105,8 @@ export interface MaterializedFile {
   name: string;
   mediaType: string;
   size: number;
+  /** Server-derived cache identity for conditional responses. */
+  etag?: string;
+  /** Request-owned file that must be removed after streaming or early return. */
+  cleanupAfterStream?: boolean;
 }
