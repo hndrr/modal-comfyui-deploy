@@ -70,9 +70,18 @@ FLASH_ATTN_WHEEL_URL = "https://github.com/mjun0812/flash-attention-prebuild-whe
 SAGEATTENTION_REF = "abi3_stable"
 COMFYUI_CLI_ARGS_ENV = "COMFYUI_CLI_ARGS"
 COMFYUI_FORCE_BUILD_ENV = "COMFYUI_FORCE_BUILD"
+COMFYUI_FUNCTION_TIMEOUT_ENV = "COMFYUI_FUNCTION_TIMEOUT"
 COMFYUI_GPU_PROFILE_ENV = "COMFYUI_GPU_PROFILE"
 COMFYUI_REQUIRES_PROXY_AUTH_ENV = "COMFYUI_REQUIRES_PROXY_AUTH"
 COMFYUI_SAGE_ATTENTION_ENV = "COMFYUI_SAGE_ATTENTION"
+COMFYUI_SCALEDOWN_WINDOW_ENV = "COMFYUI_SCALEDOWN_WINDOW"
+DEFAULT_FUNCTION_TIMEOUT: Final = 1800
+DEFAULT_SCALEDOWN_WINDOW: Final = 30
+MAX_FUNCTION_TIMEOUT: Final = 86400
+MAX_SCALEDOWN_WINDOW: Final = 1200
+MIN_FUNCTION_TIMEOUT: Final = 1
+MIN_SCALEDOWN_WINDOW: Final = 2
+MIN_CONTAINERS: Final = 0
 PREBUILT_WHEEL_DIR = "/opt/prebuilt-wheels"
 SAGE_ATTENTION_FLAG = "--use-sage-attention"
 DOTENV_PATH = Path(__file__).with_name(".env")
@@ -82,8 +91,10 @@ load_dotenv(DOTENV_PATH, override=False)
 GPU_PROFILE_NAME: str
 GPU_PROFILE: dict[str, str | bool]
 COMFYUI_FORCE_BUILD: bool
+FUNCTION_TIMEOUT: int
 REQUIRES_PROXY_AUTH: bool
 SAGE_ATTENTION_ENABLED: bool
+SCALEDOWN_WINDOW: int
 
 GPU_PROFILES: Final = {
     "rtx-pro-6000": {
@@ -99,6 +110,33 @@ GPU_PROFILES: Final = {
         "cuda_arch_list": "8.0",
     },
 }
+
+
+def _resolve_int_env(
+    env_name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return default
+
+    try:
+        value = int(raw.strip())
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid {env_name}: {raw!r}. "
+            f"Expected an integer between {minimum} and {maximum}."
+        ) from exc
+
+    if not minimum <= value <= maximum:
+        raise ValueError(
+            f"Invalid {env_name}: {raw!r}. "
+            f"Expected an integer between {minimum} and {maximum}."
+        )
+
+    return value
 
 
 def _resolve_gpu_profile() -> tuple[str, dict[str, str | bool]]:
@@ -174,8 +212,20 @@ def _build_launch_command(extra_cli_args: str) -> list[str]:
 
 GPU_PROFILE_NAME, GPU_PROFILE = _resolve_gpu_profile()
 COMFYUI_FORCE_BUILD = _resolve_comfyui_force_build()
+FUNCTION_TIMEOUT = _resolve_int_env(
+    COMFYUI_FUNCTION_TIMEOUT_ENV,
+    DEFAULT_FUNCTION_TIMEOUT,
+    MIN_FUNCTION_TIMEOUT,
+    MAX_FUNCTION_TIMEOUT,
+)
 REQUIRES_PROXY_AUTH = _resolve_requires_proxy_auth()
 SAGE_ATTENTION_ENABLED = _resolve_sage_attention_enabled()
+SCALEDOWN_WINDOW = _resolve_int_env(
+    COMFYUI_SCALEDOWN_WINDOW_ENV,
+    DEFAULT_SCALEDOWN_WINDOW,
+    MIN_SCALEDOWN_WINDOW,
+    MAX_SCALEDOWN_WINDOW,
+)
 CUDA_ARCH_LIST = str(GPU_PROFILE["cuda_arch_list"])
 SAGE_ATTENTION_BUILD_PREFIX = (
     "export LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH:-}; "
@@ -280,9 +330,10 @@ app = modal.App(name="comfyui", image=image)
 
 
 @app.function(
+    min_containers=MIN_CONTAINERS,
     max_containers=1,
-    scaledown_window=30,
-    timeout=1800,
+    scaledown_window=SCALEDOWN_WINDOW,
+    timeout=FUNCTION_TIMEOUT,
     gpu=str(GPU_PROFILE["modal_gpu"]),
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
@@ -306,7 +357,10 @@ def ui():
         f"{COMFYUI_SAGE_ATTENTION_ENV}={'on' if SAGE_ATTENTION_ENABLED else 'off'}, "
         f"{COMFYUI_FORCE_BUILD_ENV}={'on' if COMFYUI_FORCE_BUILD else 'off'}, "
         f"{COMFYUI_REQUIRES_PROXY_AUTH_ENV}="
-        f"{'on' if REQUIRES_PROXY_AUTH else 'off'}"
+        f"{'on' if REQUIRES_PROXY_AUTH else 'off'}, "
+        f"min_containers={MIN_CONTAINERS}, "
+        f"{COMFYUI_SCALEDOWN_WINDOW_ENV}={SCALEDOWN_WINDOW}, "
+        f"{COMFYUI_FUNCTION_TIMEOUT_ENV}={FUNCTION_TIMEOUT}"
     )
 
     CUSTOM_NODE_VOLUME_MOUNT.mkdir(parents=True, exist_ok=True)

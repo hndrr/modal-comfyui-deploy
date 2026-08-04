@@ -2,11 +2,12 @@
 
 Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
 
-今の主要機能は次の 3 つです。
+今の主要機能は次の 4 つです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
 - `preserve_model.py`: Hugging Face の単一ファイルを Modal Volume に保存する
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す
+- `web/`: ComfyUI のモデル・入力・出力を React + Hono 管理画面から操作する（`modal volume` CLI 経由）
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 
@@ -94,7 +95,10 @@ COMFYUI_GPU_PROFILE=h100 uv run modal serve comfyapp.py
 COMFYUI_GPU_PROFILE=rtx-pro-6000
 COMFYUI_SAGE_ATTENTION=on
 COMFYUI_REQUIRES_PROXY_AUTH=off
+COMFYUI_SCALEDOWN_WINDOW=30
+COMFYUI_FUNCTION_TIMEOUT=1800
 COMFYUI_CLI_ARGS=
+COMFYUI_FORCE_BUILD=on
 ```
 
 意味:
@@ -102,7 +106,10 @@ COMFYUI_CLI_ARGS=
 - `COMFYUI_GPU_PROFILE`: 使用する GPU プロファイル
 - `COMFYUI_SAGE_ATTENTION`: `on` または `off`
 - `COMFYUI_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`
+- `COMFYUI_SCALEDOWN_WINDOW`: 接続終了後にコンテナを縮退するまでの最大秒数（`2`〜`1200`、既定値 `30`）
+- `COMFYUI_FUNCTION_TIMEOUT`: 1入力または接続の最大実行秒数（`1`〜`86400`、既定値 `1800`）
 - `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
+- `COMFYUI_FORCE_BUILD`: ComfyUIのインストール層以降を再ビルドする場合は `on`
 
 `COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
 
@@ -121,6 +128,26 @@ COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
 ```
 
 `COMFYUI_REQUIRES_PROXY_AUTH=off` が既定です。`on` にすると通常のブラウザアクセスでは開けないため、ヘッダーを付与できるクライアントやプロキシ経由で利用します。
+
+### アイドル時のscale-to-zero
+
+ComfyUI用Functionは `min_containers=0` のため、アクティブな入力がなければGPUコンテナをゼロ台まで縮退できます。`COMFYUI_SCALEDOWN_WINDOW` は、最後の入力が終了してから縮退するまでの最大アイドル時間です。短くするとアイドル中のコンピュート消費を抑えやすくなりますが、次回アクセス時のコールドスタートが増えます。
+
+`COMFYUI_FUNCTION_TIMEOUT` はアイドル停止時間ではありません。生成処理を含む1入力やWebSocket接続を継続できる最大時間です。長時間の生成を行う場合は、想定する処理時間より長い値を指定してください。
+
+例として、接続終了から10秒で縮退対象にし、Function timeoutを1時間にする場合:
+
+```bash
+COMFYUI_SCALEDOWN_WINDOW=10 \
+COMFYUI_FUNCTION_TIMEOUT=3600 \
+uv run modal deploy comfyapp.py
+```
+
+これらはデプロイ時に決まる設定なので、変更後は再デプロイが必要です。不正な整数や許容範囲外の値を指定すると、イメージビルド前にエラーになります。
+
+ComfyUIはブラウザとの状態同期にWebSocketを使います。生成が終わっていてもComfyUIのタブやAPIクライアントが接続中だと、Modalではアクティブな入力として扱われ、scale-to-zeroしない可能性があります。確実に停止させる場合は、生成完了後にすべてのComfyUIタブとクライアントを閉じてください。再アクセス時は同じURLからコールドスタートします。
+
+GPUコンテナがゼロ台になった後も、モデル、入力、出力、workflowなどを保持するModal Volumeのストレージは維持されます。
 
 ### 追加される custom nodes
 
@@ -268,7 +295,83 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 
 ![Gradio](assets/2025-09-28-22-01-40.png)
 
-## 4. Volume を別名へコピーする
+## 4. ComfyUI 資産を管理する
+
+`web/` の React + Hono アプリが、次の Modal Volume をローカル管理画面から操作します。
+
+- `comfy-model`
+- `comfy-inputs`
+- `comfy-outputs`
+
+前提:
+
+- Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
+- Node.js 22+ 推奨
+
+初回ビルドと起動:
+
+```bash
+cd web
+npm install
+npm run build
+npm start
+```
+
+既定 URL:
+
+`http://127.0.0.1:7860`
+
+開発時（Vite が UI、Hono が API）:
+
+```bash
+cd web
+npm run dev
+```
+
+- UI: `http://127.0.0.1:5173`（`/api` は Hono `:7860` へ proxy）
+- API: `http://127.0.0.1:7860`
+
+ポート変更:
+
+```bash
+PORT=7861 npm start
+```
+
+管理画面はローカル利用専用です。`HOST` は `127.0.0.1`、`localhost`、`::1` などのloopbackアドレスだけを受け付けます。`0.0.0.0`、LANアドレス、公開アドレスを指定するとサーバーは起動を拒否します。リバースプロキシやトンネルを使った外部公開もサポートしません。
+
+アップロード上限は `ASSET_UPLOAD_MAX_FILE_BYTES`（1ファイル、既定10 GiB）と `ASSET_UPLOAD_MAX_TOTAL_BYTES`（multipartリクエスト全体、既定20 GiB）で変更できます。どちらも正のバイト数で指定します。
+
+構成:
+
+- **GUI**: React + React Aria Components + Tailwind
+- **API**: Hono（Node）
+- **Volume I/O**: 常駐 Python ワーカー（`asset_rpc.py` + `asset_manager.py` / Modal SDK）  
+  list はメタデータのみ。一覧はプロセス内キャッシュ。サムネ/本文は on-demand + ディスクキャッシュ。  
+  （`modal volume` CLI は使わない。CLI 毎回起動だと Gradio より遅くなるため）
+
+管理画面では次の操作ができます。
+
+- Volume タブとフォルダを切り替えて、名前・サイズ・更新日時を確認
+- **複数選択（チェック / Shift+クリック範囲選択）からの一括完全削除**（大量整理向け）
+- `comfy-inputs` / `comfy-outputs` の画像ギャラリー（遅延ロード）
+- 画像・動画・音声のプレビューとファイルのダウンロード
+- ローカルファイルの複数アップロード
+- 同一 Volume 内での名前変更・移動（1件）
+- `comfy-inputs` と `comfy-outputs` の間での移動
+- ファイル・フォルダの完全削除
+
+Hugging Face からのモデル取り込みは別途 `preserve_model_gui.py`（Gradio）を使います。
+
+Models へのアップロードと移動は、ComfyUI が認識するモデル種別ディレクトリ配下だけに制限されます。上書きは既定で無効です。
+
+> [!WARNING]
+> 削除はゴミ箱を経由しない完全削除です。確認ダイアログで「完全に削除する」を押した場合だけ実行されます。Volume ルート自体は削除できません。
+
+管理画面はローカル利用前提です。更新系操作はサーバー内で直列化されます。
+
+旧 Gradio の `asset_manager_gui.py` は廃止済みです（起動すると移行手順を表示して終了します）。
+
+## 5. Volume を別名へコピーする
 
 `rename_volume.py` は Modal Volume 間でデータをコピーするユーティリティです。実質的に Volume 名を移行したい時に使います。
 
@@ -288,7 +391,7 @@ uv run python rename_volume.py <コピー元> <コピー先> --yes
 - データコピーは `modal.App(name="volume-copier")` 経由で実行
 - コピー後、元 Volume の削除は自動では行わない
 
-## 5. Volume 内のファイルを移動する
+## 6. Volume 内のファイルを移動する
 
 `move_volume_file.py` は Modal Volume 内の単一ファイルまたはディレクトリを移動するユーティリティです。同じ Volume 内でのリネームにも、別 Volume への移動にも使えます。
 
@@ -328,6 +431,9 @@ uv run python move_volume_file.py \
 - `comfyapp.py`: ComfyUI の Modal デプロイ本体
 - `preserve_model.py`: Hugging Face モデル保存処理
 - `preserve_model_gui.py`: モデル保存 GUI
+- `asset_manager.py`: Modal Volume 資産の CRUD サービス（Python / テスト・CLI 向け）
+- `web/`: React GUI + Hono API（`modal volume` CLI 経由の資産管理画面）
+- `asset_manager_gui.py`: 旧 Gradio 起動の廃止スタブ
 - `rename_volume.py`: Volume コピー補助
 - `move_volume_file.py`: Volume 内ファイル移動補助
 - `main.py`: 最小のエントリーポイント
