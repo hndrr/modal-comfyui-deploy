@@ -115,7 +115,7 @@ export default function App() {
           search,
           sort,
           page,
-          pageSize: 48,
+          pageSize: 100,
           refresh: options.refresh,
         });
         if (id !== requestId.current) return;

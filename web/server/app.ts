@@ -70,7 +70,7 @@ export function createApp(deps: AppDeps = {}) {
         throw new Error(`Unsupported sort mode: ${sort}`);
       }
       const page = Number(c.req.query("page") ?? "1");
-      const pageSize = Number(c.req.query("page_size") ?? "48");
+      const pageSize = Number(c.req.query("page_size") ?? "100");
       const refresh =
         c.req.query("refresh") === "1" ||
         c.req.query("refresh") === "true" ||
@@ -79,7 +79,7 @@ export function createApp(deps: AppDeps = {}) {
         search: c.req.query("search") ?? "",
         sort,
         page: Number.isFinite(page) ? page : 1,
-        pageSize: Number.isFinite(pageSize) ? pageSize : 48,
+        pageSize: Number.isFinite(pageSize) ? pageSize : 100,
         refresh,
       });
       return c.json(result);
