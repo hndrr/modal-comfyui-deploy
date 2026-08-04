@@ -1525,7 +1525,7 @@ export default function App() {
                 </div>
               </section>
 
-              <aside className="flex flex-col gap-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 lg:border-l">
+              <aside className="flex flex-col gap-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto lg:border-l">
                 <div>
                   <h2 className="mb-2 text-sm font-semibold text-zinc-200">選択 / プレビュー</h2>
                   {checkedCount > 1 && (
