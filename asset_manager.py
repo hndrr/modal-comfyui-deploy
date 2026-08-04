@@ -45,7 +45,10 @@ class AssetEntry:
 def normalize_volume_path(raw_path: str | PurePosixPath, *, allow_root: bool = True) -> str:
     """Return a safe path relative to a Modal Volume root."""
 
-    raw = str(raw_path).strip()
+    # Do not strip(): " report.png" and "report.png" must remain distinct.
+    raw = str(raw_path)
+    if raw != raw.strip():
+        raise ValueError("Volume paths cannot have leading or trailing whitespace.")
     if "\\" in raw:
         raise ValueError("Volume paths must use forward slashes.")
     if "\x00" in raw:
@@ -160,6 +163,9 @@ def _default_cross_volume_mover(
                 destination_absolute.unlink()
         destination_absolute.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(source_absolute.as_posix(), destination_absolute.as_posix())
+        # Make writes visible to other containers before the function exits.
+        destination.commit()
+        source.commit()
 
     with app.run():
         move_between_volumes.remote()
@@ -248,6 +254,19 @@ class AssetManager:
                 validate_model_destination(remote_path)
             remote_paths.append(remote_path)
 
+        # Same basenames from different local dirs collapse to one remote path;
+        # reject before batch_upload so later put_file cannot clobber earlier bytes.
+        if len(remote_paths) != len(set(remote_paths)):
+            seen: set[str] = set()
+            dupes: list[str] = []
+            for remote_path in remote_paths:
+                if remote_path in seen and remote_path not in dupes:
+                    dupes.append(remote_path)
+                seen.add(remote_path)
+            raise ValueError(
+                "Duplicate destination filenames in upload batch: " + ", ".join(dupes)
+            )
+
         target_volume = self._volume(volume)
         with target_volume.batch_upload(force=overwrite) as batch:
             for local_file, remote_path in zip(local_files, remote_paths, strict=True):
@@ -279,6 +298,12 @@ class AssetManager:
         source_entry = self._find_entry(source_volume, source)
         if source_entry.is_directory and destination.startswith(f"{source}/"):
             raise ValueError("A directory cannot be moved inside itself.")
+        # Overwrite-delete of an ancestor would wipe the source before copy.
+        if source_volume == destination_volume and source.startswith(f"{destination}/"):
+            raise ValueError(
+                "Cannot move an entry onto one of its ancestor directories "
+                f"({source} -> {destination})."
+            )
         if source_volume != destination_volume:
             self._cross_volume_mover(
                 source_volume,
@@ -331,6 +356,16 @@ class AssetManager:
             existing = self._find_entry(volume, normalized)
         except FileNotFoundError:
             existing = None
+        except OSError:
+            # Modal may raise OSError / NotFound when a parent path is missing.
+            existing = None
+        except Exception as exc:  # noqa: BLE001
+            # Treat "not found"-style proxy errors as absence; re-raise others.
+            message = str(exc).casefold()
+            if "not found" in message or "does not exist" in message:
+                existing = None
+            else:
+                raise
         if existing is not None:
             if existing.is_directory:
                 raise FileExistsError(f"Directory already exists: {normalized}")
