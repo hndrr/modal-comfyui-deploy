@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -22,6 +23,8 @@ TRANSFERABLE_VOLUMES = frozenset({INPUT_VOLUME, OUTPUT_VOLUME})
 IMAGE_EXTENSIONS = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
 VIDEO_EXTENSIONS = frozenset({".m4v", ".mov", ".mp4", ".webm"})
 AUDIO_EXTENSIONS = frozenset({".flac", ".m4a", ".mp3", ".ogg", ".wav"})
+# Modal Volumes don't retain truly empty directories; we plant this marker via upload.
+DIR_PLACEHOLDER_NAME = ".asset-manager-keep"
 
 
 @dataclass(frozen=True)
@@ -195,7 +198,9 @@ class AssetManager:
         normalized = normalize_volume_path(path, allow_root=True)
         query_path = normalized or "/"
         entries = self._volume(volume).listdir(query_path, recursive=False)
-        return [_to_asset_entry(validate_volume(volume), entry) for entry in entries]
+        assets = [_to_asset_entry(validate_volume(volume), entry) for entry in entries]
+        # Hide the mkdir placeholder so empty folders look empty in the UI.
+        return [asset for asset in assets if asset.name != DIR_PLACEHOLDER_NAME]
 
     def download_asset(self, volume: str, path: str, destination: str | Path) -> Path:
         normalized = normalize_volume_path(path, allow_root=False)
@@ -308,6 +313,39 @@ class AssetManager:
             raise IsADirectoryError("Deleting a directory requires recursive=True.")
         self._volume(volume).remove_file(normalized, recursive=entry.is_directory)
 
+    def create_directory(self, volume: str, path: str) -> str:
+        """Create an empty directory by uploading a hidden placeholder file.
+
+        Modal Volumes do not persist empty directories on their own, so we write
+        ``DIR_PLACEHOLDER_NAME`` inside the new folder (hidden from listings).
+        """
+
+        validate_volume(volume)
+        normalized = normalize_volume_path(path, allow_root=False)
+        if PurePosixPath(normalized).name in {"", ".", "..", DIR_PLACEHOLDER_NAME}:
+            raise ValueError("Invalid directory name.")
+        if volume == MODEL_VOLUME:
+            validate_model_destination(normalized)
+
+        try:
+            existing = self._find_entry(volume, normalized)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if existing.is_directory:
+                raise FileExistsError(f"Directory already exists: {normalized}")
+            raise FileExistsError(f"A file already exists at: {normalized}")
+
+        keep_remote = PurePosixPath(normalized, DIR_PLACEHOLDER_NAME).as_posix()
+        with tempfile.NamedTemporaryFile(delete=False) as handle:
+            local_keep = Path(handle.name)
+        try:
+            with self._volume(volume).batch_upload(force=True) as batch:
+                batch.put_file(local_keep, keep_remote)
+        finally:
+            local_keep.unlink(missing_ok=True)
+        return normalized
+
 
 _DEFAULT_MANAGER = AssetManager()
 
@@ -347,3 +385,7 @@ def move_asset(
 
 def delete_asset(volume: str, path: str, recursive: bool = False) -> None:
     _DEFAULT_MANAGER.delete_asset(volume, path, recursive)
+
+
+def create_directory(volume: str, path: str) -> str:
+    return _DEFAULT_MANAGER.create_directory(volume, path)

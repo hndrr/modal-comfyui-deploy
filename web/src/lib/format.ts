@@ -17,3 +17,11 @@ export function formatDate(iso: string): string {
     return iso;
   }
 }
+
+/** Join a volume folder path with a file/dir name (POSIX-style, no leading slash). */
+export function joinVolumePath(dir: string, name: string): string {
+  const base = name.replace(/^\/+|\/+$/g, "");
+  if (!base) return dir.replace(/^\/+|\/+$/g, "");
+  const folder = dir.replace(/^\/+|\/+$/g, "");
+  return folder ? `${folder}/${base}` : base;
+}

@@ -6,7 +6,9 @@ export type SortMode =
   | "modified_desc"
   | "modified_asc"
   | "size_desc"
-  | "size_asc";
+  | "size_asc"
+  | "type_asc"
+  | "type_desc";
 
 export interface AssetEntry {
   volume: string;
@@ -43,10 +45,12 @@ export interface VolumeInfo {
 }
 
 export const SORT_OPTIONS: { id: SortMode; label: string }[] = [
-  { id: "name_asc", label: "名前（昇順）" },
-  { id: "name_desc", label: "名前（降順）" },
   { id: "modified_desc", label: "更新日時（新しい順）" },
   { id: "modified_asc", label: "更新日時（古い順）" },
+  { id: "type_asc", label: "形式（拡張子 A→Z）" },
+  { id: "type_desc", label: "形式（拡張子 Z→A）" },
+  { id: "name_asc", label: "名前（昇順）" },
+  { id: "name_desc", label: "名前（降順）" },
   { id: "size_desc", label: "サイズ（大きい順）" },
   { id: "size_asc", label: "サイズ（小さい順）" },
 ];

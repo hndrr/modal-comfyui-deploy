@@ -56,6 +56,8 @@ export const SORT_CHOICES = [
   "modified_asc",
   "size_desc",
   "size_asc",
+  "type_asc",
+  "type_desc",
 ] as const;
 
 export type SortMode = (typeof SORT_CHOICES)[number];
