@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AssetManager, defaultAssetManager } from "./lib/assetManager.js";
 import {
@@ -26,6 +27,16 @@ export type AppDeps = {
 function httpError(error: unknown, status: ContentfulStatusCode = 400): HTTPException {
   const message = error instanceof Error ? error.message : String(error);
   return new HTTPException(status, { message });
+}
+
+/** Stream a local file without buffering the whole asset in memory. */
+function streamFileResponse(
+  localPath: string,
+  headers: Record<string, string>,
+): Response {
+  const nodeStream = fs.createReadStream(localPath);
+  const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+  return new Response(webStream, { headers });
 }
 
 export function createApp(deps: AppDeps = {}) {
@@ -117,16 +128,13 @@ export function createApp(deps: AppDeps = {}) {
             }
           : null,
       });
-      const data = await fs.promises.readFile(file.localPath);
-      return new Response(data, {
-        headers: {
-          "Content-Type": file.mediaType,
-          ...(download
-            ? {
-                "Content-Disposition": `attachment; filename="${file.name.replace(/"/g, "")}"`,
-              }
-            : {}),
-        },
+      return streamFileResponse(file.localPath, {
+        "Content-Type": file.mediaType,
+        ...(download
+          ? {
+              "Content-Disposition": `attachment; filename="${file.name.replace(/"/g, "")}"`,
+            }
+          : {}),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -180,13 +188,10 @@ export function createApp(deps: AppDeps = {}) {
           },
         });
       }
-      const data = await fs.promises.readFile(file.localPath);
-      return new Response(data, {
-        headers: {
-          "Content-Type": file.mediaType || "image/jpeg",
-          "Cache-Control": "private, max-age=604800, immutable",
-          ETag: etag,
-        },
+      return streamFileResponse(file.localPath, {
+        "Content-Type": file.mediaType || "image/jpeg",
+        "Cache-Control": "private, max-age=604800, immutable",
+        ETag: etag,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -217,13 +222,25 @@ export function createApp(deps: AppDeps = {}) {
       const tmpDir = await fs.promises.mkdtemp(path.join(path.dirname(DIST_DIR), ".upload-"));
       try {
         const localPaths: string[] = [];
+        const stagedNames = new Set<string>();
         for (const item of fileList) {
           if (typeof item === "string" || !item || typeof item !== "object") {
             throw new Error("Invalid upload payload.");
           }
           const file = item as File;
           const safeName = path.basename(file.name || "upload.bin");
-          const localPath = path.join(tmpDir, safeName);
+          if (!safeName || safeName === "." || safeName === "..") {
+            throw new Error("Invalid upload filename.");
+          }
+          if (stagedNames.has(safeName)) {
+            throw new Error(
+              `Duplicate upload filename in one request: ${safeName}. Rename or upload separately.`,
+            );
+          }
+          stagedNames.add(safeName);
+          // Stage each file in its own subdir so basename collisions cannot clobber.
+          const stageDir = await fs.promises.mkdtemp(path.join(tmpDir, "f-"));
+          const localPath = path.join(stageDir, safeName);
           const buffer = Buffer.from(await file.arrayBuffer());
           await fs.promises.writeFile(localPath, buffer);
           localPaths.push(localPath);

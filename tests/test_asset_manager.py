@@ -79,6 +79,13 @@ class AssetManagerValidationTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 normalize_volume_path(invalid)
 
+    def test_rejects_leading_or_trailing_whitespace_in_paths(self) -> None:
+        for invalid in (" report.png", "report.png ", "  spaced  "):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                normalize_volume_path(invalid)
+        # Distinct names must not collapse via strip-like behavior.
+        self.assertEqual(normalize_volume_path("report.png"), "report.png")
+
     def test_media_classification(self) -> None:
         self.assertEqual(classify_media("images/result.PNG", "file"), "image")
         self.assertEqual(classify_media("movie.mp4", "file"), "video")
@@ -146,6 +153,24 @@ class AssetManagerOperationTests(unittest.TestCase):
             )
         self.assertEqual(uploaded, ["incoming/first.png", "incoming/second.txt"])
         self.assertEqual(self.input.batch_forces, [True])
+
+    def test_upload_rejects_duplicate_destination_basenames(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            one = Path(temp_dir) / "a" / "shared.bin"
+            two = Path(temp_dir) / "b" / "shared.bin"
+            one.parent.mkdir()
+            two.parent.mkdir()
+            one.write_bytes(b"1")
+            two.write_bytes(b"2")
+            with self.assertRaises(ValueError) as ctx:
+                self.manager.upload_assets(
+                    INPUT_VOLUME,
+                    "incoming",
+                    [one, two],
+                    overwrite=True,
+                )
+            self.assertIn("Duplicate destination filenames", str(ctx.exception))
+        self.assertEqual(self.input.uploads, [])
 
     def test_model_upload_destination_is_restricted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -217,6 +242,19 @@ class AssetManagerOperationTests(unittest.TestCase):
                 INPUT_VOLUME,
                 "folder/nested",
             )
+
+    def test_rejects_move_onto_ancestor_directory(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self.manager.move_asset(
+                INPUT_VOLUME,
+                "images/a.png",
+                INPUT_VOLUME,
+                "images",
+                overwrite=True,
+            )
+        self.assertIn("ancestor", str(ctx.exception).casefold())
+        self.assertEqual(self.input.copies, [])
+        self.assertEqual(self.input.removals, [])
 
     def test_create_directory_uploads_hidden_placeholder(self) -> None:
         from asset_manager import DIR_PLACEHOLDER_NAME

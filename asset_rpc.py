@@ -52,6 +52,12 @@ LIST_CACHE_TTL_SEC = 60.0
 # Long edge for generated JPEG thumbnails (images + video posters).
 THUMB_MAX_EDGE = max(64, min(1024, int(os.getenv("COMFY_ASSET_THUMB_MAX", "256"))))
 THUMB_JPEG_QUALITY = max(40, min(95, int(os.getenv("COMFY_ASSET_THUMB_QUALITY", "80"))))
+# Durable cache bounds (files/ + thumbs/). Override via env if needed.
+CACHE_MAX_BYTES = max(
+    64 * 1024 * 1024,
+    int(os.getenv("COMFY_ASSET_CACHE_MAX_BYTES", str(8 * 1024 * 1024 * 1024))),
+)
+CACHE_MAX_FILES = max(64, int(os.getenv("COMFY_ASSET_CACHE_MAX_FILES", "4000")))
 # Modal Volume delete is rate-limited / flaky under high concurrency.
 # Keep this low (2–3). Override with ASSET_DELETE_WORKERS if needed.
 DEFAULT_DELETE_WORKERS = max(1, min(8, int(os.getenv("ASSET_DELETE_WORKERS", "4"))))
@@ -176,10 +182,56 @@ def _thumb_path(entry: AssetEntry) -> Path:
     return THUMB_DIR / f"{digest}.jpg"
 
 
+def _atomic_replace(tmp: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp.replace(destination)
+
+
+def _evict_cache_if_needed() -> None:
+    """Drop oldest cache files when over byte/count limits."""
+    files: list[tuple[float, int, Path]] = []
+    for root in (CACHE_DIR, THUMB_DIR):
+        if not root.exists():
+            continue
+        for path in root.iterdir():
+            if not path.is_file() or path.name.endswith(".tmp") or ".tmp." in path.name:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append((stat.st_mtime, stat.st_size, path))
+    if not files:
+        return
+    total_bytes = sum(size for _, size, _ in files)
+    count = len(files)
+    if total_bytes <= CACHE_MAX_BYTES and count <= CACHE_MAX_FILES:
+        return
+    files.sort(key=lambda item: item[0])  # oldest first
+    for _mtime, size, path in files:
+        if total_bytes <= CACHE_MAX_BYTES and count <= CACHE_MAX_FILES:
+            break
+        try:
+            path.unlink(missing_ok=True)
+            total_bytes -= size
+            count -= 1
+        except OSError:
+            continue
+
+
 def _materialize(entry: AssetEntry) -> dict[str, Any]:
     destination = _cached_path(entry)
-    if not destination.exists():
-        MANAGER.download_listed_asset(entry, destination)
+    if not destination.exists() or destination.stat().st_size == 0:
+        tmp = destination.with_name(destination.name + ".tmp")
+        try:
+            MANAGER.download_listed_asset(entry, tmp)
+            if not tmp.exists() or tmp.stat().st_size == 0:
+                raise RuntimeError(f"Download produced empty file for {entry.path}")
+            _atomic_replace(tmp, destination)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        _evict_cache_if_needed()
     media_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
     return {
         "path": destination.as_posix(),
@@ -192,25 +244,37 @@ def _materialize(entry: AssetEntry) -> dict[str, Any]:
 
 
 def _resize_image_to_jpeg(source: Path, destination: Path) -> None:
-    """Write a long-edge-capped JPEG thumbnail using Pillow."""
+    """Write a long-edge-capped JPEG thumbnail using Pillow (atomic)."""
     from PIL import Image
 
-    with Image.open(source) as image:
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        image.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        image.save(destination, format="JPEG", quality=THUMB_JPEG_QUALITY, optimize=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(".tmp.jpg")
+    try:
+        with Image.open(source) as image:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS)
+            image.save(tmp, format="JPEG", quality=THUMB_JPEG_QUALITY, optimize=True)
+        _atomic_replace(tmp, destination)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _write_placeholder_jpeg(destination: Path, *, color: tuple[int, int, int] = (39, 39, 42)) -> None:
     from PIL import Image
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # Small solid tile — used when a video poster can't be extracted (no ffmpeg).
-    Image.new("RGB", (THUMB_MAX_EDGE, THUMB_MAX_EDGE), color=color).save(
-        destination, format="JPEG", quality=70, optimize=True
-    )
+    tmp = destination.with_suffix(".tmp.jpg")
+    try:
+        # Small solid tile — used when a video poster can't be extracted (no ffmpeg).
+        Image.new("RGB", (THUMB_MAX_EDGE, THUMB_MAX_EDGE), color=color).save(
+            tmp, format="JPEG", quality=70, optimize=True
+        )
+        _atomic_replace(tmp, destination)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _extract_video_poster(source: Path, destination: Path) -> bool:
@@ -308,6 +372,7 @@ def _ensure_thumbnail(entry: AssetEntry) -> dict[str, Any]:
                         _write_placeholder_jpeg(dest, color=(24, 24, 27))
                 else:
                     _write_placeholder_jpeg(dest, color=(24, 24, 27))
+            _evict_cache_if_needed()
         return _thumb_payload(entry, dest, etag)
     finally:
         with _thumb_lock:
@@ -740,16 +805,36 @@ def main() -> None:
                 # Worker will process shutdown and set stop; keep reading until then.
                 break
 
-        # Wait briefly for in-flight work after shutdown is queued.
-        high_q.join()
-        low_q.join()
+        # Do not join() indefinitely: after stop, workers may exit without
+        # task_done() for leftover queue items (CodeRabbit). Drain with timeout.
+        deadline = _now() + 5.0
+        while _now() < deadline and (
+            not high_q.empty() or not low_q.empty()
+        ):
+            import time
+
+            time.sleep(0.05)
     finally:
         stop.set()
         for _ in threads:
-            high_q.put(None)
-            low_q.put(None)
+            try:
+                high_q.put_nowait(None)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                low_q.put_nowait(None)
+            except Exception:  # noqa: BLE001
+                pass
         for thread in threads:
             thread.join(timeout=2.0)
+        # Drop unfinished queue accounting so the process can exit cleanly.
+        for q in (high_q, low_q):
+            while True:
+                try:
+                    q.get_nowait()
+                    q.task_done()
+                except Exception:  # noqa: BLE001
+                    break
         shutil.rmtree(WORKSPACE, ignore_errors=True)
 
 
