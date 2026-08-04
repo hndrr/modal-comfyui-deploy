@@ -67,7 +67,8 @@ export class AssetManager {
   ): Promise<MaterializedFile> {
     validateVolume(volume);
     const normalized = normalizeVolumePath(remotePath, { allowRoot: false });
-    const key = `${volume}:${normalized}:${options.imageOnly ? "img" : "bin"}`;
+    const mediaHint = options.entry?.media_type ?? (options.imageOnly ? "image" : "bin");
+    const key = `${volume}:${normalized}:${options.imageOnly ? `thumb:${mediaHint}` : "bin"}`;
     const existing = this.materializeInflight.get(key);
     if (existing) return existing;
 
@@ -75,6 +76,7 @@ export class AssetManager {
       volume,
       path: normalized,
       image_only: Boolean(options.imageOnly),
+      thumbnail: Boolean(options.imageOnly),
     };
     const entry = options.entry;
     if (entry) {

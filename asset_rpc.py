@@ -49,22 +49,43 @@ SORT_CHOICES = {
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 200
 LIST_CACHE_TTL_SEC = 60.0
+# Long edge for generated JPEG thumbnails (images + video posters).
+THUMB_MAX_EDGE = max(64, min(1024, int(os.getenv("COMFY_ASSET_THUMB_MAX", "256"))))
+THUMB_JPEG_QUALITY = max(40, min(95, int(os.getenv("COMFY_ASSET_THUMB_QUALITY", "80"))))
 # Modal Volume delete is rate-limited / flaky under high concurrency.
 # Keep this low (2–3). Override with ASSET_DELETE_WORKERS if needed.
 DEFAULT_DELETE_WORKERS = max(1, min(8, int(os.getenv("ASSET_DELETE_WORKERS", "4"))))
 DELETE_RETRIES = max(1, int(os.getenv("ASSET_DELETE_RETRIES", "3")))
 
+
+def _default_cache_root() -> Path:
+    """Persistent disk cache so restarts don't re-download every thumbnail."""
+    env = os.getenv("COMFY_ASSET_CACHE_DIR", "").strip()
+    if env:
+        return Path(env).expanduser()
+    xdg = os.getenv("XDG_CACHE_HOME", "").strip()
+    if xdg:
+        return Path(xdg).expanduser() / "modal-comfyui-assets"
+    return Path.home() / ".cache" / "modal-comfyui-assets"
+
+
 MANAGER = AssetManager()
 LOCK = threading.Lock()
 STDOUT_LOCK = threading.Lock()
+# Ephemeral workspace for non-cache scratch; file/thumb caches live under CACHE_ROOT.
 WORKSPACE = Path(tempfile.mkdtemp(prefix="comfy-asset-rpc-"))
-CACHE_DIR = WORKSPACE / "cache"
+CACHE_ROOT = _default_cache_root()
+CACHE_DIR = CACHE_ROOT / "files"
+THUMB_DIR = CACHE_ROOT / "thumbs"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
 EmitFn = Callable[[dict[str, Any]], None]
 
 # volume:path -> (monotonic expires, entries)
 _list_cache: dict[str, tuple[float, list[AssetEntry]]] = {}
+_thumb_lock = threading.Lock()
+_thumb_inflight: dict[str, threading.Event] = {}
 
 
 def _now() -> float:
@@ -137,11 +158,22 @@ def _invalidate_list_cache(volume: str | None = None) -> None:
             del _list_cache[key]
 
 
+def _entry_digest(entry: AssetEntry, *, kind: str) -> str:
+    payload = (
+        f"{kind}:{entry.volume}:{entry.path}:"
+        f"{entry.modified_at.isoformat()}:{entry.size}:{THUMB_MAX_EDGE}"
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 def _cached_path(entry: AssetEntry) -> Path:
-    digest = hashlib.sha256(
-        f"{entry.volume}:{entry.path}:{entry.modified_at.isoformat()}".encode()
-    ).hexdigest()
+    digest = _entry_digest(entry, kind="file")
     return CACHE_DIR / f"{digest}{PurePosixPath(entry.path).suffix}"
+
+
+def _thumb_path(entry: AssetEntry) -> Path:
+    digest = _entry_digest(entry, kind="thumb")
+    return THUMB_DIR / f"{digest}.jpg"
 
 
 def _materialize(entry: AssetEntry) -> dict[str, Any]:
@@ -153,8 +185,134 @@ def _materialize(entry: AssetEntry) -> dict[str, Any]:
         "path": destination.as_posix(),
         "name": entry.name,
         "media_type": media_type,
-        "size": entry.size,
+        "size": destination.stat().st_size if destination.exists() else entry.size,
+        "etag": _entry_digest(entry, kind="file"),
+        "cached": True,
     }
+
+
+def _resize_image_to_jpeg(source: Path, destination: Path) -> None:
+    """Write a long-edge-capped JPEG thumbnail using Pillow."""
+    from PIL import Image
+
+    with Image.open(source) as image:
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        image.save(destination, format="JPEG", quality=THUMB_JPEG_QUALITY, optimize=True)
+
+
+def _write_placeholder_jpeg(destination: Path, *, color: tuple[int, int, int] = (39, 39, 42)) -> None:
+    from PIL import Image
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Small solid tile — used when a video poster can't be extracted (no ffmpeg).
+    Image.new("RGB", (THUMB_MAX_EDGE, THUMB_MAX_EDGE), color=color).save(
+        destination, format="JPEG", quality=70, optimize=True
+    )
+
+
+def _extract_video_poster(source: Path, destination: Path) -> bool:
+    """Best-effort first-frame JPEG via ffmpeg. Returns False if unavailable."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    import subprocess
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(".tmp.jpg")
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                "0",
+                "-i",
+                str(source),
+                "-frames:v",
+                "1",
+                "-vf",
+                f"scale={THUMB_MAX_EDGE}:{THUMB_MAX_EDGE}:force_original_aspect_ratio=decrease",
+                "-q:v",
+                "3",
+                str(tmp),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+        if completed.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+            tmp.unlink(missing_ok=True)
+            return False
+        tmp.replace(destination)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        tmp.unlink(missing_ok=True)
+        return False
+
+
+def _thumb_payload(entry: AssetEntry, dest: Path, etag: str) -> dict[str, Any]:
+    return {
+        "path": dest.as_posix(),
+        "name": f"{PurePosixPath(entry.name).stem}.jpg",
+        "media_type": "image/jpeg",
+        "size": dest.stat().st_size,
+        "etag": etag,
+        "cached": True,
+    }
+
+
+def _ensure_thumbnail(entry: AssetEntry) -> dict[str, Any]:
+    """Return a resized JPEG thumb path, using a durable on-disk cache."""
+    if entry.media_type not in {"image", "video"}:
+        raise ValueError("Thumbnails are only available for images and videos.")
+
+    dest = _thumb_path(entry)
+    etag = _entry_digest(entry, kind="thumb")
+    if dest.exists() and dest.stat().st_size > 0:
+        return _thumb_payload(entry, dest, etag)
+
+    # Single-flight per cache key so a grid of identical URLs doesn't stampede Modal.
+    with _thumb_lock:
+        event = _thumb_inflight.get(etag)
+        if event is None:
+            event = threading.Event()
+            _thumb_inflight[etag] = event
+            leader = True
+        else:
+            leader = False
+
+    if not leader:
+        event.wait(timeout=180)
+        if dest.exists() and dest.stat().st_size > 0:
+            return _thumb_payload(entry, dest, etag)
+        raise RuntimeError(f"Thumbnail generation failed for {entry.path}")
+
+    try:
+        if not (dest.exists() and dest.stat().st_size > 0):
+            if entry.media_type == "image":
+                original = Path(_materialize(entry)["path"])
+                _resize_image_to_jpeg(original, dest)
+            else:
+                # Videos: only download full file when ffmpeg can make a poster.
+                # Without ffmpeg, use a cheap solid poster so the grid never
+                # materializes every mp4 just for a card.
+                if shutil.which("ffmpeg"):
+                    original = Path(_materialize(entry)["path"])
+                    if not _extract_video_poster(original, dest):
+                        _write_placeholder_jpeg(dest, color=(24, 24, 27))
+                else:
+                    _write_placeholder_jpeg(dest, color=(24, 24, 27))
+        return _thumb_payload(entry, dest, etag)
+    finally:
+        with _thumb_lock:
+            _thumb_inflight.pop(etag, None)
+        event.set()
 
 
 def _entry_from_params(params: dict[str, Any]) -> AssetEntry:
@@ -223,9 +381,11 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             entry = _entry_from_params(params)
             if entry.is_directory:
                 raise IsADirectoryError("Directories cannot be downloaded.")
-            if params.get("image_only") and entry.media_type != "image":
-                raise ValueError("Thumbnails are only available for images.")
-            result = _materialize(entry)
+            want_thumb = bool(params.get("image_only") or params.get("thumbnail"))
+            if want_thumb:
+                result = _ensure_thumbnail(entry)
+            else:
+                result = _materialize(entry)
         elif method == "upload":
             with LOCK:
                 paths = MANAGER.upload_assets(
@@ -432,32 +592,164 @@ def _write_response(response: dict[str, Any]) -> None:
         sys.stdout.flush()
 
 
+def _is_high_priority(request: dict[str, Any]) -> bool:
+    """Sidebar preview / user mutations outrank bulk thumbnail generation."""
+    method = request.get("method")
+    params = request.get("params") or {}
+    if method == "materialize":
+        # Full content (preview/download) is high; thumbnails are low.
+        return not bool(params.get("image_only") or params.get("thumbnail"))
+    if method in {
+        "list",
+        "upload",
+        "move",
+        "mkdir",
+        "delete",
+        "delete_many",
+        "health",
+        "shutdown",
+    }:
+        return True
+    return False
+
+
+def _process_request(request: dict[str, Any]) -> None:
+    if request.get("method") == "delete_many":
+        response = handle_delete_many(request, emit=_write_response)
+    else:
+        response = handle(request)
+    try:
+        _write_response(response)
+    except BrokenPipeError:
+        raise
+
+
 def main() -> None:
+    """Serve RPC with a high-priority lane so previews aren't stuck behind thumbs.
+
+    Node may flood stdin with thumbnail materialize calls while the user clicks
+    an item for the right-hand preview. High-priority work (full materialize,
+    list, mutations) is handled by dedicated workers and can also be stolen by
+    idle low-priority workers.
+    """
+    import queue
+
+    high_q: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    low_q: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    stop = threading.Event()
+
+    high_workers = max(1, min(4, int(os.getenv("COMFY_ASSET_HIGH_WORKERS", "2"))))
+    low_workers = max(1, min(8, int(os.getenv("COMFY_ASSET_LOW_WORKERS", "4"))))
+
+    def high_worker() -> None:
+        while not stop.is_set():
+            request = high_q.get()
+            if request is None:
+                high_q.task_done()
+                return
+            try:
+                _process_request(request)
+                if request.get("method") == "shutdown":
+                    stop.set()
+            except BrokenPipeError:
+                stop.set()
+            except Exception:  # noqa: BLE001
+                traceback.print_exc(file=sys.stderr)
+            finally:
+                high_q.task_done()
+
+    def low_worker() -> None:
+        while not stop.is_set():
+            request: dict[str, Any] | None
+            # Prefer any pending high-priority work so previews jump the thumb queue.
+            try:
+                request = high_q.get_nowait()
+            except queue.Empty:
+                try:
+                    request = low_q.get(timeout=0.15)
+                except queue.Empty:
+                    continue
+                if request is None:
+                    low_q.task_done()
+                    return
+                try:
+                    _process_request(request)
+                    if request.get("method") == "shutdown":
+                        stop.set()
+                except BrokenPipeError:
+                    stop.set()
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc(file=sys.stderr)
+                finally:
+                    low_q.task_done()
+                continue
+
+            # Stolen from high_q
+            if request is None:
+                high_q.task_done()
+                return
+            try:
+                _process_request(request)
+                if request.get("method") == "shutdown":
+                    stop.set()
+            except BrokenPipeError:
+                stop.set()
+            except Exception:  # noqa: BLE001
+                traceback.print_exc(file=sys.stderr)
+            finally:
+                high_q.task_done()
+
+    threads = [
+        threading.Thread(target=high_worker, name=f"asset-high-{i}", daemon=True)
+        for i in range(high_workers)
+    ] + [
+        threading.Thread(target=low_worker, name=f"asset-low-{i}", daemon=True)
+        for i in range(low_workers)
+    ]
+    for thread in threads:
+        thread.start()
+
     try:
         for raw in sys.stdin:
+            if stop.is_set():
+                break
             line = raw.strip()
             if not line:
                 continue
             try:
                 request = json.loads(line)
             except json.JSONDecodeError as exc:
-                response: dict[str, Any] = {
-                    "id": None,
-                    "ok": False,
-                    "error": f"Invalid JSON: {exc}",
-                }
+                _write_response(
+                    {
+                        "id": None,
+                        "ok": False,
+                        "error": f"Invalid JSON: {exc}",
+                    }
+                )
+                continue
+            if not isinstance(request, dict):
+                _write_response(
+                    {"id": None, "ok": False, "error": "Request must be a JSON object"}
+                )
+                continue
+            if _is_high_priority(request):
+                high_q.put(request)
             else:
-                if isinstance(request, dict) and request.get("method") == "delete_many":
-                    response = handle_delete_many(request, emit=_write_response)
-                else:
-                    response = handle(request)
-            try:
-                _write_response(response)
-            except BrokenPipeError:
+                low_q.put(request)
+            if request.get("method") == "shutdown":
+                # Worker will process shutdown and set stop; keep reading until then.
                 break
-            if isinstance(request, dict) and request.get("method") == "shutdown":
-                break
+
+        # Wait briefly for in-flight work after shutdown is queued.
+        high_q.join()
+        low_q.join()
     finally:
+        stop.set()
+        for _ in threads:
+            high_q.put(None)
+            low_q.put(None)
+        for thread in threads:
+            thread.join(timeout=2.0)
         shutil.rmtree(WORKSPACE, ignore_errors=True)
 
 
