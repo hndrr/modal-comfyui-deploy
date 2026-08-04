@@ -140,12 +140,16 @@ export function createApp(deps: AppDeps = {}) {
       const volume = c.req.query("volume");
       const remotePath = c.req.query("path");
       if (!volume || !remotePath) throw new Error("volume and path are required");
+      const mediaType = c.req.query("media_type") ?? "image";
+      if (mediaType !== "image" && mediaType !== "video") {
+        throw new Error("Thumbnails are only available for images and videos.");
+      }
       const entryMeta = {
         name: c.req.query("name") ?? undefined,
         kind: c.req.query("kind") ?? "file",
         size: c.req.query("size") ? Number(c.req.query("size")) : 0,
         modified_at: c.req.query("modified_at") ?? undefined,
-        media_type: c.req.query("media_type") ?? "image",
+        media_type: mediaType,
       };
       const hasMeta = Boolean(entryMeta.modified_at);
       const file = await manager.materialize(volume, remotePath, {
@@ -158,16 +162,30 @@ export function createApp(deps: AppDeps = {}) {
               kind: "file",
               size: entryMeta.size || 0,
               modified_at: entryMeta.modified_at || new Date(0).toISOString(),
-              media_type: "image",
+              media_type: mediaType,
               is_directory: false,
             }
           : null,
       });
+      // ETag from durable cache key (volume+path+mtime+size+thumb size).
+      const etagSource = `${volume}:${remotePath}:${entryMeta.modified_at ?? ""}:${entryMeta.size}:${file.size}`;
+      const etag = `"${Buffer.from(etagSource).toString("base64url").slice(0, 48)}"`;
+      const inm = c.req.header("if-none-match");
+      if (inm && inm === etag) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            ETag: etag,
+            "Cache-Control": "private, max-age=604800, immutable",
+          },
+        });
+      }
       const data = await fs.promises.readFile(file.localPath);
       return new Response(data, {
         headers: {
-          "Content-Type": file.mediaType,
-          "Cache-Control": "private, max-age=3600",
+          "Content-Type": file.mediaType || "image/jpeg",
+          "Cache-Control": "private, max-age=604800, immutable",
+          ETag: etag,
         },
       });
     } catch (error) {

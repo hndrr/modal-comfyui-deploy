@@ -251,20 +251,117 @@ export default function App() {
     setUploadDest(path);
   }, [path]);
 
-  // Inputs/Outputs: images + videos in gallery, others in table. Models: all in table.
+  // Inputs/Outputs: folders + images + videos in the card gallery (folders first),
+  // remaining files in the table. Models: all in table.
   const displayTable = useMemo(() => {
     if (volume === "comfy-model") return data?.entries ?? [];
     return (data?.entries ?? []).filter(
-      (entry) => entry.media_type !== "image" && entry.media_type !== "video",
+      (entry) =>
+        !entry.is_directory &&
+        entry.media_type !== "image" &&
+        entry.media_type !== "video",
     );
   }, [data, volume]);
 
   const displayGallery = useMemo(() => {
     if (volume === "comfy-model") return [];
-    return (data?.entries ?? []).filter(
-      (entry) => entry.media_type === "image" || entry.media_type === "video",
+    const items = (data?.entries ?? []).filter(
+      (entry) =>
+        entry.is_directory ||
+        entry.media_type === "image" ||
+        entry.media_type === "video",
+    );
+    // Folders first so nested structure is obvious among media cards.
+    return [...items].sort(
+      (a, b) => Number(b.is_directory) - Number(a.is_directory),
     );
   }, [data, volume]);
+
+  // Warm thumb cache for the current page — low concurrency so a user click's
+  // sidebar preview (full content) can jump the queue on the server and in the
+  // browser connection pool.
+  const focusedPath = focused?.path ?? null;
+  useEffect(() => {
+    const media = displayGallery.filter(
+      (entry) =>
+        (entry.media_type === "image" || entry.media_type === "video") &&
+        entry.path !== focusedPath,
+    );
+    if (!media.length) return;
+
+    let cancelled = false;
+    const controllers: AbortController[] = [];
+    const concurrency = 2;
+
+    async function run() {
+      // Let the click's content request leave the browser first.
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+      if (cancelled) return;
+
+      let next = 0;
+      async function worker() {
+        while (!cancelled) {
+          const index = next;
+          next += 1;
+          const entry = media[index];
+          if (!entry) return;
+          const url = thumbnailUrl(entry.volume, entry.path, {
+            name: entry.name,
+            size: entry.size,
+            modified_at: entry.modified_at,
+            media_type: entry.media_type,
+          });
+          const controller = new AbortController();
+          controllers.push(controller);
+          try {
+            await fetch(url, {
+              signal: controller.signal,
+              cache: "force-cache",
+              // Chromium: deprioritize vs sidebar preview fetch.
+              priority: "low",
+              headers: { Accept: "image/*" },
+            } as RequestInit);
+          } catch {
+            /* best-effort prefetch */
+          }
+        }
+      }
+
+      await Promise.all(
+        Array.from({ length: concurrency }, () => worker()),
+      );
+    }
+
+    void run();
+    return () => {
+      cancelled = true;
+      for (const controller of controllers) controller.abort();
+    };
+  }, [displayGallery, focusedPath]);
+
+  // Kick full-content load for the sidebar as soon as selection changes so it
+  // doesn't wait on <img>/<video> element scheduling behind gallery thumbs.
+  useEffect(() => {
+    if (!focused || focused.is_directory) return;
+    if (
+      focused.media_type !== "image" &&
+      focused.media_type !== "video" &&
+      focused.media_type !== "audio"
+    ) {
+      return;
+    }
+    const url = contentUrl(focused.volume, focused.path, false, focused);
+    const controller = new AbortController();
+    void fetch(url, {
+      signal: controller.signal,
+      // Chromium: prefer this over thumbnail traffic.
+      priority: "high",
+      cache: "force-cache",
+    } as RequestInit).catch(() => {
+      /* element src will retry */
+    });
+    return () => controller.abort();
+  }, [focused]);
 
   const pageEntries = useMemo(
     () => [...displayGallery, ...displayTable],
@@ -1173,13 +1270,14 @@ export default function App() {
                 {displayGallery.length > 0 && (
                   <div>
                     <h2 className="mb-2 text-sm font-medium text-zinc-300">
-                      画像・動画
+                      フォルダ・画像・動画
                     </h2>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
                       {displayGallery.map((entry) => {
                         const isChecked = checked.has(entry.path);
                         const isFocused = focused?.path === entry.path;
                         const isVideo = entry.media_type === "video";
+                        const isDir = entry.is_directory;
                         return (
                           <div
                             key={entry.path}
@@ -1189,7 +1287,9 @@ export default function App() {
                                 ? "border-sky-500 ring-1 ring-sky-500/40"
                                 : isFocused
                                   ? "border-sky-700"
-                                  : "border-zinc-800 hover:border-zinc-600"
+                                  : isDir
+                                    ? "border-amber-800/70 hover:border-amber-600/80"
+                                    : "border-zinc-800 hover:border-zinc-600"
                             }`}
                             onPointerDown={(event) => beginDragSelect(entry, event)}
                           >
@@ -1204,11 +1304,17 @@ export default function App() {
                                 onClick={(event) => event.stopPropagation()}
                               />
                             </label>
-                            {isVideo && (
-                              <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-zinc-100">
-                                VIDEO
-                              </span>
-                            )}
+                            <span
+                              className={`pointer-events-none absolute right-1.5 top-1.5 z-10 rounded px-1.5 py-0.5 text-[10px] font-medium tracking-wide ${
+                                isDir
+                                  ? "bg-amber-900/90 text-amber-100"
+                                  : isVideo
+                                    ? "bg-black/70 text-zinc-100"
+                                    : "hidden"
+                              }`}
+                            >
+                              {isDir ? "FOLDER" : isVideo ? "VIDEO" : ""}
+                            </span>
                             <button
                               type="button"
                               className="block w-full text-left"
@@ -1222,22 +1328,19 @@ export default function App() {
                                   if (!checked.has(entry.path)) toggleCheck(entry, true);
                                 }
                               }}
+                              onDoubleClick={() => {
+                                if (isDir) void openFolder(entry);
+                              }}
                             >
-                              {isVideo ? (
-                                <video
-                                  src={contentUrl(entry.volume, entry.path, false, {
-                                    name: entry.name,
-                                    kind: entry.kind,
-                                    size: entry.size,
-                                    modified_at: entry.modified_at,
-                                    media_type: entry.media_type,
-                                  })}
-                                  muted
-                                  playsInline
-                                  preload="metadata"
-                                  draggable={false}
-                                  className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
-                                />
+                              {isDir ? (
+                                <div className="flex aspect-square w-full flex-col items-center justify-center gap-2 bg-gradient-to-b from-amber-950/50 to-zinc-950 pointer-events-none">
+                                  <span className="text-5xl leading-none" aria-hidden>
+                                    📁
+                                  </span>
+                                  <span className="text-[11px] text-amber-200/80">
+                                    ダブルクリックで開く
+                                  </span>
+                                </div>
                               ) : (
                                 <img
                                   src={thumbnailUrl(entry.volume, entry.path, {
@@ -1250,11 +1353,17 @@ export default function App() {
                                   draggable={false}
                                   loading="lazy"
                                   decoding="async"
+                                  // Keep gallery thumbs below sidebar preview in the network scheduler.
+                                  fetchPriority="low"
                                   className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
                                 />
                               )}
-                              <div className="truncate px-2 py-1 text-xs text-zinc-300">
-                                {entry.name}
+                              <div
+                                className={`truncate px-2 py-1 text-xs ${
+                                  isDir ? "font-medium text-amber-100" : "text-zinc-300"
+                                }`}
+                              >
+                                {isDir ? `${entry.name}/` : entry.name}
                               </div>
                             </button>
                           </div>
@@ -1444,23 +1553,52 @@ export default function App() {
                       </p>
                       <p>更新: {formatDate(focused.modified_at)}</p>
 
-                      {focused.media_type === "image" && (
-                        <img
-                          src={contentUrl(focused.volume, focused.path, false, focused)}
-                          alt={focused.name}
-                          className="max-h-56 w-full rounded border border-zinc-800 object-contain"
-                        />
-                      )}
-                      {focused.media_type === "video" && (
-                        <video
-                          controls
-                          src={contentUrl(focused.volume, focused.path, false, focused)}
-                          className="max-h-56 w-full rounded border border-zinc-800"
-                        />
+                      {(focused.media_type === "image" ||
+                        focused.media_type === "video") && (
+                        <div className="flex w-full items-center justify-center overflow-hidden rounded border border-zinc-800 bg-black/50">
+                          {/*
+                            Don't force w-full + short max-height: portrait video would
+                            shrink to a tiny letterboxed strip. Cap by viewport height
+                            and let intrinsic aspect ratio decide width.
+                          */}
+                          {focused.media_type === "image" ? (
+                            <img
+                              key={focused.path}
+                              src={contentUrl(
+                                focused.volume,
+                                focused.path,
+                                false,
+                                focused,
+                              )}
+                              alt={focused.name}
+                              loading="eager"
+                              fetchPriority="high"
+                              decoding="async"
+                              className="max-h-[min(70vh,36rem)] max-w-full object-contain"
+                            />
+                          ) : (
+                            <video
+                              key={focused.path}
+                              controls
+                              playsInline
+                              autoPlay={false}
+                              preload="auto"
+                              src={contentUrl(
+                                focused.volume,
+                                focused.path,
+                                false,
+                                focused,
+                              )}
+                              className="max-h-[min(70vh,36rem)] max-w-full object-contain"
+                            />
+                          )}
+                        </div>
                       )}
                       {focused.media_type === "audio" && (
                         <audio
+                          key={focused.path}
                           controls
+                          preload="auto"
                           src={contentUrl(focused.volume, focused.path, false, focused)}
                           className="w-full"
                         />
