@@ -61,7 +61,6 @@ export class AssetManager {
     remotePath: string,
     options: {
       imageOnly?: boolean;
-      entry?: AssetEntry | null;
     } = {},
   ): Promise<MaterializedFile> {
     validateVolume(volume);
@@ -72,21 +71,13 @@ export class AssetManager {
       image_only: Boolean(options.imageOnly),
       thumbnail: Boolean(options.imageOnly),
     };
-    const entry = options.entry;
-    if (entry) {
-      params.name = entry.name;
-      params.kind = entry.kind;
-      params.size = entry.size;
-      params.modified_at = entry.modified_at;
-      params.media_type = entry.media_type;
-    }
-
     return this.bridge
       .call<{
         path: string;
         name: string;
         media_type: string;
         size: number;
+        etag?: string;
         cleanup?: boolean;
       }>("materialize", params)
       .then((result) => ({
@@ -94,6 +85,7 @@ export class AssetManager {
         name: result.name,
         mediaType: result.media_type,
         size: result.size,
+        etag: result.etag,
         cleanupAfterStream: Boolean(result.cleanup),
       }));
   }

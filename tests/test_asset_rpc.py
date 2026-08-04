@@ -82,6 +82,143 @@ class MaterializeConcurrencyTests(unittest.TestCase):
             self.assertEqual(lease_path.read_bytes(), b"video-bytes")
             lease_path.unlink()
 
+    def test_oversized_asset_is_leased_before_cache_eviction(self) -> None:
+        entry = AssetEntry(
+            volume="comfy-inputs",
+            path="models/oversized.bin",
+            name="oversized.bin",
+            kind="file",
+            size=10,
+            modified_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            media_type="file",
+        )
+        manager = mock.Mock()
+        manager.download_listed_asset.side_effect = lambda _entry, destination: Path(
+            destination
+        ).write_bytes(b"0123456789")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            thumbs = root / "thumbs"
+            workspace = root / "workspace"
+            cache.mkdir()
+            thumbs.mkdir()
+            workspace.mkdir()
+            with (
+                mock.patch.object(asset_rpc, "MANAGER", manager),
+                mock.patch.object(asset_rpc, "CACHE_DIR", cache),
+                mock.patch.object(asset_rpc, "THUMB_DIR", thumbs),
+                mock.patch.object(asset_rpc, "WORKSPACE", workspace),
+                mock.patch.object(asset_rpc, "CACHE_MAX_BYTES", 4),
+                mock.patch.object(asset_rpc, "CACHE_MAX_FILES", 64),
+                mock.patch.object(asset_rpc, "LEASE_MAX_BYTES", 4),
+            ):
+                leased = asset_rpc._materialize_for_stream(entry, thumbnail=False)
+                cached = asset_rpc._cached_path(entry)
+
+            lease_path = Path(leased["path"])
+            self.assertEqual(lease_path.read_bytes(), b"0123456789")
+            self.assertFalse(cached.exists())
+            lease_path.unlink()
+
+    def test_active_stream_leases_enforce_count_and_byte_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            first_source = root / "first.bin"
+            second_source = root / "second.bin"
+            first_source.write_bytes(b"123456")
+            second_source.write_bytes(b"abcdef")
+            payload = {
+                "name": "asset.bin",
+                "media_type": "application/octet-stream",
+                "size": 6,
+            }
+
+            with (
+                mock.patch.object(asset_rpc, "WORKSPACE", workspace),
+                mock.patch.object(asset_rpc, "LEASE_MAX_FILES", 1),
+                mock.patch.object(asset_rpc, "LEASE_MAX_BYTES", 10),
+            ):
+                first = asset_rpc._lease_materialized(
+                    {**payload, "path": first_source.as_posix()}
+                )
+                with self.assertRaisesRegex(RuntimeError, "file limit"):
+                    asset_rpc._lease_materialized(
+                        {**payload, "path": second_source.as_posix()}
+                    )
+                Path(first["path"]).unlink()
+
+                with mock.patch.object(asset_rpc, "LEASE_MAX_FILES", 2):
+                    first = asset_rpc._lease_materialized(
+                        {**payload, "path": first_source.as_posix()}
+                    )
+                    with self.assertRaisesRegex(RuntimeError, "byte limit"):
+                        asset_rpc._lease_materialized(
+                            {**payload, "path": second_source.as_posix()}
+                        )
+                    Path(first["path"]).unlink()
+
+
+class MaterializeEntryValidationTests(unittest.TestCase):
+    def test_current_server_entry_replaces_supplied_metadata(self) -> None:
+        current = AssetEntry(
+            volume="comfy-inputs",
+            path="asset.png",
+            name="asset.png",
+            kind="file",
+            size=42,
+            modified_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            media_type="image",
+        )
+        manager = mock.Mock()
+        manager._find_entry.return_value = current
+
+        with mock.patch.object(asset_rpc, "MANAGER", manager):
+            result = asset_rpc._entry_from_params(
+                {
+                    "volume": "comfy-inputs",
+                    "path": "asset.png",
+                    "name": "stale.html",
+                    "modified_at": "2025-01-01T00:00:00+00:00",
+                    "size": 1,
+                    "kind": "file",
+                }
+            )
+
+        self.assertIs(result, current)
+        manager._find_entry.assert_called_once_with("comfy-inputs", "asset.png")
+
+    def test_deleted_asset_never_reaches_cached_materialization(self) -> None:
+        manager = mock.Mock()
+        manager._find_entry.side_effect = FileNotFoundError("asset does not exist")
+
+        with (
+            mock.patch.object(asset_rpc, "MANAGER", manager),
+            mock.patch.object(asset_rpc, "_materialize_for_stream") as materialize,
+        ):
+            for thumbnail in (False, True):
+                with self.subTest(thumbnail=thumbnail):
+                    response = asset_rpc.handle(
+                        {
+                            "id": 1,
+                            "method": "materialize",
+                            "params": {
+                                "volume": "comfy-inputs",
+                                "path": "deleted.png",
+                                "name": "deleted.png",
+                                "modified_at": "2025-01-01T00:00:00+00:00",
+                                "kind": "file",
+                                "thumbnail": thumbnail,
+                            },
+                        }
+                    )
+                    self.assertFalse(response["ok"])
+
+        materialize.assert_not_called()
+
 
 class QueueShutdownTests(unittest.TestCase):
     def test_waits_for_in_progress_work_after_queue_becomes_empty(self) -> None:

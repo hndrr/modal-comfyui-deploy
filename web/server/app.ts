@@ -33,6 +33,13 @@ export type AppDeps = {
 const DEFAULT_MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_UPLOAD_TOTAL_BYTES = 20 * 1024 * 1024 * 1024;
 const UPLOAD_FIELDS = new Set(["volume", "destination", "overwrite"]);
+const BLOCKED_INLINE_MEDIA_TYPES = new Set([
+  "text/html",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "application/xml",
+  "text/xml",
+]);
 
 function envByteLimit(name: string, fallback: number): number {
   const parsed = Number(process.env[name]);
@@ -399,33 +406,19 @@ export function createApp(deps: AppDeps = {}) {
       const remotePath = c.req.query("path");
       if (!volume || !remotePath) throw new Error("volume and path are required");
       const download = c.req.query("download") === "true" || c.req.query("download") === "1";
-      // Optional metadata from list response skips a re-listdir on the Python side.
-      const entryMeta = {
-        name: c.req.query("name") ?? undefined,
-        kind: c.req.query("kind") ?? undefined,
-        size: c.req.query("size") ? Number(c.req.query("size")) : undefined,
-        modified_at: c.req.query("modified_at") ?? undefined,
-        media_type: c.req.query("media_type") ?? undefined,
-      };
-      const hasMeta = Boolean(entryMeta.modified_at && entryMeta.kind);
-      const file = await manager.materialize(volume, remotePath, {
-        entry: hasMeta
-          ? {
-              volume,
-              path: remotePath,
-              name: entryMeta.name || remotePath.split("/").pop() || remotePath,
-              kind: (entryMeta.kind as "file" | "directory" | "symlink") || "file",
-              size: entryMeta.size || 0,
-              modified_at: entryMeta.modified_at || new Date(0).toISOString(),
-              media_type: entryMeta.media_type || "file",
-              is_directory: entryMeta.kind === "directory",
-            }
-          : null,
-      });
+      const file = await manager.materialize(volume, remotePath);
+      const mediaType = file.mediaType.split(";", 1)[0].trim().toLowerCase();
+      if (!download && BLOCKED_INLINE_MEDIA_TYPES.has(mediaType)) {
+        await cleanupMaterializedFile(file);
+        throw new HTTPException(415, {
+          message: `Inline preview is not allowed for ${mediaType}.`,
+        });
+      }
       return await streamFileResponse(
         file.localPath,
         {
           "Content-Type": file.mediaType,
+          "X-Content-Type-Options": "nosniff",
           ...(download
             ? {
                 "Content-Disposition": attachmentContentDisposition(file.name),
@@ -449,35 +442,11 @@ export function createApp(deps: AppDeps = {}) {
       const volume = c.req.query("volume");
       const remotePath = c.req.query("path");
       if (!volume || !remotePath) throw new Error("volume and path are required");
-      const mediaType = c.req.query("media_type") ?? "image";
-      if (mediaType !== "image" && mediaType !== "video") {
-        throw new Error("Thumbnails are only available for images and videos.");
-      }
-      const entryMeta = {
-        name: c.req.query("name") ?? undefined,
-        kind: c.req.query("kind") ?? "file",
-        size: c.req.query("size") ? Number(c.req.query("size")) : 0,
-        modified_at: c.req.query("modified_at") ?? undefined,
-        media_type: mediaType,
-      };
-      const hasMeta = Boolean(entryMeta.modified_at);
       const file = await manager.materialize(volume, remotePath, {
         imageOnly: true,
-        entry: hasMeta
-          ? {
-              volume,
-              path: remotePath,
-              name: entryMeta.name || remotePath.split("/").pop() || remotePath,
-              kind: "file",
-              size: entryMeta.size || 0,
-              modified_at: entryMeta.modified_at || new Date(0).toISOString(),
-              media_type: mediaType,
-              is_directory: false,
-            }
-          : null,
       });
-      // ETag from durable cache key (volume+path+mtime+size+thumb size).
-      const etagSource = `${volume}:${remotePath}:${entryMeta.modified_at ?? ""}:${entryMeta.size}:${file.size}`;
+      // The Python worker derives this identity from current server-side metadata.
+      const etagSource = file.etag ?? `${volume}:${remotePath}:${file.size}`;
       const etag = createAssetEtag(etagSource);
       const inm = c.req.header("if-none-match");
       if (inm && inm === etag) {
@@ -494,6 +463,7 @@ export function createApp(deps: AppDeps = {}) {
         file.localPath,
         {
           "Content-Type": file.mediaType || "image/jpeg",
+          "X-Content-Type-Options": "nosniff",
           "Cache-Control": "private, max-age=604800, immutable",
           ETag: etag,
         },
