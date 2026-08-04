@@ -14,3 +14,14 @@ uv.lock
 
 .env
 comfy-docker
+
+# Asset manager web UI
+web/node_modules/
+web/dist/
+web/server-dist/
+web/.cache/
+
+# Cloudflare Access proxy worker
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars
