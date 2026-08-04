@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { parseHumanSize, sortEntries } from "../lib/assetManager.js";
+import { describe, expect, it, vi } from "vitest";
+import { AssetManager, parseHumanSize, sortEntries } from "../lib/assetManager.js";
 import { normalizeVolumePath } from "../lib/paths.js";
+import type { PythonAssetBridge } from "../lib/pythonBridge.js";
 import type { AssetEntry } from "../lib/types.js";
 
 describe("path validation", () => {
@@ -17,6 +18,34 @@ describe("parseHumanSize", () => {
     expect(parseHumanSize("0 B")).toBe(0);
     expect(parseHumanSize("80.8 KiB")).toBe(Math.round(80.8 * 1024));
     expect(parseHumanSize("1.5 MiB")).toBe(Math.round(1.5 * 1024 * 1024));
+  });
+});
+
+describe("materialize stream leases", () => {
+  it("requests a separate lease for each concurrent consumer", async () => {
+    let sequence = 0;
+    const call = vi.fn(async () => {
+      sequence += 1;
+      return {
+        path: `/tmp/lease-${sequence}`,
+        name: "video.mp4",
+        media_type: "video/mp4",
+        size: 10,
+        cleanup: true,
+      };
+    });
+    const manager = new AssetManager({
+      bridge: { call } as unknown as PythonAssetBridge,
+    });
+
+    const [first, second] = await Promise.all([
+      manager.materialize("comfy-inputs", "video.mp4"),
+      manager.materialize("comfy-inputs", "video.mp4"),
+    ]);
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(first.localPath).not.toBe(second.localPath);
+    expect(first.cleanupAfterStream).toBe(true);
   });
 });
 

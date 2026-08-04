@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   attachmentContentDisposition,
@@ -42,6 +44,115 @@ describe("download filenames", () => {
       "filename*=UTF-8''%E7%94%9F%E6%88%90%E7%B5%90%E6%9E%9C%20%28%E6%9C%80%E7%B5%82%29.png",
     );
     expect(disposition).not.toContain("生成結果");
+  });
+});
+
+describe("asset streaming", () => {
+  async function fixture(contents = "0123456789") {
+    const directory = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "asset-stream-test-"),
+    );
+    const localPath = path.join(directory, "video.mp4");
+    await fs.promises.writeFile(localPath, contents);
+    const materialize = vi.fn(async () => ({
+      localPath,
+      name: "video.mp4",
+      mediaType: "video/mp4",
+      size: Buffer.byteLength(contents),
+      cleanupAfterStream: true,
+    }));
+    const app = createApp({
+      manager: { materialize } as unknown as AssetManager,
+    });
+    return { app, directory, localPath };
+  }
+
+  async function expectRemoved(localPath: string): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        await fs.promises.access(localPath);
+      } catch {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`Expected stream lease to be removed: ${localPath}`);
+  }
+
+  it("sets the full response length and removes the stream lease", async () => {
+    const { app, directory, localPath } = await fixture();
+    try {
+      const response = await app.request(
+        "/api/assets/content?volume=comfy-inputs&path=video.mp4",
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("accept-ranges")).toBe("bytes");
+      expect(response.headers.get("content-length")).toBe("10");
+      expect(await response.text()).toBe("0123456789");
+      await expectRemoved(localPath);
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serves a byte range with a 206 response", async () => {
+    const { app, directory, localPath } = await fixture();
+    try {
+      const response = await app.request(
+        "/api/assets/content?volume=comfy-inputs&path=video.mp4",
+        { headers: { Range: "bytes=2-5" } },
+      );
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-range")).toBe("bytes 2-5/10");
+      expect(response.headers.get("content-length")).toBe("4");
+      expect(await response.text()).toBe("2345");
+      await expectRemoved(localPath);
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 416 and removes the lease for an unsatisfiable range", async () => {
+    const { app, directory, localPath } = await fixture();
+    try {
+      const response = await app.request(
+        "/api/assets/content?volume=comfy-inputs&path=video.mp4",
+        { headers: { Range: "bytes=20-30" } },
+      );
+
+      expect(response.status).toBe(416);
+      expect(response.headers.get("content-range")).toBe("bytes */10");
+      await expectRemoved(localPath);
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes an unused thumbnail lease on a 304 response", async () => {
+    const { app, directory, localPath } = await fixture();
+    const modifiedAt = "2026-08-05T00:00:00.000Z";
+    const etag = createAssetEtag(
+      `comfy-inputs:video.mp4:${modifiedAt}:10:10`,
+    );
+    const query = new URLSearchParams({
+      volume: "comfy-inputs",
+      path: "video.mp4",
+      media_type: "video",
+      modified_at: modifiedAt,
+      size: "10",
+    });
+    try {
+      const response = await app.request(`/api/assets/thumbnail?${query}`, {
+        headers: { "If-None-Match": etag },
+      });
+
+      expect(response.status).toBe(304);
+      await expectRemoved(localPath);
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
   });
 });
 
