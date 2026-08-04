@@ -9,6 +9,7 @@ import {
 } from "../app.js";
 import type { AssetManager } from "../lib/assetManager.js";
 import { assertLoopbackHost, isLoopbackHost } from "../lib/host.js";
+import type { MaterializedFile } from "../lib/types.js";
 
 describe("local-only server binding", () => {
   it("accepts loopback addresses and rejects every non-loopback address", () => {
@@ -48,7 +49,10 @@ describe("download filenames", () => {
 });
 
 describe("asset streaming", () => {
-  async function fixture(contents = "0123456789") {
+  async function fixture(
+    contents = "0123456789",
+    overrides: Partial<MaterializedFile> = {},
+  ) {
     const directory = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "asset-stream-test-"),
     );
@@ -60,6 +64,7 @@ describe("asset streaming", () => {
       mediaType: "video/mp4",
       size: Buffer.byteLength(contents),
       cleanupAfterStream: true,
+      ...overrides,
     }));
     const app = createApp({
       manager: { materialize } as unknown as AssetManager,
@@ -89,6 +94,7 @@ describe("asset streaming", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("accept-ranges")).toBe("bytes");
       expect(response.headers.get("content-length")).toBe("10");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
       expect(await response.text()).toBe("0123456789");
       await expectRemoved(localPath);
     } finally {
@@ -132,16 +138,11 @@ describe("asset streaming", () => {
 
   it("removes an unused thumbnail lease on a 304 response", async () => {
     const { app, directory, localPath } = await fixture();
-    const modifiedAt = "2026-08-05T00:00:00.000Z";
-    const etag = createAssetEtag(
-      `comfy-inputs:video.mp4:${modifiedAt}:10:10`,
-    );
+    const etag = createAssetEtag("comfy-inputs:video.mp4:10");
     const query = new URLSearchParams({
       volume: "comfy-inputs",
       path: "video.mp4",
       media_type: "video",
-      modified_at: modifiedAt,
-      size: "10",
     });
     try {
       const response = await app.request(`/api/assets/thumbnail?${query}`, {
@@ -149,6 +150,38 @@ describe("asset streaming", () => {
       });
 
       expect(response.status).toBe(304);
+      await expectRemoved(localPath);
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a client-supplied filename when selecting Content-Type", async () => {
+    const { app, directory } = await fixture();
+    try {
+      const response = await app.request(
+        "/api/assets/content?volume=comfy-inputs&path=video.mp4&name=attack.html",
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("video/mp4");
+      await response.arrayBuffer();
+    } finally {
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects executable inline media and removes its lease", async () => {
+    const { app, directory, localPath } = await fixture("<script></script>", {
+      name: "attack.html",
+      mediaType: "text/html",
+    });
+    try {
+      const response = await app.request(
+        "/api/assets/content?volume=comfy-inputs&path=attack.html",
+      );
+
+      expect(response.status).toBe(415);
       await expectRemoved(localPath);
     } finally {
       await fs.promises.rm(directory, { recursive: true, force: true });

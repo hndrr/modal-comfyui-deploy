@@ -31,6 +31,7 @@ describe("materialize stream leases", () => {
         name: "video.mp4",
         media_type: "video/mp4",
         size: 10,
+        etag: "trusted-cache-key",
         cleanup: true,
       };
     });
@@ -45,6 +46,7 @@ describe("materialize stream leases", () => {
 
     expect(call).toHaveBeenCalledTimes(2);
     expect(first.localPath).not.toBe(second.localPath);
+    expect(first.etag).toBe("trusted-cache-key");
     expect(first.cleanupAfterStream).toBe(true);
   });
 });
