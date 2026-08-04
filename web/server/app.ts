@@ -1,10 +1,13 @@
+import Busboy from "busboy";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { AssetManager, defaultAssetManager } from "./lib/assetManager.js";
 import {
@@ -22,11 +25,186 @@ const DIST_DIR = path.join(WEB_ROOT, "dist");
 
 export type AppDeps = {
   manager?: AssetManager;
+  maxUploadFileBytes?: number;
+  maxUploadTotalBytes?: number;
 };
 
+const DEFAULT_MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_UPLOAD_TOTAL_BYTES = 20 * 1024 * 1024 * 1024;
+const UPLOAD_FIELDS = new Set(["volume", "destination", "overwrite"]);
+
+function envByteLimit(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function requirePositiveByteLimit(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive safe integer.`);
+  }
+  return value;
+}
+
 function httpError(error: unknown, status: ContentfulStatusCode = 400): HTTPException {
+  if (error instanceof HTTPException) return error;
   const message = error instanceof Error ? error.message : String(error);
   return new HTTPException(status, { message });
+}
+
+function payloadTooLarge(message: string): HTTPException {
+  return new HTTPException(413, { message });
+}
+
+export function createAssetEtag(source: string): string {
+  return `"${createHash("sha256").update(source).digest("base64url")}"`;
+}
+
+async function parseAndStageUpload(
+  request: Request,
+  tmpDir: string,
+  maxFileBytes: number,
+  maxTotalBytes: number,
+): Promise<{
+  volume: string;
+  destination: string;
+  overwrite: boolean;
+  localPaths: string[];
+}> {
+  if (!request.body) throw new Error("Upload request body is required.");
+
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxTotalBytes) {
+    throw payloadTooLarge(
+      `Upload request exceeds the ${maxTotalBytes}-byte limit.`,
+    );
+  }
+
+  const parser = Busboy({
+    headers: Object.fromEntries(request.headers.entries()),
+    defParamCharset: "utf8",
+    limits: {
+      fieldSize: 4096,
+      fields: 3,
+      fileSize: maxFileBytes,
+      files: 100,
+      parts: 103,
+    },
+  });
+  const fields = new Map<string, string>();
+  const stagedNames = new Set<string>();
+  const localPaths: string[] = [];
+  const writes: Promise<void>[] = [];
+  let parseError: Error | null = null;
+
+  const recordError = (error: unknown) => {
+    if (!parseError) {
+      parseError = error instanceof Error ? error : new Error(String(error));
+    }
+  };
+
+  parser.on("field", (name, value, info) => {
+    if (info.valueTruncated) {
+      recordError(new Error(`Upload field is too large: ${name}`));
+      return;
+    }
+    if (!UPLOAD_FIELDS.has(name)) return;
+    if (fields.has(name)) {
+      recordError(new Error(`Duplicate upload field: ${name}`));
+      return;
+    }
+    fields.set(name, value);
+  });
+
+  parser.on("file", (fieldName, stream, info) => {
+    if (fieldName !== "files") {
+      recordError(new Error(`Unexpected upload file field: ${fieldName}`));
+      stream.resume();
+      return;
+    }
+
+    const safeName = path.basename(info.filename || "upload.bin");
+    if (!safeName || safeName === "." || safeName === "..") {
+      recordError(new Error("Invalid upload filename."));
+      stream.resume();
+      return;
+    }
+    if (stagedNames.has(safeName)) {
+      recordError(
+        new Error(
+          `Duplicate upload filename in one request: ${safeName}. Rename or upload separately.`,
+        ),
+      );
+      stream.resume();
+      return;
+    }
+    stagedNames.add(safeName);
+
+    const stageDir = fs.mkdtempSync(path.join(tmpDir, "f-"));
+    const localPath = path.join(stageDir, safeName);
+    stream.once("limit", () => {
+      recordError(
+        payloadTooLarge(
+          `Upload file ${safeName} exceeds the ${maxFileBytes}-byte limit.`,
+        ),
+      );
+    });
+    writes.push(
+      pipeline(stream, fs.createWriteStream(localPath, { flags: "wx" })).catch(
+        recordError,
+      ),
+    );
+    localPaths.push(localPath);
+  });
+
+  parser.once("filesLimit", () =>
+    recordError(payloadTooLarge("Upload contains too many files.")),
+  );
+  parser.once("fieldsLimit", () =>
+    recordError(new Error("Upload contains too many fields.")),
+  );
+  parser.once("partsLimit", () =>
+    recordError(payloadTooLarge("Upload contains too many multipart sections.")),
+  );
+
+  let received = 0;
+  const requestLimiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      received += chunk.length;
+      if (received > maxTotalBytes) {
+        callback(
+          payloadTooLarge(
+            `Upload request exceeds the ${maxTotalBytes}-byte limit.`,
+          ),
+        );
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(
+      Readable.from(request.body as AsyncIterable<Uint8Array>),
+      requestLimiter,
+      parser,
+    );
+  } catch (error) {
+    recordError(error);
+  }
+  await Promise.all(writes);
+  if (parseError) throw parseError;
+  if (!localPaths.length) throw new Error("Select at least one file to upload.");
+
+  const overwriteRaw = fields.get("overwrite") ?? "";
+  return {
+    volume: fields.get("volume") ?? "",
+    destination: fields.get("destination") ?? "",
+    overwrite:
+      overwriteRaw === "true" ||
+      overwriteRaw === "1" ||
+      overwriteRaw.toLowerCase() === "on",
+    localPaths,
+  };
 }
 
 /** Stream a local file without buffering the whole asset in memory. */
@@ -41,6 +219,16 @@ function streamFileResponse(
 
 export function createApp(deps: AppDeps = {}) {
   const manager = deps.manager ?? defaultAssetManager;
+  const maxUploadFileBytes = requirePositiveByteLimit(
+    deps.maxUploadFileBytes ??
+      envByteLimit("ASSET_UPLOAD_MAX_FILE_BYTES", DEFAULT_MAX_UPLOAD_FILE_BYTES),
+    "maxUploadFileBytes",
+  );
+  const maxUploadTotalBytes = requirePositiveByteLimit(
+    deps.maxUploadTotalBytes ??
+      envByteLimit("ASSET_UPLOAD_MAX_TOTAL_BYTES", DEFAULT_MAX_UPLOAD_TOTAL_BYTES),
+    "maxUploadTotalBytes",
+  );
   const app = new Hono();
 
   app.use(
@@ -177,7 +365,7 @@ export function createApp(deps: AppDeps = {}) {
       });
       // ETag from durable cache key (volume+path+mtime+size+thumb size).
       const etagSource = `${volume}:${remotePath}:${entryMeta.modified_at ?? ""}:${entryMeta.size}:${file.size}`;
-      const etag = `"${Buffer.from(etagSource).toString("base64url").slice(0, 48)}"`;
+      const etag = createAssetEtag(etagSource);
       const inm = c.req.header("if-none-match");
       if (inm && inm === etag) {
         return new Response(null, {
@@ -200,60 +388,35 @@ export function createApp(deps: AppDeps = {}) {
     }
   });
 
-  app.post("/api/assets/upload", async (c) => {
-    try {
-      const body = await c.req.parseBody({ all: true });
-      const volume = String(body.volume ?? "");
-      const destination = String(body.destination ?? "");
-      const overwriteRaw = body.overwrite;
-      const overwrite =
-        overwriteRaw === "true" ||
-        overwriteRaw === "1" ||
-        (typeof overwriteRaw === "string" && overwriteRaw.toLowerCase() === "on");
-
-      const filesField = body.files;
-      const fileList = Array.isArray(filesField)
-        ? filesField
-        : filesField
-          ? [filesField]
-          : [];
-      if (!fileList.length) throw new Error("Select at least one file to upload.");
-
-      const tmpDir = await fs.promises.mkdtemp(path.join(path.dirname(DIST_DIR), ".upload-"));
+  app.post(
+    "/api/assets/upload",
+    async (c) => {
       try {
-        const localPaths: string[] = [];
-        const stagedNames = new Set<string>();
-        for (const item of fileList) {
-          if (typeof item === "string" || !item || typeof item !== "object") {
-            throw new Error("Invalid upload payload.");
-          }
-          const file = item as File;
-          const safeName = path.basename(file.name || "upload.bin");
-          if (!safeName || safeName === "." || safeName === "..") {
-            throw new Error("Invalid upload filename.");
-          }
-          if (stagedNames.has(safeName)) {
-            throw new Error(
-              `Duplicate upload filename in one request: ${safeName}. Rename or upload separately.`,
-            );
-          }
-          stagedNames.add(safeName);
-          // Stage each file in its own subdir so basename collisions cannot clobber.
-          const stageDir = await fs.promises.mkdtemp(path.join(tmpDir, "f-"));
-          const localPath = path.join(stageDir, safeName);
-          const buffer = Buffer.from(await file.arrayBuffer());
-          await fs.promises.writeFile(localPath, buffer);
-          localPaths.push(localPath);
+        const tmpDir = await fs.promises.mkdtemp(
+          path.join(path.dirname(DIST_DIR), ".upload-"),
+        );
+        try {
+          const upload = await parseAndStageUpload(
+            c.req.raw,
+            tmpDir,
+            maxUploadFileBytes,
+            maxUploadTotalBytes,
+          );
+          const result = await manager.upload(
+            upload.volume,
+            upload.destination,
+            upload.localPaths,
+            upload.overwrite,
+          );
+          return c.json(result);
+        } finally {
+          await fs.promises.rm(tmpDir, { recursive: true, force: true });
         }
-        const result = await manager.upload(volume, destination, localPaths, overwrite);
-        return c.json(result);
-      } finally {
-        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      } catch (error) {
+        throw httpError(error, 400);
       }
-    } catch (error) {
-      throw httpError(error, 400);
-    }
-  });
+    },
+  );
 
   app.post("/api/assets/move", async (c) => {
     try {

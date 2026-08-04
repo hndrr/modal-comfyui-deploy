@@ -536,6 +536,10 @@ def _delete_one_with_retry(
         try:
             MANAGER.delete_asset(volume, item_path, recursive=recursive)
             return ("ok", item_path, None)
+        except FileNotFoundError:
+            # Deletion is idempotent: another worker (or an earlier attempt whose
+            # response was lost) may already have removed the asset.
+            return ("ok", item_path, None)
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
             # Back off briefly; Modal often recovers after concurrent pressure.
