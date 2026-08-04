@@ -86,21 +86,38 @@ Cloudflare のドキュメントは、オリジンがすでに公開されてい
 
 ### 3. WebSocket を透過する
 
-ComfyUI はブラウザとの状態同期に `/ws` を使うため、`Upgrade: websocket` のリクエストを転送できる必要がある。
+ComfyUI はブラウザとの状態同期に `/ws` を使う。ここが構成全体で一番はまりやすい。**守るべき規則は 2 つ**で、どちらも破ると「101 は返るのにフレームが流れない」という同じ症状になる。
 
 ```ts
-const upstream = await fetch(upstreamRequest);
-if (upstream.webSocket) {
-  return new Response(null, { status: 101, webSocket: upstream.webSocket });
-}
+const headers = buildUpstreamHeaders(request, env);
+
+// (1) ブラウザのハンドシェイク用ヘッダーは持ち越さない
+headers.delete("Sec-WebSocket-Key");
+headers.delete("Sec-WebSocket-Version");
+headers.delete("Sec-WebSocket-Extensions");
+headers.delete("Connection");
+headers.set("Upgrade", "websocket");
+
+const upstream = await fetch(new Request(upstreamUrl, { method: "GET", headers }));
+
+// (2) upstream の Response をそのまま返す
 return upstream;
 ```
 
-パススルーなので Worker 側で `accept()` は呼ばない。呼ぶと Worker が接続を終端してしまい、ブラウザまでフレームが届かなくなる。
+**(1) `Sec-WebSocket-*` を上流へコピーしない。**
+workerd は `Upgrade: websocket` を見て自前でハンドシェイクを行う。ブラウザの `Sec-WebSocket-Key` などをコピーするとそれと衝突し、`101 Switching Protocols` は返るのに 1 フレームも流れないソケットができる。Cloudflare の例が `headers: { Upgrade: "websocket" }` だけを渡しているのはこのためである。
 
-ヘッダーをコピーし直す過程で `Upgrade` が落ちるかどうかは runtime の挙動に依存するため、アップグレード要求を検出した場合は転送用ヘッダーに `Upgrade: websocket` を明示的に付け直している。
+**(2) ソケットを取り出して包み直さない。**
+`new Response(null, { status: 101, webSocket: upstream.webSocket })` と書くと、その瞬間から Worker がソケットの保持者になる。stateless Worker はレスポンスを返した時点で実行コンテキストが終わるため、保持したソケットは破棄され `Error: Network connection lost.` を出して 0.5 秒ほどで切れる。**`ctx.waitUntil()` を使っても延命できない。** `WebSocketPair` を作って Worker がフレームを中継する実装も同じ理由で失敗する（能動的な中継が必要なら Durable Object を使う）。upstream の Response を素通しすれば Worker は何も保持せず、runtime がブラウザと Modal を直結する。
 
-Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合は、そのレスポンスをそのままブラウザへ返す。
+Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合は、そのレスポンスがそのままブラウザへ返る。
+
+なお **Modal の Proxy Auth は WebSocket でも問題なく動く**（公式ドキュメントには明記がないが、`Modal-Key` / `Modal-Secret` 付きで 101 が返り、接続も維持されることを実測で確認した）。
+
+#### 切れているかどうかの見分け方
+
+- ブラウザの DevTools → Network → WS で、**`/ws?clientId=...` とクエリ付きで再接続していれば正常**。ComfyUI は初回接続で受け取った `sid` を以降 `clientId` として付けるため、クエリ無しの `/ws` が 1 秒間隔で並んでいたらフレームが 1 つも届いていない。
+- Worker のログ（`npm run tail` または observability）で `GET /ws` の `wallTimeMs` を見る。接続が維持されていれば実行は終わらないので**完了イベント自体が出ない**。数百 ms で完了し続けている場合は切れている。
 
 ### 4. Location ヘッダーを書き換える
 
@@ -171,15 +188,19 @@ URL は `https://<workspace>--comfyui-ui.modal.run` になる。
 
 > ComfyUI の URL に直接 `curl` を投げると GPU コンテナがコールドスタートして課金対象になる。到達確認は手順 8 の 401 チェックで行えばよい（401 は Modal のエッジが返すため、コンテナは起動しない）。
 
-### 3. Google を Identity provider として追加する
+### 3.（任意）Google を Identity provider として追加する
 
-One-time PIN のみでよい場合はこの手順を飛ばせる。One-time PIN は Cloudflare 標準機能で、既定で有効になっている。
+**この手順は省略できる。** One-time PIN は Cloudflare 標準機能で既定から使えるため、個人利用ならこれだけで足りる。実際の構築でも One-time PIN のみで運用している。
+
+Google ログインも使いたくなった場合は、後から追加しても Access アプリを作り直す必要はない（IdP を登録し、アプリの Login methods に足すだけ）。
 
 Google Cloud Console で OAuth 2.0 クライアント ID を作成する。
 
 - 承認済みのリダイレクト URI: `https://<team-name>.cloudflareaccess.com/cdn-cgi/access/callback`
 
 Cloudflare Zero Trust → Settings → Authentication → Login methods → Add new → Google に、発行された Client ID と Client secret を登録する。Test を実行して成功することを確認する。
+
+IdP が 1 つだけの場合は、Access アプリ側で `auto_redirect_to_identity` を有効にすると IdP 選択画面を飛ばせる。複数登録するとこの設定は使えない。
 
 ### 4. Access アプリケーションを作成する
 
@@ -321,7 +342,9 @@ Modal の URL が変わった場合（ワークスペース名の変更など）
 | `comfy.example.com` が 403 | Access は通過したが Worker の JWT 検証に失敗している。`POLICY_AUD` と `TEAM_DOMAIN` が Access アプリの値と一致しているか確認する。`npx wrangler tail` でログを見る |
 | `comfy.example.com` が 401 | Worker が付けた `Modal-Key` / `Modal-Secret` を Modal が拒否している。シークレットが正しく登録されているか（`npx wrangler secret list`）、Modal 側でトークンが失効していないか確認する |
 | ログイン画面が出ずに ComfyUI が表示される | Access アプリのホスト名が Worker のホスト名と一致していない。Access アプリの設定を確認する |
-| 生成の進捗が更新されない | `/ws` の WebSocket が繋がっていない。DevTools → Network → WS で `101 Switching Protocols` になっているか確認する。なっていなければ Worker の Upgrade ヘッダー転送を見直す |
+| 生成の進捗が更新されない | `/ws` が繋がっていない。DevTools → Network → WS で `/ws?clientId=...` と**クエリ付きの再接続**が出ているか確認する。クエリ無しの `/ws` が 1 秒間隔で並ぶ場合はフレームが届いていないので、「WebSocket を透過する」の規則 (1)(2) を見直す |
+| ログイン後にすべて 403 になる | Worker の JWT 検証に失敗している。`npm run tail` で `Access token rejected: ...` の理由を見る。`jose` の `createRemoteJWKSet` の戻り値をモジュールスコープにキャッシュしていると 2 回目以降が必ず失敗する |
+| PWA manifest が CORS エラーになる | `<link rel="manifest">` は資格情報を送らずに取得されるため Access がログインへリダイレクトする。表示上のノイズで機能には影響しない |
 | アップロードで 413 | Cloudflare のリクエストサイズ上限。管理画面（`web/`）から Volume へ直接アップロードする |
 | 初回アクセスで 524 | Modal のコールドスタートが 100 秒を超えている。再読み込みする |
 | Modal の直 URL が 200 で開ける | `COMFYUI_REQUIRES_PROXY_AUTH=on` にした後の再デプロイを忘れている。`uv run modal deploy comfyapp.py` を実行する |
