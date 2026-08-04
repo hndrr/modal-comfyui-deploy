@@ -58,6 +58,8 @@ Modal の Proxy Auth は `fastapi_endpoint` / `asgi_app` / `wsgi_app` / `web_ser
 
 `worker/src/index.ts` は次の 4 つだけを行う。ComfyUI のパスや API を解釈しない、素通しのリバースプロキシとする。
 
+前提として、必要な設定値（`MODAL_ORIGIN` / `TEAM_DOMAIN` / `POLICY_AUD` / `MODAL_KEY` / `MODAL_SECRET`）が 1 つでも欠けている場合は、転送せずに **500** を返す。設定漏れのまま素通しさせないためである。
+
 ### 1. Access の JWT を検証する（fail-closed）
 
 `Cf-Access-Jwt-Assertion` ヘッダー、無ければ `CF_Authorization` クッキーからトークンを取り出し、`jose` で検証する。
@@ -75,6 +77,11 @@ Cloudflare のドキュメントは、オリジンがすでに公開されてい
 
 受け取った URL のパスとクエリをそのまま `MODAL_ORIGIN` へ引き継ぎ、`Modal-Key` と `Modal-Secret` を `set` で付ける。`set` なので、クライアントが同名ヘッダーを送ってきても上書きされる。
 
+あわせて次の 2 つのヘッダーを落とす。
+
+- `Host`: 受け取った値（`comfy.example.com`）を持ち越すと Modal がルーティングできないため、転送先 URL から runtime に決めさせる
+- `Cf-Access-Jwt-Assertion`: 検証済みでこの先は使わないため、ComfyUI へ渡さない
+
 リクエストボディはバッファリングせずストリームのまま透過させる。
 
 ### 3. WebSocket を透過する
@@ -89,9 +96,11 @@ if (upstream.webSocket) {
 return upstream;
 ```
 
-パススルーなので Worker 側で `accept()` は呼ばない。呼ぶと Worker が接続を終端してしまう。
+パススルーなので Worker 側で `accept()` は呼ばない。呼ぶと Worker が接続を終端してしまい、ブラウザまでフレームが届かなくなる。
 
-`new Request(url, request)` が `Upgrade` ヘッダーを保持するかは runtime の挙動に依存するため、アップグレード要求を検出したらアップストリームのリクエストに `Upgrade: websocket` を明示的に再設定する。
+ヘッダーをコピーし直す過程で `Upgrade` が落ちるかどうかは runtime の挙動に依存するため、アップグレード要求を検出した場合は転送用ヘッダーに `Upgrade: websocket` を明示的に付け直している。
+
+Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合は、そのレスポンスをそのままブラウザへ返す。
 
 ### 4. Location ヘッダーを書き換える
 
@@ -99,26 +108,47 @@ return upstream;
 
 ## 設定値
 
-`worker/wrangler.jsonc` の `vars` に置くもの。秘密情報ではない。
+**`worker/wrangler.jsonc` には環境固有の値を一切書かない。** リポジトリを公開しても、ワークスペース名・ドメイン・Team domain が漏れないようにするためである。
 
-| 変数 | 例 | 取得元 |
+そのため設定値は 5 つとも `wrangler secret put` で登録する。secret は Cloudflare 側に保存され、設定ファイルに書かれていなくてもデプロイで消えない（Cloudflare のドキュメントに *Secrets not included in the file are preserved from the previous version* と明記されている）。
+
+| 名前 | 例 / 形式 | 取得元 |
 | --- | --- | --- |
-| `MODAL_ORIGIN` | `https://<workspace>--comfyui-ui.modal.run` | `uv run modal deploy comfyapp.py` の出力、または `uv run modal app list` |
+| `MODAL_ORIGIN` | `https://<workspace>--comfyui-ui.modal.run` | `uv run modal deploy comfyapp.py` の出力。ワークスペース名は `uv run modal profile current` で確認できる |
 | `TEAM_DOMAIN` | `https://<team-name>.cloudflareaccess.com` | Zero Trust → Settings → Custom Pages の Team domain |
 | `POLICY_AUD` | 64 桁の 16 進文字列 | Access アプリの Overview にある Application Audience (AUD) Tag |
-
-`wrangler secret put` で登録するもの。**`wrangler.jsonc` やソースコードに直接書かない。**
-
-| シークレット | 形式 | 取得元 |
-| --- | --- | --- |
 | `MODAL_KEY` | `wk-` 始まり | Modal ダッシュボード → Settings → Proxy Auth Tokens の Token ID |
 | `MODAL_SECRET` | `ws-` 始まり | 同上の Token Secret（作成時のみ表示される） |
 
-ローカルで `wrangler dev` を動かす場合は `worker/.dev.vars`（gitignore 済み）に `MODAL_KEY` / `MODAL_SECRET` を書く。`worker/.dev.vars.example` をコピーして使う。
+`MODAL_ORIGIN` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」だが、Wrangler は `vars` を設定ファイル以外から与える手段を持たないため、secret にまとめている。
+
+接続先ホスト名（`comfy.example.com`）も `wrangler.jsonc` に書かず、Cloudflare ダッシュボードで Custom Domain として登録する。Cloudflare のドキュメントは *To manage routes via the Cloudflare dashboard only, remove any route and routes keys from your Wrangler configuration file* としており、`routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
+
+ローカルで `wrangler dev` を動かす場合は、同じ 5 つを `worker/.dev.vars`（gitignore 済み）に書く。`worker/.dev.vars.example` をコピーして使う。
+
+```bash
+cd worker
+cp .dev.vars.example .dev.vars
+```
+
+### npm スクリプト
+
+`worker/` で使えるコマンド。
+
+| コマンド | 内容 |
+| --- | --- |
+| `npm run dev` | ローカルで Worker を起動する（`wrangler dev`） |
+| `npm run deploy` | Cloudflare へデプロイする（`wrangler deploy`） |
+| `npm run tail` | 本番の Worker のログを追う（`wrangler tail`） |
+| `npm run typecheck` | 型チェック（`tsc --noEmit`） |
 
 ## セットアップ手順
 
-**この順序で実行する。** 途中で無防備な URL が公開される時間帯を作らないための順序になっている。`comfy.example.com` の DNS レコードは手順 6 で初めて作られるため、それ以前にホスト名へ到達する経路は存在しない。
+**この順序で実行する。** Cloudflare 側を先に完成させ、経路が通ったことを確認してから Modal の直 URL を閉じる。
+
+こうすると切り替え中も ComfyUI を使い続けられる。Worker を先にデプロイしても、Modal がまだ Proxy Auth を要求していないだけで Worker 自体は正常に動くため、最後の手順 8 で無停止に切り替わる。
+
+Worker は最初のデプロイ時点ではホスト名を持たず、`workers.dev` と Preview URL も無効なので、手順 7 まで外部から到達できる経路は存在しない。
 
 ### 1. Modal の Proxy Auth トークンを作成する
 
@@ -126,33 +156,20 @@ Modal ダッシュボード → Settings → Proxy Auth Tokens → 新規作成�
 
 Token ID（`wk-` 始まり）と Token Secret（`ws-` 始まり）を控える。Secret は作成時にしか表示されない。
 
-### 2. Modal 側を Proxy Auth 必須にする
+この時点では Modal 側の設定は変更しない。ComfyUI は従来どおり直 URL で使える。
 
-`.env` に次を書く。
+### 2. 接続先の URL を確認する
 
-```bash
-COMFYUI_REQUIRES_PROXY_AUTH=on
-```
-
-デプロイする。
+Worker に渡す `MODAL_ORIGIN` を控える。
 
 ```bash
-uv run modal deploy comfyapp.py
+uv run modal profile current   # ワークスペース名
+uv run modal app list          # comfyui が deployed であること
 ```
 
-直 URL が閉じたことを確認する。
+URL は `https://<workspace>--comfyui-ui.modal.run` になる。
 
-```bash
-# 401 になること
-curl -sS -o /dev/null -w '%{http_code}\n' https://<workspace>--comfyui-ui.modal.run/
-
-# 200 になること
-curl -sS -o /dev/null -w '%{http_code}\n' \
-  -H 'Modal-Key: wk-...' -H 'Modal-Secret: ws-...' \
-  https://<workspace>--comfyui-ui.modal.run/
-```
-
-この設定はデプロイ時に決まるため、変更したら再デプロイが必要になる。
+> ComfyUI の URL に直接 `curl` を投げると GPU コンテナがコールドスタートして課金対象になる。到達確認は手順 8 の 401 チェックで行えばよい（401 は Modal のエッジが返すため、コンテナは起動しない）。
 
 ### 3. Google を Identity provider として追加する
 
@@ -175,33 +192,76 @@ Zero Trust → Access controls → Applications → Create new application → *
   - Action: `Allow`
   - Include: `Emails` → 自分のメールアドレス（複数可）
 
-作成後、アプリの Overview にある **Application Audience (AUD) Tag** をコピーする。手順 5 の `POLICY_AUD` に使う。
+作成後、アプリの Overview にある **Application Audience (AUD) Tag** をコピーする。手順 6 の `POLICY_AUD` に使う。
 
-### 5. Worker を設定する
+### 5. Worker をデプロイする
+
+Cloudflare にログインし、Worker を先にデプロイする。この時点ではホスト名が未設定なので、外部から到達できる経路は無い。
 
 ```bash
 cd worker
 npm install
-npx wrangler secret put MODAL_KEY      # wk-... を貼り付け
-npx wrangler secret put MODAL_SECRET   # ws-... を貼り付け
-```
-
-`worker/wrangler.jsonc` の次の箇所を実際の値に書き換える。
-
-- `routes[0].pattern`: `comfy.example.com`
-- `vars.MODAL_ORIGIN`
-- `vars.TEAM_DOMAIN`
-- `vars.POLICY_AUD`
-
-### 6. Worker をデプロイする
-
-```bash
+npx wrangler login
 npx wrangler deploy
 ```
 
-Custom Domain として登録されるため、DNS レコードと証明書は Cloudflare が自動で作成する。
+### 6. 設定値を secret として登録する
+
+`wrangler.jsonc` は編集しない。5 つとも対話入力で登録する。
+
+```bash
+npx wrangler secret put MODAL_ORIGIN    # https://<workspace>--comfyui-ui.modal.run
+npx wrangler secret put TEAM_DOMAIN     # https://<team-name>.cloudflareaccess.com
+npx wrangler secret put POLICY_AUD      # 手順 4 でコピーした AUD タグ
+npx wrangler secret put MODAL_KEY       # wk-... を貼り付け
+npx wrangler secret put MODAL_SECRET    # ws-... を貼り付け
+```
+
+`wrangler secret put` は登録のたびに新しいバージョンを作ってデプロイするため、この後の `wrangler deploy` は不要である。
+
+登録済みの名前は次で確認できる（値は表示されない）。
+
+```bash
+npx wrangler secret list
+```
+
+### 7. ホスト名を割り当てる
+
+Cloudflare ダッシュボード → Workers & Pages → `comfyui-access-proxy` → Settings → Domains & Routes → Add → Custom Domain で `comfy.example.com` を登録する。
+
+DNS レコードと証明書は Cloudflare が自動で作成する。`wrangler.jsonc` に `routes` キーが無いため、以降の `wrangler deploy` でこの設定が上書きされることはない。
 
 ブラウザで `https://comfy.example.com` を開き、Cloudflare のログイン画面 → 認証 → ComfyUI が表示されることを確認する。
+
+### 8. Modal 直 URL を閉じる
+
+Cloudflare 経由で ComfyUI が開けることを確認してから、最後に直 URL を閉じる。
+
+`.env` に次を書く。
+
+```bash
+COMFYUI_REQUIRES_PROXY_AUTH=on
+```
+
+デプロイする。この設定はデプロイ時に決まるため、変更したら再デプロイが必要になる。
+
+```bash
+uv run modal deploy comfyapp.py
+```
+
+直 URL が閉じ、Worker 経由は通ることを確認する。
+
+```bash
+# 401 になること（Modal のエッジが返すためコンテナは起動しない）
+curl -sS -o /dev/null -w '%{http_code}\n' https://<workspace>--comfyui-ui.modal.run/
+
+# 200 になること
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H 'Modal-Key: wk-...' -H 'Modal-Secret: ws-...' \
+  https://<workspace>--comfyui-ui.modal.run/
+```
+
+最後にブラウザで `https://comfy.example.com` を再読み込みし、ComfyUI がそのまま使えることを確認する。
 
 ## 迂回経路を塞ぐ
 
@@ -250,7 +310,9 @@ Worker は自前の常時接続を持たないため、[アイドル時の scale
 
 ### 認証情報のローテーション
 
-Modal の Proxy Auth トークンを作り直した場合は、`wrangler secret put` で `MODAL_KEY` / `MODAL_SECRET` を上書きしてから `wrangler deploy` する。Modal 側の再デプロイは不要である。
+Modal の Proxy Auth トークンを作り直した場合は、`wrangler secret put` で `MODAL_KEY` / `MODAL_SECRET` を上書きするだけでよい。`wrangler secret put` は登録のたびに新しいバージョンをデプロイするため、`wrangler deploy` も Modal 側の再デプロイも不要である。
+
+Modal の URL が変わった場合（ワークスペース名の変更など）も同様に `wrangler secret put MODAL_ORIGIN` で更新する。
 
 ## トラブルシューティング
 
