@@ -38,14 +38,14 @@ export type BridgeCallOptions = {
   timeoutMs?: number;
 };
 
-function defaultTimeoutFor(method: string): number {
+export function defaultTimeoutFor(method: string): number {
+  const methodDefault = DEFAULT_TIMEOUT_MS[method] ?? FALLBACK_TIMEOUT_MS;
   const envDefault = process.env.COMFY_ASSET_RPC_TIMEOUT_MS;
   if (envDefault && Number.isFinite(Number(envDefault))) {
-    // Global floor override only applies when method has no specific default.
     const n = Number(envDefault);
-    return DEFAULT_TIMEOUT_MS[method] ?? n;
+    if (n > 0) return Math.max(methodDefault, n);
   }
-  return DEFAULT_TIMEOUT_MS[method] ?? FALLBACK_TIMEOUT_MS;
+  return methodDefault;
 }
 
 /**

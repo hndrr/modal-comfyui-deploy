@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { createApp, createAssetEtag } from "../app.js";
+import {
+  attachmentContentDisposition,
+  createApp,
+  createAssetEtag,
+} from "../app.js";
 import type { AssetManager } from "../lib/assetManager.js";
 import { assertLoopbackHost, isLoopbackHost } from "../lib/host.js";
 
@@ -26,6 +30,18 @@ describe("asset ETags", () => {
 
     expect(before).not.toBe(after);
     expect(before).toMatch(/^"[A-Za-z0-9_-]{43}"$/);
+  });
+});
+
+describe("download filenames", () => {
+  it("provides an RFC 6266 UTF-8 filename parameter", () => {
+    const disposition = attachmentContentDisposition("生成結果 (最終).png");
+
+    expect(disposition).toContain('attachment; filename="');
+    expect(disposition).toContain(
+      "filename*=UTF-8''%E7%94%9F%E6%88%90%E7%B5%90%E6%9E%9C%20%28%E6%9C%80%E7%B5%82%29.png",
+    );
+    expect(disposition).not.toContain("生成結果");
   });
 });
 

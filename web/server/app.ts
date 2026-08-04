@@ -59,6 +59,19 @@ export function createAssetEtag(source: string): string {
   return `"${createHash("sha256").update(source).digest("base64url")}"`;
 }
 
+function encodeRfc5987Value(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+export function attachmentContentDisposition(fileName: string): string {
+  const fallback =
+    fileName.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_") ||
+    "download";
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeRfc5987Value(fileName)}`;
+}
+
 async function parseAndStageUpload(
   request: Request,
   tmpDir: string,
@@ -320,7 +333,7 @@ export function createApp(deps: AppDeps = {}) {
         "Content-Type": file.mediaType,
         ...(download
           ? {
-              "Content-Disposition": `attachment; filename="${file.name.replace(/"/g, "")}"`,
+              "Content-Disposition": attachmentContentDisposition(file.name),
             }
           : {}),
       });
