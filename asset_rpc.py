@@ -17,7 +17,6 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -58,6 +57,13 @@ CACHE_MAX_BYTES = max(
     int(os.getenv("COMFY_ASSET_CACHE_MAX_BYTES", str(8 * 1024 * 1024 * 1024))),
 )
 CACHE_MAX_FILES = max(64, int(os.getenv("COMFY_ASSET_CACHE_MAX_FILES", "4000")))
+# Active request-owned files are outside the evictable cache. Bound concurrent
+# leases separately; a single oversized asset is allowed when no other lease is active.
+LEASE_MAX_BYTES = max(
+    1,
+    int(os.getenv("COMFY_ASSET_LEASE_MAX_BYTES", str(CACHE_MAX_BYTES))),
+)
+LEASE_MAX_FILES = max(1, int(os.getenv("COMFY_ASSET_LEASE_MAX_FILES", "32")))
 # Modal Volume delete is rate-limited / flaky under high concurrency.
 # Keep this low (2–3). Override with ASSET_DELETE_WORKERS if needed.
 DEFAULT_DELETE_WORKERS = max(1, min(8, int(os.getenv("ASSET_DELETE_WORKERS", "4"))))
@@ -92,6 +98,7 @@ EmitFn = Callable[[dict[str, Any]], None]
 _list_cache: dict[str, tuple[float, list[AssetEntry]]] = {}
 _thumb_lock = threading.Lock()
 _thumb_inflight: dict[str, threading.Event] = {}
+_cache_lock = threading.RLock()
 
 
 def _now() -> float:
@@ -189,34 +196,100 @@ def _atomic_replace(tmp: Path, destination: Path) -> None:
 
 def _evict_cache_if_needed() -> None:
     """Drop oldest cache files when over byte/count limits."""
-    files: list[tuple[float, int, Path]] = []
-    for root in (CACHE_DIR, THUMB_DIR):
-        if not root.exists():
-            continue
-        for path in root.iterdir():
-            if not path.is_file() or path.name.endswith(".tmp") or ".tmp." in path.name:
+    with _cache_lock:
+        files: list[tuple[float, int, Path]] = []
+        for root in (CACHE_DIR, THUMB_DIR):
+            if not root.exists():
                 continue
+            for path in root.iterdir():
+                if (
+                    not path.is_file()
+                    or path.name.endswith(".tmp")
+                    or ".tmp." in path.name
+                ):
+                    continue
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                files.append((stat.st_mtime, stat.st_size, path))
+        if not files:
+            return
+        total_bytes = sum(size for _, size, _ in files)
+        count = len(files)
+        if total_bytes <= CACHE_MAX_BYTES and count <= CACHE_MAX_FILES:
+            return
+        files.sort(key=lambda item: item[0])  # oldest first
+        for _mtime, size, path in files:
+            if total_bytes <= CACHE_MAX_BYTES and count <= CACHE_MAX_FILES:
+                break
             try:
-                stat = path.stat()
+                path.unlink(missing_ok=True)
+                total_bytes -= size
+                count -= 1
             except OSError:
                 continue
-            files.append((stat.st_mtime, stat.st_size, path))
-    if not files:
-        return
-    total_bytes = sum(size for _, size, _ in files)
-    count = len(files)
-    if total_bytes <= CACHE_MAX_BYTES and count <= CACHE_MAX_FILES:
-        return
-    files.sort(key=lambda item: item[0])  # oldest first
-    for _mtime, size, path in files:
-        if total_bytes <= CACHE_MAX_BYTES and count <= CACHE_MAX_FILES:
-            break
+
+
+def _lease_materialized(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a request-owned path that cache eviction cannot remove mid-stream."""
+    source = Path(payload["path"])
+    with _cache_lock:
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        source_size = source.stat().st_size
+        active_count = 0
+        active_bytes = 0
+        for active in WORKSPACE.glob("asset-stream-*"):
+            try:
+                stat = active.stat()
+            except OSError:
+                continue
+            if stat.st_nlink > 0 and active.is_file():
+                active_count += 1
+                active_bytes += stat.st_size
+        if active_count >= LEASE_MAX_FILES:
+            raise RuntimeError(
+                f"Active stream lease file limit reached ({LEASE_MAX_FILES} files)"
+            )
+        if active_count and active_bytes + source_size > LEASE_MAX_BYTES:
+            raise RuntimeError(
+                f"Active stream lease byte limit reached ({LEASE_MAX_BYTES} bytes)"
+            )
+        fd, lease_name = tempfile.mkstemp(
+            prefix="asset-stream-",
+            suffix=source.suffix,
+            dir=WORKSPACE,
+        )
+        os.close(fd)
+        lease = Path(lease_name)
+        lease.unlink(missing_ok=True)
         try:
-            path.unlink(missing_ok=True)
-            total_bytes -= size
-            count -= 1
-        except OSError:
-            continue
+            try:
+                os.link(source, lease)
+            except OSError:
+                # Cross-device filesystems cannot hard-link; copy is still isolated
+                # from cache eviction and is removed by the Node stream lifecycle.
+                shutil.copy2(source, lease)
+        except Exception:
+            lease.unlink(missing_ok=True)
+            raise
+    return {**payload, "path": lease.as_posix(), "cleanup": True}
+
+
+def _materialize_for_stream(entry: AssetEntry, *, thumbnail: bool) -> dict[str, Any]:
+    producer = _ensure_thumbnail if thumbnail else _materialize
+    payload = producer(entry)
+    with _cache_lock:
+        # An eviction may have landed between the cache lookup and taking this
+        # lock. Rebuild once while eviction is excluded, then create the lease.
+        if not Path(payload["path"]).is_file():
+            payload = producer(entry)
+        leased = _lease_materialized(payload)
+        # The lease now owns a hard-link/copy, so eviction can safely unlink the
+        # durable cache entry even when this is an oversized single asset.
+        _evict_cache_if_needed()
+        return leased
 
 
 def _materialize(entry: AssetEntry) -> dict[str, Any]:
@@ -237,7 +310,6 @@ def _materialize(entry: AssetEntry) -> dict[str, Any]:
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
-        _evict_cache_if_needed()
     media_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
     return {
         "path": destination.as_posix(),
@@ -378,7 +450,6 @@ def _ensure_thumbnail(entry: AssetEntry) -> dict[str, Any]:
                         _write_placeholder_jpeg(dest, color=(24, 24, 27))
                 else:
                     _write_placeholder_jpeg(dest, color=(24, 24, 27))
-            _evict_cache_if_needed()
         return _thumb_payload(entry, dest, etag)
     finally:
         with _thumb_lock:
@@ -389,17 +460,8 @@ def _ensure_thumbnail(entry: AssetEntry) -> dict[str, Any]:
 def _entry_from_params(params: dict[str, Any]) -> AssetEntry:
     volume = params["volume"]
     path = normalize_volume_path(params["path"], allow_root=False)
-    if params.get("kind") and params.get("modified_at") is not None:
-        modified = datetime.fromisoformat(str(params["modified_at"]))
-        return AssetEntry(
-            volume=volume,
-            path=path,
-            name=params.get("name") or PurePosixPath(path).name,
-            kind=params.get("kind") or "file",
-            size=int(params.get("size") or 0),
-            modified_at=modified,
-            media_type=params.get("media_type") or "file",
-        )
+    # Query metadata is only a display hint and may be stale or forged. Resolve
+    # the current server-side entry before deriving cache keys or MIME types.
     return MANAGER._find_entry(volume, path)  # noqa: SLF001
 
 
@@ -453,10 +515,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             if entry.is_directory:
                 raise IsADirectoryError("Directories cannot be downloaded.")
             want_thumb = bool(params.get("image_only") or params.get("thumbnail"))
-            if want_thumb:
-                result = _ensure_thumbnail(entry)
-            else:
-                result = _materialize(entry)
+            result = _materialize_for_stream(entry, thumbnail=want_thumb)
         elif method == "upload":
             with LOCK:
                 paths = MANAGER.upload_assets(
