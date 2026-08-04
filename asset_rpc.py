@@ -222,7 +222,13 @@ def _evict_cache_if_needed() -> None:
 def _materialize(entry: AssetEntry) -> dict[str, Any]:
     destination = _cached_path(entry)
     if not destination.exists() or destination.stat().st_size == 0:
-        tmp = destination.with_name(destination.name + ".tmp")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{destination.name}.tmp.",
+            dir=destination.parent,
+        )
+        os.close(fd)
+        tmp = Path(tmp_name)
         try:
             MANAGER.download_listed_asset(entry, tmp)
             if not tmp.exists() or tmp.stat().st_size == 0:
@@ -693,6 +699,23 @@ def _process_request(request: dict[str, Any]) -> None:
         raise
 
 
+def _wait_for_queues(
+    high_q: Any,
+    low_q: Any,
+    *,
+    timeout: float = 5.0,
+    poll_interval: float = 0.05,
+) -> None:
+    """Wait a bounded time for queued and in-progress work to finish."""
+    import time
+
+    deadline = _now() + timeout
+    while _now() < deadline and (
+        high_q.unfinished_tasks or low_q.unfinished_tasks
+    ):
+        time.sleep(poll_interval)
+
+
 def main() -> None:
     """Serve RPC with a high-priority lane so previews aren't stuck behind thumbs.
 
@@ -811,13 +834,7 @@ def main() -> None:
 
         # Do not join() indefinitely: after stop, workers may exit without
         # task_done() for leftover queue items (CodeRabbit). Drain with timeout.
-        deadline = _now() + 5.0
-        while _now() < deadline and (
-            not high_q.empty() or not low_q.empty()
-        ):
-            import time
-
-            time.sleep(0.05)
+        _wait_for_queues(high_q, low_q)
     finally:
         stop.set()
         for _ in threads:
