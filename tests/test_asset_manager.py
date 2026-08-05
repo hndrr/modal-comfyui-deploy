@@ -89,6 +89,8 @@ class AssetManagerValidationTests(unittest.TestCase):
     def test_media_classification(self) -> None:
         self.assertEqual(classify_media("images/result.PNG", "file"), "image")
         self.assertEqual(classify_media("movie.mp4", "file"), "video")
+        self.assertEqual(classify_media("clip.webm", "file"), "video")
+        self.assertEqual(classify_media("archive.mkv", "file"), "video")
         self.assertEqual(classify_media("sound.wav", "file"), "audio")
         self.assertEqual(classify_media("folder", "directory"), "directory")
 

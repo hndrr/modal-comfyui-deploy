@@ -21,7 +21,9 @@ ALLOWED_VOLUMES = frozenset({MODEL_VOLUME, INPUT_VOLUME, OUTPUT_VOLUME})
 TRANSFERABLE_VOLUMES = frozenset({INPUT_VOLUME, OUTPUT_VOLUME})
 
 IMAGE_EXTENSIONS = frozenset({".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
-VIDEO_EXTENSIONS = frozenset({".m4v", ".mov", ".mp4", ".webm"})
+VIDEO_EXTENSIONS = frozenset(
+    {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}
+)
 AUDIO_EXTENSIONS = frozenset({".flac", ".m4a", ".mp3", ".ogg", ".wav"})
 # Modal Volumes don't retain truly empty directories; we plant this marker via upload.
 DIR_PLACEHOLDER_NAME = ".asset-manager-keep"
