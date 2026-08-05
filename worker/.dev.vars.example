@@ -1,0 +1,23 @@
+# `wrangler dev` 用のローカル設定。
+# `.dev.vars` にコピーして値を埋める（`.dev.vars` は gitignore 済み）。
+#
+#   cp .dev.vars.example .dev.vars
+#
+# 本番へは同じ 5 つを `wrangler secret put <NAME>` で登録する。
+# wrangler.jsonc には環境固有の値を一切書かない方針のため、ここが唯一の
+# ローカル設定ファイルになる。詳細は docs/cloudflare-access.md を参照。
+
+# `uv run modal deploy comfyapp.py` の出力に表示される URL
+MODAL_ORIGIN=https://<workspace>--comfyui-ui.modal.run
+
+# Zero Trust → Settings → Custom Pages に表示される Team domain
+TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com
+
+# Access アプリの Overview にある Application Audience (AUD) Tag
+POLICY_AUD=
+
+# Modal ダッシュボード → Settings → Proxy Auth Tokens の Token ID（wk- 始まり）
+MODAL_KEY=
+
+# 同じく Token Secret（ws- 始まり。作成時にしか表示されない）
+MODAL_SECRET=
