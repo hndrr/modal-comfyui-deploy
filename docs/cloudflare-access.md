@@ -86,12 +86,12 @@ Cloudflare のドキュメントは、オリジンがすでに公開されてい
 
 ### 3. WebSocket を透過する
 
-ComfyUI はブラウザとの状態同期に `/ws` を使う。ここが構成全体で一番はまりやすい。**守るべき規則は 2 つ**で、どちらも破ると「101 は返るのにフレームが流れない」という同じ症状になる。
+ComfyUI はブラウザとの状態同期に `/ws` を使う。ここが構成全体で一番はまりやすい。
 
 ```ts
 const headers = buildUpstreamHeaders(request, env);
 
-// (1) ブラウザのハンドシェイク用ヘッダーは持ち越さない
+// ブラウザのハンドシェイク用ヘッダーは持ち越さない
 headers.delete("Sec-WebSocket-Key");
 headers.delete("Sec-WebSocket-Version");
 headers.delete("Sec-WebSocket-Extensions");
@@ -100,17 +100,25 @@ headers.set("Upgrade", "websocket");
 
 const upstream = await fetch(new Request(upstreamUrl, { method: "GET", headers }));
 
-// (2) upstream の Response をそのまま返す
+// upstream の Response をそのまま返す
 return upstream;
 ```
 
-**(1) `Sec-WebSocket-*` を上流へコピーしない。**
+**`Sec-WebSocket-*` を上流へコピーしないこと。**
 workerd は `Upgrade: websocket` を見て自前でハンドシェイクを行う。ブラウザの `Sec-WebSocket-Key` などをコピーするとそれと衝突し、`101 Switching Protocols` は返るのに 1 フレームも流れないソケットができる。Cloudflare の例が `headers: { Upgrade: "websocket" }` だけを渡しているのはこのためである。
 
-**(2) ソケットを取り出して包み直さない。**
-`new Response(null, { status: 101, webSocket: upstream.webSocket })` と書くと、その瞬間から Worker がソケットの保持者になる。stateless Worker はレスポンスを返した時点で実行コンテキストが終わるため、保持したソケットは破棄され `Error: Network connection lost.` を出して 0.5 秒ほどで切れる。**`ctx.waitUntil()` を使っても延命できない。** `WebSocketPair` を作って Worker がフレームを中継する実装も同じ理由で失敗する（能動的な中継が必要なら Durable Object を使う）。upstream の Response を素通しすれば Worker は何も保持せず、runtime がブラウザと Modal を直結する。
+この構成で WebSocket が動かなかった原因はこれだった。ヘッダーをコピーしたままだと、後述のどの返し方に変えても症状は変わらなかった。
+
+**upstream の Response をそのまま返す。**
+Worker はソケットを保持せず、runtime がブラウザと Modal を直結するため、中継コードを書かずに済む。単一接続をそのまま通すだけならこれで足りる。
 
 Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合は、そのレスポンスがそのままブラウザへ返る。
+
+> **`WebSocketPair` を使う中継実装について**
+>
+> フレームを加工したい、接続ごとに状態を持ちたいといった理由で Worker が能動的に中継したい場合は、`WebSocketPair` で対を作り、`fetch()` が返したソケットとの間で双方向にフレームを転送する。その際は Close フレームの調停のために `accept({ allowHalfOpen: true })` を使う。**単一接続を中継するだけなら Durable Object は不要。** Durable Object が要るのは、接続状態を保持したい場合や複数接続を協調させたい場合である。
+>
+> このリポジトリでは加工が不要なので、中継せず素通しする実装を採用している。
 
 なお **Modal の Proxy Auth は WebSocket でも問題なく動く**（公式ドキュメントには明記がないが、`Modal-Key` / `Modal-Secret` 付きで 101 が返り、接続も維持されることを実測で確認した）。
 
@@ -137,7 +145,9 @@ Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合�
 | `MODAL_KEY` | `wk-` 始まり | Modal ダッシュボード → Settings → Proxy Auth Tokens の Token ID |
 | `MODAL_SECRET` | `ws-` 始まり | 同上の Token Secret（作成時のみ表示される） |
 
-`MODAL_ORIGIN` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」だが、Wrangler は `vars` を設定ファイル以外から与える手段を持たないため、secret にまとめている。
+`MODAL_ORIGIN` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」である。`wrangler dev` / `wrangler deploy` には `--var key:value` があるのでコマンドラインからも渡せるが、値がシェル履歴に残るうえ毎回指定が必要になるため、デプロイ用の値は secret に寄せている。
+
+**`MODAL_ORIGIN` は https でなければならない。** Worker は起動時にこれを検証し、https 以外や不正な URL の場合は転送せずに 500 を返す。http のオリジンへ転送すると `Modal-Key` / `Modal-Secret` が平文経路に載るためである。
 
 接続先ホスト名（`comfy.example.com`）も `wrangler.jsonc` に書かず、Cloudflare ダッシュボードで Custom Domain として登録する。Cloudflare のドキュメントは *To manage routes via the Cloudflare dashboard only, remove any route and routes keys from your Wrangler configuration file* としており、`routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
 
@@ -317,7 +327,11 @@ Cloudflare を経由するリクエストにはサイズ上限がある。
 
 ### コールドスタートと 524
 
-Cloudflare はオリジンの応答を約 100 秒待って `524` を返す。ComfyUI は `min_containers=0` でゼロ台まで縮退するため、縮退後の初回アクセスではコンテナ起動を待つことになる。`startup_timeout=60` にイメージ取得時間が加わり 100 秒を超えると `524` になり得る。
+Cloudflare は既定の Proxy Read Timeout である **125 秒**だけオリジンの応答を待ち、超えると `524` を返す（Enterprise プランのみ Cache Rules または zone setting API で最大 6,000 秒まで延長できる）。
+
+ComfyUI は `min_containers=0` でゼロ台まで縮退するため、縮退後の初回アクセスではコンテナ起動を待つことになる。イメージ取得を含む起動時間が 125 秒を超えると `524` になり得る。
+
+なお `startup_timeout=60`（[comfyapp.py:349](../comfyapp.py#L349)）は **Modal がコンテナ内の Web サーバーの起動を待つ上限**であり、Cloudflare のタイムアウトとは別物である。両者は独立して効く。
 
 その場合はページを再読み込みすればよい。2 回目はコンテナが起動済みなので通常どおり表示される。
 
@@ -331,22 +345,35 @@ Worker は自前の常時接続を持たないため、[アイドル時の scale
 
 ### 認証情報のローテーション
 
-Modal の Proxy Auth トークンを作り直した場合は、`wrangler secret put` で `MODAL_KEY` / `MODAL_SECRET` を上書きするだけでよい。`wrangler secret put` は登録のたびに新しいバージョンをデプロイするため、`wrangler deploy` も Modal 側の再デプロイも不要である。
+Modal の Proxy Auth トークンを作り直した場合、`MODAL_KEY` と `MODAL_SECRET` は **必ず 1 回のデプロイでまとめて更新する**。
 
-Modal の URL が変わった場合（ワークスペース名の変更など）も同様に `wrangler secret put MODAL_ORIGIN` で更新する。
+`wrangler secret put` は実行ごとに新しいバージョンをデプロイするため、1 つずつ入れると「新しい Key と古い Secret」の組み合わせでデプロイされる瞬間が生まれ、その間 Modal が 401 を返す。
+
+```bash
+cd worker
+cat > /tmp/modal-secrets.json <<'JSON'
+{ "MODAL_KEY": "wk-...", "MODAL_SECRET": "ws-..." }
+JSON
+npx wrangler secret bulk /tmp/modal-secrets.json
+rm /tmp/modal-secrets.json
+```
+
+`wrangler secret bulk` は複数の secret を 1 リクエストで更新する。`wrangler deploy --secrets-file <file>` でも同じことができる。Modal 側の再デプロイは不要である。
+
+Modal の URL が変わった場合（ワークスペース名の変更など）は、単独の値なので `npx wrangler secret put MODAL_ORIGIN` で構わない。
 
 ## トラブルシューティング
 
 | 症状 | 原因の切り分け |
 | --- | --- |
-| `comfy.example.com` が 403 | Access は通過したが Worker の JWT 検証に失敗している。`POLICY_AUD` と `TEAM_DOMAIN` が Access アプリの値と一致しているか確認する。`npx wrangler tail` でログを見る |
+| `comfy.example.com` が 403 | **Access の拒否と Worker の検証失敗の両方で起こる。まず切り分ける。** Zero Trust → Logs → Access で該当リクエストの `allowed` を見るか、レスポンス本文を確認する（Cloudflare の拒否ページなら Access、`Cloudflare Access authentication required.` なら Worker）。Access が拒否した場合はリクエストが Worker に届かないので `npx wrangler tail` には何も出ない。Access を通過していた場合のみ、下の行へ進む |
 | `comfy.example.com` が 401 | Worker が付けた `Modal-Key` / `Modal-Secret` を Modal が拒否している。シークレットが正しく登録されているか（`npx wrangler secret list`）、Modal 側でトークンが失効していないか確認する |
 | ログイン画面が出ずに ComfyUI が表示される | Access アプリのホスト名が Worker のホスト名と一致していない。Access アプリの設定を確認する |
-| 生成の進捗が更新されない | `/ws` が繋がっていない。DevTools → Network → WS で `/ws?clientId=...` と**クエリ付きの再接続**が出ているか確認する。クエリ無しの `/ws` が 1 秒間隔で並ぶ場合はフレームが届いていないので、「WebSocket を透過する」の規則 (1)(2) を見直す |
-| ログイン後にすべて 403 になる | Worker の JWT 検証に失敗している。`npm run tail` で `Access token rejected: ...` の理由を見る。`jose` の `createRemoteJWKSet` の戻り値をモジュールスコープにキャッシュしていると 2 回目以降が必ず失敗する |
+| 生成の進捗が更新されない | `/ws` が繋がっていない。DevTools → Network → WS で `/ws?clientId=...` と**クエリ付きの再接続**が出ているか確認する。クエリ無しの `/ws` が 1 秒間隔で並ぶ場合はフレームが届いていないので、「WebSocket を透過する」の `Sec-WebSocket-*` の扱いを見直す。なお WebSocket が繋がる前にキューへ入れた job は古い `client_id` 宛に進捗が送られるため、直した後は生成を新規に流し直して確認する |
+| Access を通過した後に Worker が 403 を返す | Worker の JWT 検証に失敗している。`npm run tail` で `Access token rejected: ...` の理由が出るので、それを見る。`POLICY_AUD` が Access アプリの AUD と、`TEAM_DOMAIN` が JWT の `iss` と完全一致しているかを確認する（team domain を改名した後に secret を更新し忘れているとここで落ちる） |
 | PWA manifest が CORS エラーになる | `<link rel="manifest">` は資格情報を送らずに取得されるため Access がログインへリダイレクトする。表示上のノイズで機能には影響しない |
 | アップロードで 413 | Cloudflare のリクエストサイズ上限。管理画面（`web/`）から Volume へ直接アップロードする |
-| 初回アクセスで 524 | Modal のコールドスタートが 100 秒を超えている。再読み込みする |
+| 初回アクセスで 524 | Modal のコールドスタートが Cloudflare の Proxy Read Timeout（既定 125 秒）を超えている。再読み込みする |
 | Modal の直 URL が 200 で開ける | `COMFYUI_REQUIRES_PROXY_AUTH=on` にした後の再デプロイを忘れている。`uv run modal deploy comfyapp.py` を実行する |
 
 ## 参考
