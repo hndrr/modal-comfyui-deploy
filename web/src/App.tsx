@@ -41,9 +41,30 @@ import {
   thumbnailUrl,
   uploadFiles,
 } from "./api/client";
+import { filterDownloadableFiles } from "./lib/downloadTargets";
 import { formatDate, humanSize, joinVolumePath } from "./lib/format";
 import type { AssetEntry, AssetListResponse, SortMode, VolumeId } from "./types";
 import { SORT_OPTIONS } from "./types";
+
+const DOWNLOAD_STAGGER_MS = 300;
+/** Completed status toast auto-hides after this (manual × still works). */
+const TOAST_AUTO_DISMISS_MS = 5_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Trigger a same-origin attachment download via a temporary anchor. */
+function triggerBrowserDownload(url: string, fileName: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
 
 const VOLUMES: { id: VolumeId; label: string }[] = [
   { id: "comfy-inputs", label: "Inputs" },
@@ -250,6 +271,18 @@ export default function App() {
   useEffect(() => {
     setUploadDest(path);
   }, [path]);
+
+  // Auto-dismiss completion toasts; keep visible while busy (in-progress).
+  useEffect(() => {
+    if (busy) return;
+    if (!statusMessage && !deleteProgress) return;
+    const timer = window.setTimeout(() => {
+      setStatusMessage("");
+      setDeleteProgress(null);
+      setBusyLabel("");
+    }, TOAST_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [busy, statusMessage, deleteProgress]);
 
   // Inputs/Outputs: folders + images + videos in the card gallery (folders first),
   // remaining files in the table. Models: all in table.
@@ -844,6 +877,94 @@ export default function App() {
     }
   }
 
+  async function handleDownloadSelected() {
+    const raw = checkedCount > 0 ? checkedList : focused ? [focused] : [];
+    if (!raw.length) {
+      setStatusMessage("ダウンロードするファイルを選択してください。");
+      return;
+    }
+    const { files, skippedDirs } = filterDownloadableFiles(raw);
+    if (!files.length) {
+      setStatusMessage(
+        "フォルダはダウンロードできません。ファイルを選択してください。",
+      );
+      return;
+    }
+
+    const total = files.length;
+    setBusy(true);
+    setDeleteProgress({ total, done: 0, failed: 0 });
+    setBusyLabel(`ダウンロード中 0/${total}（成功 0）`);
+    setStatusMessage(
+      skippedDirs > 0
+        ? `${total}件をダウンロード開始…（フォルダ ${skippedDirs} 件はスキップ）`
+        : `${total}件をダウンロード開始…`,
+    );
+
+    let done = 0;
+    let failed = 0;
+    const failures: { path: string; error: string }[] = [];
+    try {
+      for (let i = 0; i < files.length; i += 1) {
+        const entry = files[i]!;
+        try {
+          triggerBrowserDownload(
+            contentUrl(entry.volume, entry.path, true, entry),
+            entry.name,
+          );
+          done += 1;
+        } catch (err) {
+          failed += 1;
+          failures.push({
+            path: entry.path,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        const processed = done + failed;
+        setDeleteProgress({ total, done, failed });
+        setBusyLabel(
+          `ダウンロード中 ${processed}/${total}（成功 ${done}${
+            failed ? ` / 失敗 ${failed}` : ""
+          }）`,
+        );
+        setStatusMessage(
+          `ダウンロード進捗: 成功 ${done} / 失敗 ${failed} / 合計 ${total}`,
+        );
+        if (i < files.length - 1) {
+          await sleep(DOWNLOAD_STAGGER_MS);
+        }
+      }
+
+      let message =
+        failed === 0
+          ? `${done}件のダウンロードを開始しました。ブラウザのダウンロード欄を確認してください。`
+          : `ダウンロード: 成功 ${done}件 / 失敗 ${failed}件。ブラウザのダウンロード欄を確認してください。`;
+      if (skippedDirs > 0) {
+        message += `（フォルダ ${skippedDirs} 件はスキップ）`;
+      }
+      if (failures.length) {
+        message +=
+          " — " +
+          failures
+            .slice(0, 3)
+            .map((item) => `${item.path}: ${item.error}`)
+            .join("; ");
+      }
+      setDeleteProgress({ total, done, failed });
+      setStatusMessage(message);
+      setBusyLabel(
+        failed === 0
+          ? `ダウンロード開始: ${done}件`
+          : `成功 ${done}件 / 失敗 ${failed}件`,
+      );
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+      setBusyLabel("");
+    }
+  }
+
   async function handleDeleteSelected() {
     const targets = checkedCount > 0 ? checkedList : focused ? [focused] : [];
     if (!targets.length) {
@@ -930,6 +1051,15 @@ export default function App() {
 
   const deleteTargets = checkedCount > 0 ? checkedList : focused ? [focused] : [];
   const deleteDirCount = deleteTargets.filter((entry) => entry.is_directory).length;
+  const downloadFileCount = filterDownloadableFiles(deleteTargets).files.length;
+
+  function dismissStatusToast() {
+    // Keep the toast while a mutation is running so progress stays visible.
+    if (busy) return;
+    setStatusMessage("");
+    setDeleteProgress(null);
+    setBusyLabel("");
+  }
 
   return (
     <div className="relative mx-auto flex min-h-screen max-w-7xl flex-col gap-4 px-4 py-6">
@@ -957,7 +1087,7 @@ export default function App() {
 
       {(busy || statusMessage || deleteProgress) && (
         <div
-          className={`fixed top-4 right-4 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border px-4 py-3 shadow-2xl ${
+          className={`fixed top-4 right-4 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border px-4 py-3 pr-10 shadow-2xl relative ${
             busy
               ? "border-amber-700/60 bg-amber-950 text-amber-50"
               : "border-emerald-800/60 bg-emerald-950 text-emerald-50"
@@ -965,6 +1095,17 @@ export default function App() {
           role="status"
           aria-live="polite"
         >
+          {!busy && (
+            <button
+              type="button"
+              onClick={dismissStatusToast}
+              className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none opacity-70 hover:bg-black/25 hover:opacity-100"
+              aria-label="通知を閉じる"
+              title="閉じる"
+            >
+              ×
+            </button>
+          )}
           <p className="text-sm font-medium">
             {busy ? busyLabel || "処理中…" : "完了"}
           </p>
@@ -1009,7 +1150,7 @@ export default function App() {
           Modal ComfyUI Asset Manager
         </h1>
         <p className="text-sm text-zinc-400">
-          大量ファイルの整理用。チェックで複数選択 → 一括削除できます（完全削除・取り消し不可）。
+          大量ファイルの整理用。チェックで複数選択 → 一括ダウンロード・一括削除できます（削除は完全削除・取り消し不可）。
           削除すると一覧から即消え、右上に成功件数の進捗が出ます。
         </p>
       </header>
@@ -1188,6 +1329,13 @@ export default function App() {
                     isDisabled={!checkedCount}
                   >
                     選択解除
+                  </Button>
+                  <Button
+                    className="rounded border border-sky-800 bg-sky-950/50 px-2.5 py-1 text-xs text-sky-100 hover:bg-sky-900/60 disabled:opacity-40"
+                    onPress={() => void handleDownloadSelected()}
+                    isDisabled={!downloadFileCount || busy}
+                  >
+                    選択をDL（{downloadFileCount}）
                   </Button>
                   <DialogTrigger>
                     <Button
@@ -1532,7 +1680,7 @@ export default function App() {
                     <div className="mb-3 rounded-md border border-sky-900/50 bg-sky-950/30 p-3 text-sm text-sky-100">
                       <p className="font-medium">{checkedCount} 件選択中</p>
                       <p className="mt-1 text-xs text-sky-200/80">
-                        一括削除は上のツールバーから。プレビュー・移動は最後にフォーカスした 1 件です。
+                        一括削除・ダウンロードは上のツールバーから。プレビューは最後にフォーカスした 1 件です。
                       </p>
                       <ul className="mt-2 max-h-28 overflow-auto text-xs text-sky-100/70">
                         {checkedList.slice(0, 30).map((entry) => (
