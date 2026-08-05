@@ -51,6 +51,15 @@ LIST_CACHE_TTL_SEC = 60.0
 # Long edge for generated JPEG thumbnails (images + video posters).
 THUMB_MAX_EDGE = max(64, min(1024, int(os.getenv("COMFY_ASSET_THUMB_MAX", "256"))))
 THUMB_JPEG_QUALITY = max(40, min(95, int(os.getenv("COMFY_ASSET_THUMB_QUALITY", "80"))))
+# Bump when poster/thumbnail generation logic changes so durable cache refreshes.
+THUMB_GEN_VERSION = "v2"
+# Followers of the single-flight thumb lock give up after this long.
+THUMB_WAIT_TIMEOUT_SEC = 180.0
+# All ffmpeg poster attempts share this budget so the leader always finishes
+# (or fails) before followers time out and report a bogus generation failure.
+POSTER_TOTAL_BUDGET_SEC = 150.0
+# Skip a remaining attempt when less than this is left; ffmpeg can't do anything useful.
+POSTER_MIN_ATTEMPT_SEC = 2.0
 # Durable cache bounds (files/ + thumbs/). Override via env if needed.
 CACHE_MAX_BYTES = max(
     64 * 1024 * 1024,
@@ -176,6 +185,8 @@ def _entry_digest(entry: AssetEntry, *, kind: str) -> str:
         f"{kind}:{entry.volume}:{entry.path}:"
         f"{entry.modified_at.isoformat()}:{entry.size}:{THUMB_MAX_EDGE}"
     )
+    if kind == "thumb":
+        payload += f":{THUMB_GEN_VERSION}"
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -355,47 +366,82 @@ def _write_placeholder_jpeg(destination: Path, *, color: tuple[int, int, int] = 
         raise
 
 
+def _video_poster_scale_filter() -> str:
+    # format=yuv420p keeps JPEG encoder happy for odd pixel formats / alpha WebM.
+    return (
+        f"scale={THUMB_MAX_EDGE}:{THUMB_MAX_EDGE}:"
+        "force_original_aspect_ratio=decrease:flags=lanczos,format=yuv420p"
+    )
+
+
+def _video_poster_attempts(source: Path, tmp: Path) -> list[tuple[list[str], float]]:
+    """ffmpeg arg lists (after global flags) + timeout, tried in order."""
+    src = str(source)
+    out = str(tmp)
+    scale = _video_poster_scale_filter()
+    # Prefer a frame slightly into the clip: many generative videos have a
+    # black / incomplete keyframe at t=0. Input -ss is fast (keyframe seek).
+    # Accurate post-input seeks are slower fallbacks for short/odd files.
+    common_tail = ["-an", "-frames:v", "1", "-vf", scale, "-q:v", "3", out]
+    return [
+        (["-ss", "1", "-i", src, *common_tail], 45.0),
+        (["-ss", "0.5", "-i", src, *common_tail], 45.0),
+        (["-ss", "0.1", "-i", src, *common_tail], 45.0),
+        (["-ss", "0", "-i", src, *common_tail], 45.0),
+        (["-i", src, "-ss", "0.25", *common_tail], 90.0),
+        (["-i", src, *common_tail], 90.0),
+    ]
+
+
 def _extract_video_poster(source: Path, destination: Path) -> bool:
-    """Best-effort first-frame JPEG via ffmpeg. Returns False if unavailable."""
+    """Best-effort poster JPEG via ffmpeg. Returns False if unavailable."""
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return False
     import subprocess
 
+    if not source.is_file() or source.stat().st_size == 0:
+        return False
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(".tmp.jpg")
-    try:
-        completed = subprocess.run(
-            [
-                ffmpeg,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                "0",
-                "-i",
-                str(source),
-                "-frames:v",
-                "1",
-                "-vf",
-                f"scale={THUMB_MAX_EDGE}:{THUMB_MAX_EDGE}:force_original_aspect_ratio=decrease",
-                "-q:v",
-                "3",
-                str(tmp),
-            ],
-            check=False,
-            capture_output=True,
-            timeout=60,
-        )
-        if completed.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
-            tmp.unlink(missing_ok=True)
-            return False
-        tmp.replace(destination)
-        return True
-    except (OSError, subprocess.TimeoutExpired):
+    deadline = _now() + POSTER_TOTAL_BUDGET_SEC
+    for args, timeout_sec in _video_poster_attempts(source, tmp):
+        remaining = deadline - _now()
+        if remaining < POSTER_MIN_ATTEMPT_SEC:
+            break
         tmp.unlink(missing_ok=True)
-        return False
+        try:
+            completed = subprocess.run(
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    *args,
+                ],
+                check=False,
+                capture_output=True,
+                timeout=min(timeout_sec, remaining),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            tmp.unlink(missing_ok=True)
+            continue
+        if (
+            completed.returncode == 0
+            and tmp.exists()
+            and tmp.stat().st_size > 128
+        ):
+            try:
+                _atomic_replace(tmp, destination)
+                return True
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                return False
+        tmp.unlink(missing_ok=True)
+    return False
 
 
 def _thumb_payload(entry: AssetEntry, dest: Path, etag: str) -> dict[str, Any]:
@@ -430,7 +476,7 @@ def _ensure_thumbnail(entry: AssetEntry) -> dict[str, Any]:
             leader = False
 
     if not leader:
-        event.wait(timeout=180)
+        event.wait(timeout=THUMB_WAIT_TIMEOUT_SEC)
         if dest.exists() and dest.stat().st_size > 0:
             return _thumb_payload(entry, dest, etag)
         raise RuntimeError(f"Thumbnail generation failed for {entry.path}")

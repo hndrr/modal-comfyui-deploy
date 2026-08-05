@@ -41,9 +41,38 @@ import {
   thumbnailUrl,
   uploadFiles,
 } from "./api/client";
+import { filterDownloadableFiles } from "./lib/downloadTargets";
 import { formatDate, humanSize, joinVolumePath } from "./lib/format";
 import type { AssetEntry, AssetListResponse, SortMode, VolumeId } from "./types";
 import { SORT_OPTIONS } from "./types";
+
+const DOWNLOAD_STAGGER_MS = 300;
+/** Downloads leave the page once requested, so the toast counts requests, not successes. */
+const DOWNLOAD_DONE_LABEL = "要求";
+/** Completed status toast auto-hides after this (manual × still works). */
+const TOAST_AUTO_DISMISS_MS = 5_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Trigger a same-origin attachment download via a temporary anchor.
+ *
+ * The browser owns the transfer from here on: a throw only means the DOM call
+ * itself failed, so callers must not read a successful return as "the file was
+ * downloaded" — a 4xx/5xx from /api/assets/content is invisible to us.
+ */
+function triggerBrowserDownload(url: string, fileName: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.rel = "noopener";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
 
 const VOLUMES: { id: VolumeId; label: string }[] = [
   { id: "comfy-inputs", label: "Inputs" },
@@ -115,6 +144,8 @@ export default function App() {
     total: number;
     done: number;
     failed: number;
+    /** Wording for the `done` counter; downloads can only claim "要求", not "成功". */
+    doneLabel?: string;
   } | null>(null);
   const requestId = useRef(0);
   /** Latest non-quiet list request — used so quiet refresh can't leave loading stuck. */
@@ -250,6 +281,18 @@ export default function App() {
   useEffect(() => {
     setUploadDest(path);
   }, [path]);
+
+  // Auto-dismiss completion toasts; keep visible while busy (in-progress).
+  useEffect(() => {
+    if (busy) return;
+    if (!statusMessage && !deleteProgress) return;
+    const timer = window.setTimeout(() => {
+      setStatusMessage("");
+      setDeleteProgress(null);
+      setBusyLabel("");
+    }, TOAST_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [busy, statusMessage, deleteProgress]);
 
   // Inputs/Outputs: folders + images + videos in the card gallery (folders first),
   // remaining files in the table. Models: all in table.
@@ -510,22 +553,31 @@ export default function App() {
     return true;
   }
 
+  /** Plain click: exclusive single select (Finder / Explorer style). */
+  function selectOnly(entry: AssetEntry) {
+    setChecked(new Map([[entry.path, entry]]));
+    lastRangeAnchor.current = entry.path;
+    focusEntry(entry);
+  }
+
   function beginDragSelect(entry: AssetEntry, event: ReactPointerEvent) {
     if (event.button !== 0) return;
     if (event.shiftKey || event.metaKey || event.ctrlKey) return;
     if (isDragExemptTarget(event.target)) return;
 
-    // Always check the painted range. Uncheck via checkbox / ⌘·Ctrl+click.
+    // Marquee from empty base so drag paints a fresh range (not accumulate forever).
+    // Checkbox / ⌘·Ctrl+click still toggle individual items.
     dragSelectRef.current = {
       startPath: entry.path,
       select: true,
-      base: new Map(checkedRef.current),
+      base: new Map(),
       lastPath: entry.path,
       moved: false,
     };
     document.body.classList.add("is-drag-selecting");
   }
 
+  /** Checkbox or ⌘/Ctrl+click: add/remove without clearing the rest. */
   function toggleCheck(entry: AssetEntry, next?: boolean) {
     setChecked((prev) => {
       const map = new Map(prev);
@@ -538,29 +590,43 @@ export default function App() {
     focusEntry(entry);
   }
 
+  /** Shift+click: select contiguous range from anchor (replaces selection). */
   function selectRange(toEntry: AssetEntry) {
     const anchor = lastRangeAnchor.current;
     if (!anchor) {
-      toggleCheck(toEntry, true);
+      selectOnly(toEntry);
       return;
     }
     const paths = pageEntries.map((entry) => entry.path);
     const from = paths.indexOf(anchor);
     const to = paths.indexOf(toEntry.path);
     if (from < 0 || to < 0) {
-      toggleCheck(toEntry, true);
+      selectOnly(toEntry);
       return;
     }
     const [start, end] = from < to ? [from, to] : [to, from];
-    setChecked((prev) => {
-      const map = new Map(prev);
+    setChecked(() => {
+      const map = new Map<string, AssetEntry>();
       for (let i = start; i <= end; i += 1) {
         const entry = pageEntries[i];
         if (entry) map.set(entry.path, entry);
       }
       return map;
     });
+    // Keep the original anchor so further Shift+clicks extend from the same end.
     focusEntry(toEntry);
+  }
+
+  function handleItemClick(entry: AssetEntry, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) {
+    if (event.shiftKey) {
+      selectRange(entry);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) {
+      toggleCheck(entry);
+      return;
+    }
+    selectOnly(entry);
   }
 
   function setPageChecked(select: boolean) {
@@ -844,6 +910,106 @@ export default function App() {
     }
   }
 
+  async function handleDownloadSelected() {
+    const raw = checkedCount > 0 ? checkedList : focused ? [focused] : [];
+    if (!raw.length) {
+      setStatusMessage("ダウンロードするファイルを選択してください。");
+      return;
+    }
+    const { files, skippedDirs } = filterDownloadableFiles(raw);
+    if (!files.length) {
+      setStatusMessage(
+        "フォルダはダウンロードできません。ファイルを選択してください。",
+      );
+      return;
+    }
+
+    const total = files.length;
+    setBusy(true);
+    setDeleteProgress({ total, done: 0, failed: 0, doneLabel: DOWNLOAD_DONE_LABEL });
+    setBusyLabel(`ダウンロード要求 0/${total}`);
+    setStatusMessage(
+      skippedDirs > 0
+        ? `${total}件のダウンロードを要求中…（フォルダ ${skippedDirs} 件はスキップ）`
+        : `${total}件のダウンロードを要求中…`,
+    );
+
+    // The browser handles each transfer out of band, so these counters track
+    // requests handed to the browser — never HTTP outcomes. See triggerBrowserDownload.
+    let requested = 0;
+    let failed = 0;
+    const failures: { path: string; error: string }[] = [];
+    try {
+      for (let i = 0; i < files.length; i += 1) {
+        const entry = files[i]!;
+        try {
+          triggerBrowserDownload(
+            contentUrl(entry.volume, entry.path, true, entry),
+            entry.name,
+          );
+          requested += 1;
+        } catch (err) {
+          failed += 1;
+          failures.push({
+            path: entry.path,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        const processed = requested + failed;
+        setDeleteProgress({
+          total,
+          done: requested,
+          failed,
+          doneLabel: DOWNLOAD_DONE_LABEL,
+        });
+        setBusyLabel(
+          `ダウンロード要求 ${processed}/${total}${
+            failed ? `（失敗 ${failed}）` : ""
+          }`,
+        );
+        setStatusMessage(
+          `ダウンロード要求: ${requested} / 失敗 ${failed} / 合計 ${total}`,
+        );
+        if (i < files.length - 1) {
+          await sleep(DOWNLOAD_STAGGER_MS);
+        }
+      }
+
+      let message =
+        failed === 0
+          ? `${requested}件のダウンロードを要求しました。実際の成否はブラウザのダウンロード欄で確認してください。`
+          : `ダウンロード要求: ${requested}件 / 要求できず ${failed}件。実際の成否はブラウザのダウンロード欄で確認してください。`;
+      if (skippedDirs > 0) {
+        message += `（フォルダ ${skippedDirs} 件はスキップ）`;
+      }
+      if (failures.length) {
+        message +=
+          " — " +
+          failures
+            .slice(0, 3)
+            .map((item) => `${item.path}: ${item.error}`)
+            .join("; ");
+      }
+      setDeleteProgress({
+        total,
+        done: requested,
+        failed,
+        doneLabel: DOWNLOAD_DONE_LABEL,
+      });
+      setStatusMessage(message);
+      setBusyLabel(
+        failed === 0
+          ? `ダウンロード要求: ${requested}件`
+          : `要求 ${requested}件 / 要求できず ${failed}件`,
+      );
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+      setBusyLabel("");
+    }
+  }
+
   async function handleDeleteSelected() {
     const targets = checkedCount > 0 ? checkedList : focused ? [focused] : [];
     if (!targets.length) {
@@ -930,6 +1096,15 @@ export default function App() {
 
   const deleteTargets = checkedCount > 0 ? checkedList : focused ? [focused] : [];
   const deleteDirCount = deleteTargets.filter((entry) => entry.is_directory).length;
+  const downloadFileCount = filterDownloadableFiles(deleteTargets).files.length;
+
+  function dismissStatusToast() {
+    // Keep the toast while a mutation is running so progress stays visible.
+    if (busy) return;
+    setStatusMessage("");
+    setDeleteProgress(null);
+    setBusyLabel("");
+  }
 
   return (
     <div className="relative mx-auto flex min-h-screen max-w-7xl flex-col gap-4 px-4 py-6">
@@ -957,7 +1132,7 @@ export default function App() {
 
       {(busy || statusMessage || deleteProgress) && (
         <div
-          className={`fixed top-4 right-4 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border px-4 py-3 shadow-2xl ${
+          className={`fixed top-4 right-4 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border px-4 py-3 pr-10 shadow-2xl relative ${
             busy
               ? "border-amber-700/60 bg-amber-950 text-amber-50"
               : "border-emerald-800/60 bg-emerald-950 text-emerald-50"
@@ -965,12 +1140,23 @@ export default function App() {
           role="status"
           aria-live="polite"
         >
+          {!busy && (
+            <button
+              type="button"
+              onClick={dismissStatusToast}
+              className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md text-lg leading-none opacity-70 hover:bg-black/25 hover:opacity-100"
+              aria-label="通知を閉じる"
+              title="閉じる"
+            >
+              ×
+            </button>
+          )}
           <p className="text-sm font-medium">
             {busy ? busyLabel || "処理中…" : "完了"}
           </p>
           {deleteProgress && (
             <p className="mt-1 text-sm font-semibold tabular-nums tracking-tight">
-              成功 {deleteProgress.done} 件
+              {deleteProgress.doneLabel ?? "成功"} {deleteProgress.done} 件
               {deleteProgress.failed > 0 ? ` / 失敗 ${deleteProgress.failed} 件` : ""}
               <span className="font-normal opacity-80">
                 {" "}
@@ -1009,7 +1195,7 @@ export default function App() {
           Modal ComfyUI Asset Manager
         </h1>
         <p className="text-sm text-zinc-400">
-          大量ファイルの整理用。チェックで複数選択 → 一括削除できます（完全削除・取り消し不可）。
+          大量ファイルの整理用。通常クリックは1件選択、⌘/Ctrl+クリックやチェックで複数選択。一括ダウンロード・削除に対応（削除は完全削除・取り消し不可）。
           削除すると一覧から即消え、右上に成功件数の進捗が出ます。
         </p>
       </header>
@@ -1189,6 +1375,13 @@ export default function App() {
                   >
                     選択解除
                   </Button>
+                  <Button
+                    className="rounded border border-sky-800 bg-sky-950/50 px-2.5 py-1 text-xs text-sky-100 hover:bg-sky-900/60 disabled:opacity-40"
+                    onPress={() => void handleDownloadSelected()}
+                    isDisabled={!downloadFileCount || busy}
+                  >
+                    選択をDL（{downloadFileCount}）
+                  </Button>
                   <DialogTrigger>
                     <Button
                       className="rounded bg-red-700 px-2.5 py-1 text-xs text-white hover:bg-red-600 disabled:opacity-40"
@@ -1251,7 +1444,7 @@ export default function App() {
                     </ModalOverlay>
                   </DialogTrigger>
                   <span className="text-[11px] text-zinc-600">
-                    ドラッグまたは Shift+クリックで範囲選択
+                    クリック=1件 · ⌘/Ctrl+クリック=追加/解除 · Shift=範囲 · ドラッグ=範囲
                   </span>
                 </div>
 
@@ -1320,13 +1513,7 @@ export default function App() {
                               className="block w-full text-left"
                               onClick={(event) => {
                                 if (consumeSuppressedClick()) return;
-                                if (event.shiftKey) selectRange(entry);
-                                else if (event.metaKey || event.ctrlKey) {
-                                  toggleCheck(entry);
-                                } else {
-                                  focusEntry(entry);
-                                  if (!checked.has(entry.path)) toggleCheck(entry, true);
-                                }
+                                handleItemClick(entry, event);
                               }}
                               onDoubleClick={() => {
                                 if (isDir) void openFolder(entry);
@@ -1356,6 +1543,23 @@ export default function App() {
                                   // Keep gallery thumbs below sidebar preview in the network scheduler.
                                   fetchPriority="low"
                                   className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
+                                  onError={(event) => {
+                                    const img = event.currentTarget;
+                                    if (img.dataset.fallback === "1") return;
+                                    img.dataset.fallback = "1";
+                                    // Inline SVG so a failed thumb never shows a broken-image icon.
+                                    img.src =
+                                      "data:image/svg+xml," +
+                                      encodeURIComponent(
+                                        `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">` +
+                                          `<rect width="256" height="256" fill="#18181b"/>` +
+                                          `<text x="128" y="120" text-anchor="middle" fill="#a1a1aa" font-size="14" font-family="system-ui,sans-serif">${
+                                            isVideo ? "動画" : "プレビューなし"
+                                          }</text>` +
+                                          `<text x="128" y="148" text-anchor="middle" fill="#52525b" font-size="11" font-family="system-ui,sans-serif">サムネイル取得失敗</text>` +
+                                          `</svg>`,
+                                      );
+                                  }}
                                 />
                               )}
                               <div
@@ -1467,12 +1671,7 @@ export default function App() {
                             onPointerDown={(event) => beginDragSelect(entry, event)}
                             onClick={(event) => {
                               if (consumeSuppressedClick()) return;
-                              if (event.shiftKey) selectRange(entry);
-                              else if (event.metaKey || event.ctrlKey) toggleCheck(entry);
-                              else {
-                                focusEntry(entry);
-                                if (!checked.has(entry.path)) toggleCheck(entry, true);
-                              }
+                              handleItemClick(entry, event);
                             }}
                             onDoubleClick={() => void openFolder(entry)}
                           >
@@ -1532,7 +1731,7 @@ export default function App() {
                     <div className="mb-3 rounded-md border border-sky-900/50 bg-sky-950/30 p-3 text-sm text-sky-100">
                       <p className="font-medium">{checkedCount} 件選択中</p>
                       <p className="mt-1 text-xs text-sky-200/80">
-                        一括削除は上のツールバーから。プレビュー・移動は最後にフォーカスした 1 件です。
+                        一括削除・ダウンロードは上のツールバーから。プレビューは最後にフォーカスした 1 件です。
                       </p>
                       <ul className="mt-2 max-h-28 overflow-auto text-xs text-sky-100/70">
                         {checkedList.slice(0, 30).map((entry) => (
@@ -1624,7 +1823,7 @@ export default function App() {
                     </div>
                   ) : (
                     <p className="text-sm text-zinc-500">
-                      チェックで複数選択、クリックでプレビュー対象を切り替え。
+                      クリックで1件選択。⌘/Ctrl+クリックやチェックで複数選択。
                     </p>
                   )}
                 </div>
