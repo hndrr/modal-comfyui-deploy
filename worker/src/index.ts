@@ -255,7 +255,14 @@ async function proxyWebSocket(
   headers.set("Upgrade", "websocket");
 
   const upstream = await fetch(
-    new Request(upstreamUrl, { method: request.method, headers })
+    new Request(upstreamUrl, {
+      method: request.method,
+      headers,
+      // 既定の "follow" だと、Modal が別オリジンへ 3xx を返したときに
+      // Modal-Key / Modal-Secret を付けたまま追従してしまう。
+      // 3xx はそのままブラウザへ返す。
+      redirect: "manual",
+    })
   );
 
   if (!upstream.webSocket) {

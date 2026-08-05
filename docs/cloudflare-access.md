@@ -98,7 +98,15 @@ headers.delete("Sec-WebSocket-Extensions");
 headers.delete("Connection");
 headers.set("Upgrade", "websocket");
 
-const upstream = await fetch(new Request(upstreamUrl, { method: "GET", headers }));
+const upstream = await fetch(
+  new Request(upstreamUrl, {
+    method: "GET",
+    headers,
+    // 既定の "follow" だと 3xx に追従して Modal-Key / Modal-Secret が
+    // 転送先へ渡ってしまう
+    redirect: "manual",
+  })
+);
 
 // upstream の Response をそのまま返す
 return upstream;
