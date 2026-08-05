@@ -47,6 +47,8 @@ import type { AssetEntry, AssetListResponse, SortMode, VolumeId } from "./types"
 import { SORT_OPTIONS } from "./types";
 
 const DOWNLOAD_STAGGER_MS = 300;
+/** Downloads leave the page once requested, so the toast counts requests, not successes. */
+const DOWNLOAD_DONE_LABEL = "要求";
 /** Completed status toast auto-hides after this (manual × still works). */
 const TOAST_AUTO_DISMISS_MS = 5_000;
 
@@ -54,7 +56,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Trigger a same-origin attachment download via a temporary anchor. */
+/**
+ * Trigger a same-origin attachment download via a temporary anchor.
+ *
+ * The browser owns the transfer from here on: a throw only means the DOM call
+ * itself failed, so callers must not read a successful return as "the file was
+ * downloaded" — a 4xx/5xx from /api/assets/content is invisible to us.
+ */
 function triggerBrowserDownload(url: string, fileName: string): void {
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -136,6 +144,8 @@ export default function App() {
     total: number;
     done: number;
     failed: number;
+    /** Wording for the `done` counter; downloads can only claim "要求", not "成功". */
+    doneLabel?: string;
   } | null>(null);
   const requestId = useRef(0);
   /** Latest non-quiet list request — used so quiet refresh can't leave loading stuck. */
@@ -916,15 +926,17 @@ export default function App() {
 
     const total = files.length;
     setBusy(true);
-    setDeleteProgress({ total, done: 0, failed: 0 });
-    setBusyLabel(`ダウンロード中 0/${total}（成功 0）`);
+    setDeleteProgress({ total, done: 0, failed: 0, doneLabel: DOWNLOAD_DONE_LABEL });
+    setBusyLabel(`ダウンロード要求 0/${total}`);
     setStatusMessage(
       skippedDirs > 0
-        ? `${total}件をダウンロード開始…（フォルダ ${skippedDirs} 件はスキップ）`
-        : `${total}件をダウンロード開始…`,
+        ? `${total}件のダウンロードを要求中…（フォルダ ${skippedDirs} 件はスキップ）`
+        : `${total}件のダウンロードを要求中…`,
     );
 
-    let done = 0;
+    // The browser handles each transfer out of band, so these counters track
+    // requests handed to the browser — never HTTP outcomes. See triggerBrowserDownload.
+    let requested = 0;
     let failed = 0;
     const failures: { path: string; error: string }[] = [];
     try {
@@ -935,7 +947,7 @@ export default function App() {
             contentUrl(entry.volume, entry.path, true, entry),
             entry.name,
           );
-          done += 1;
+          requested += 1;
         } catch (err) {
           failed += 1;
           failures.push({
@@ -943,15 +955,20 @@ export default function App() {
             error: err instanceof Error ? err.message : String(err),
           });
         }
-        const processed = done + failed;
-        setDeleteProgress({ total, done, failed });
+        const processed = requested + failed;
+        setDeleteProgress({
+          total,
+          done: requested,
+          failed,
+          doneLabel: DOWNLOAD_DONE_LABEL,
+        });
         setBusyLabel(
-          `ダウンロード中 ${processed}/${total}（成功 ${done}${
-            failed ? ` / 失敗 ${failed}` : ""
-          }）`,
+          `ダウンロード要求 ${processed}/${total}${
+            failed ? `（失敗 ${failed}）` : ""
+          }`,
         );
         setStatusMessage(
-          `ダウンロード進捗: 成功 ${done} / 失敗 ${failed} / 合計 ${total}`,
+          `ダウンロード要求: ${requested} / 失敗 ${failed} / 合計 ${total}`,
         );
         if (i < files.length - 1) {
           await sleep(DOWNLOAD_STAGGER_MS);
@@ -960,8 +977,8 @@ export default function App() {
 
       let message =
         failed === 0
-          ? `${done}件のダウンロードを開始しました。ブラウザのダウンロード欄を確認してください。`
-          : `ダウンロード: 成功 ${done}件 / 失敗 ${failed}件。ブラウザのダウンロード欄を確認してください。`;
+          ? `${requested}件のダウンロードを要求しました。実際の成否はブラウザのダウンロード欄で確認してください。`
+          : `ダウンロード要求: ${requested}件 / 要求できず ${failed}件。実際の成否はブラウザのダウンロード欄で確認してください。`;
       if (skippedDirs > 0) {
         message += `（フォルダ ${skippedDirs} 件はスキップ）`;
       }
@@ -973,12 +990,17 @@ export default function App() {
             .map((item) => `${item.path}: ${item.error}`)
             .join("; ");
       }
-      setDeleteProgress({ total, done, failed });
+      setDeleteProgress({
+        total,
+        done: requested,
+        failed,
+        doneLabel: DOWNLOAD_DONE_LABEL,
+      });
       setStatusMessage(message);
       setBusyLabel(
         failed === 0
-          ? `ダウンロード開始: ${done}件`
-          : `成功 ${done}件 / 失敗 ${failed}件`,
+          ? `ダウンロード要求: ${requested}件`
+          : `要求 ${requested}件 / 要求できず ${failed}件`,
       );
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : String(err));
@@ -1134,7 +1156,7 @@ export default function App() {
           </p>
           {deleteProgress && (
             <p className="mt-1 text-sm font-semibold tabular-nums tracking-tight">
-              成功 {deleteProgress.done} 件
+              {deleteProgress.doneLabel ?? "成功"} {deleteProgress.done} 件
               {deleteProgress.failed > 0 ? ` / 失敗 ${deleteProgress.failed} 件` : ""}
               <span className="font-normal opacity-80">
                 {" "}
@@ -1532,9 +1554,9 @@ export default function App() {
                                         `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">` +
                                           `<rect width="256" height="256" fill="#18181b"/>` +
                                           `<text x="128" y="120" text-anchor="middle" fill="#a1a1aa" font-size="14" font-family="system-ui,sans-serif">${
-                                            isVideo ? "VIDEO" : "NO PREVIEW"
+                                            isVideo ? "動画" : "プレビューなし"
                                           }</text>` +
-                                          `<text x="128" y="148" text-anchor="middle" fill="#52525b" font-size="11" font-family="system-ui,sans-serif">thumb failed</text>` +
+                                          `<text x="128" y="148" text-anchor="middle" fill="#52525b" font-size="11" font-family="system-ui,sans-serif">サムネイル取得失敗</text>` +
                                           `</svg>`,
                                       );
                                   }}

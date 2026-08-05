@@ -194,6 +194,37 @@ class VideoPosterExtractionTests(unittest.TestCase):
             self.assertIn("-ss", calls[0])
             self.assertIn("1", calls[0])
 
+    def test_extract_attempts_share_a_deadline_under_the_wait_timeout(self) -> None:
+        clock = {"t": 0.0}
+        timeouts: list[float] = []
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            timeout = kwargs["timeout"]
+            timeouts.append(timeout)
+            # Every attempt burns its whole budget before failing.
+            clock["t"] += timeout
+            return mock.Mock(returncode=1, stdout=b"", stderr=b"fail")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "clip.mp4"
+            dest = root / "poster.jpg"
+            source.write_bytes(b"fake-video")
+            with (
+                mock.patch.object(asset_rpc.shutil, "which", return_value="/usr/bin/ffmpeg"),
+                mock.patch.object(asset_rpc, "_now", side_effect=lambda: clock["t"]),
+                mock.patch("subprocess.run", side_effect=fake_run),
+            ):
+                self.assertFalse(asset_rpc._extract_video_poster(source, dest))
+
+        # Followers waiting on the single-flight event must never time out first.
+        self.assertLess(
+            asset_rpc.POSTER_TOTAL_BUDGET_SEC, asset_rpc.THUMB_WAIT_TIMEOUT_SEC
+        )
+        self.assertLessEqual(sum(timeouts), asset_rpc.POSTER_TOTAL_BUDGET_SEC)
+        # The deadline cuts the tail attempts short instead of running every one.
+        self.assertLess(len(timeouts), len(asset_rpc._video_poster_attempts(source, dest)))
+
     def test_extract_returns_false_when_ffmpeg_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "clip.mp4"
