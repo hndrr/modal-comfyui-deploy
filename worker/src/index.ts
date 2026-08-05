@@ -77,8 +77,29 @@ function normalizeTeamDomain(raw: string): string {
   return raw.trim().replace(/\/+$/, "");
 }
 
-function findMissingConfigKeys(env: Env): string[] {
-  return REQUIRED_CONFIG_KEYS.filter((key) => !env[key]?.trim());
+/**
+ * 転送前に設定を検証する。問題があれば理由を返し、無ければ null を返す。
+ *
+ * MODAL_ORIGIN が https でない場合も設定エラーとして扱う。http のオリジンへ
+ * 転送すると Modal-Key / Modal-Secret が平文で流れるため、転送そのものを止める。
+ */
+function findConfigError(env: Env): string | null {
+  const missing = REQUIRED_CONFIG_KEYS.filter((key) => !env[key]?.trim());
+  if (missing.length > 0) {
+    return `Missing configuration: ${missing.join(", ")}`;
+  }
+
+  let origin: URL;
+  try {
+    origin = new URL(env.MODAL_ORIGIN.trim());
+  } catch {
+    return `MODAL_ORIGIN is not a valid URL`;
+  }
+  if (origin.protocol !== "https:") {
+    return `MODAL_ORIGIN must use https (got ${origin.protocol})`;
+  }
+
+  return null;
 }
 
 function readCookie(cookieHeader: string | null, name: string): string | null {
@@ -161,10 +182,39 @@ function buildUpstreamHeaders(request: Request, env: Env): Headers {
   const headers = new Headers(request.headers);
   headers.delete("Host");
   headers.delete(ACCESS_JWT_HEADER);
+
+  // Access の JWT はクッキーにも入っている。ヘッダーだけ落としても
+  // Cookie 経由で ComfyUI へ渡ってしまうため、そちらも取り除く。
+  // 他のクッキーは ComfyUI が使う可能性があるので残す。
+  const cookie = stripAccessCookie(request.headers.get("Cookie"));
+  if (cookie) {
+    headers.set("Cookie", cookie);
+  } else {
+    headers.delete("Cookie");
+  }
+
   // クライアントが偽装したヘッダーがあっても set で上書きされる。
   headers.set("Modal-Key", env.MODAL_KEY);
   headers.set("Modal-Secret", env.MODAL_SECRET);
   return headers;
+}
+
+/** Cookie ヘッダーから CF_Authorization だけを取り除いて組み立て直す。 */
+function stripAccessCookie(cookieHeader: string | null): string | null {
+  if (!cookieHeader) {
+    return null;
+  }
+  const kept = cookieHeader
+    .split(";")
+    .filter((pair) => {
+      const separator = pair.indexOf("=");
+      const name = (separator === -1 ? pair : pair.slice(0, separator)).trim();
+      return name !== ACCESS_JWT_COOKIE;
+    })
+    .map((pair) => pair.trim())
+    .filter((pair) => pair.length > 0);
+
+  return kept.length > 0 ? kept.join("; ") : null;
 }
 
 function isWebSocketUpgrade(request: Request): boolean {
@@ -271,10 +321,11 @@ function textResponse(body: string, status: number): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const missing = findMissingConfigKeys(env);
-    if (missing.length > 0) {
-      // 設定が欠けている状態で素通しさせない。
-      console.error(`Missing configuration: ${missing.join(", ")}`);
+    // 設定に不備がある状態で素通しさせない。HTTP と WebSocket の両経路が
+    // この 1 か所を通るので、検証はここだけで足りる。
+    const configError = findConfigError(env);
+    if (configError) {
+      console.error(configError);
       return textResponse("Proxy is not configured.", 500);
     }
 
