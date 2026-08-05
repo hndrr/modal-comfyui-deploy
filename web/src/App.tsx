@@ -543,22 +543,31 @@ export default function App() {
     return true;
   }
 
+  /** Plain click: exclusive single select (Finder / Explorer style). */
+  function selectOnly(entry: AssetEntry) {
+    setChecked(new Map([[entry.path, entry]]));
+    lastRangeAnchor.current = entry.path;
+    focusEntry(entry);
+  }
+
   function beginDragSelect(entry: AssetEntry, event: ReactPointerEvent) {
     if (event.button !== 0) return;
     if (event.shiftKey || event.metaKey || event.ctrlKey) return;
     if (isDragExemptTarget(event.target)) return;
 
-    // Always check the painted range. Uncheck via checkbox / ⌘·Ctrl+click.
+    // Marquee from empty base so drag paints a fresh range (not accumulate forever).
+    // Checkbox / ⌘·Ctrl+click still toggle individual items.
     dragSelectRef.current = {
       startPath: entry.path,
       select: true,
-      base: new Map(checkedRef.current),
+      base: new Map(),
       lastPath: entry.path,
       moved: false,
     };
     document.body.classList.add("is-drag-selecting");
   }
 
+  /** Checkbox or ⌘/Ctrl+click: add/remove without clearing the rest. */
   function toggleCheck(entry: AssetEntry, next?: boolean) {
     setChecked((prev) => {
       const map = new Map(prev);
@@ -571,29 +580,43 @@ export default function App() {
     focusEntry(entry);
   }
 
+  /** Shift+click: select contiguous range from anchor (replaces selection). */
   function selectRange(toEntry: AssetEntry) {
     const anchor = lastRangeAnchor.current;
     if (!anchor) {
-      toggleCheck(toEntry, true);
+      selectOnly(toEntry);
       return;
     }
     const paths = pageEntries.map((entry) => entry.path);
     const from = paths.indexOf(anchor);
     const to = paths.indexOf(toEntry.path);
     if (from < 0 || to < 0) {
-      toggleCheck(toEntry, true);
+      selectOnly(toEntry);
       return;
     }
     const [start, end] = from < to ? [from, to] : [to, from];
-    setChecked((prev) => {
-      const map = new Map(prev);
+    setChecked(() => {
+      const map = new Map<string, AssetEntry>();
       for (let i = start; i <= end; i += 1) {
         const entry = pageEntries[i];
         if (entry) map.set(entry.path, entry);
       }
       return map;
     });
+    // Keep the original anchor so further Shift+clicks extend from the same end.
     focusEntry(toEntry);
+  }
+
+  function handleItemClick(entry: AssetEntry, event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) {
+    if (event.shiftKey) {
+      selectRange(entry);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) {
+      toggleCheck(entry);
+      return;
+    }
+    selectOnly(entry);
   }
 
   function setPageChecked(select: boolean) {
@@ -1150,7 +1173,7 @@ export default function App() {
           Modal ComfyUI Asset Manager
         </h1>
         <p className="text-sm text-zinc-400">
-          大量ファイルの整理用。チェックで複数選択 → 一括ダウンロード・一括削除できます（削除は完全削除・取り消し不可）。
+          大量ファイルの整理用。通常クリックは1件選択、⌘/Ctrl+クリックやチェックで複数選択。一括ダウンロード・削除に対応（削除は完全削除・取り消し不可）。
           削除すると一覧から即消え、右上に成功件数の進捗が出ます。
         </p>
       </header>
@@ -1399,7 +1422,7 @@ export default function App() {
                     </ModalOverlay>
                   </DialogTrigger>
                   <span className="text-[11px] text-zinc-600">
-                    ドラッグまたは Shift+クリックで範囲選択
+                    クリック=1件 · ⌘/Ctrl+クリック=追加/解除 · Shift=範囲 · ドラッグ=範囲
                   </span>
                 </div>
 
@@ -1468,13 +1491,7 @@ export default function App() {
                               className="block w-full text-left"
                               onClick={(event) => {
                                 if (consumeSuppressedClick()) return;
-                                if (event.shiftKey) selectRange(entry);
-                                else if (event.metaKey || event.ctrlKey) {
-                                  toggleCheck(entry);
-                                } else {
-                                  focusEntry(entry);
-                                  if (!checked.has(entry.path)) toggleCheck(entry, true);
-                                }
+                                handleItemClick(entry, event);
                               }}
                               onDoubleClick={() => {
                                 if (isDir) void openFolder(entry);
@@ -1504,6 +1521,23 @@ export default function App() {
                                   // Keep gallery thumbs below sidebar preview in the network scheduler.
                                   fetchPriority="low"
                                   className="aspect-square w-full object-contain bg-black/40 pointer-events-none"
+                                  onError={(event) => {
+                                    const img = event.currentTarget;
+                                    if (img.dataset.fallback === "1") return;
+                                    img.dataset.fallback = "1";
+                                    // Inline SVG so a failed thumb never shows a broken-image icon.
+                                    img.src =
+                                      "data:image/svg+xml," +
+                                      encodeURIComponent(
+                                        `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">` +
+                                          `<rect width="256" height="256" fill="#18181b"/>` +
+                                          `<text x="128" y="120" text-anchor="middle" fill="#a1a1aa" font-size="14" font-family="system-ui,sans-serif">${
+                                            isVideo ? "VIDEO" : "NO PREVIEW"
+                                          }</text>` +
+                                          `<text x="128" y="148" text-anchor="middle" fill="#52525b" font-size="11" font-family="system-ui,sans-serif">thumb failed</text>` +
+                                          `</svg>`,
+                                      );
+                                  }}
                                 />
                               )}
                               <div
@@ -1615,12 +1649,7 @@ export default function App() {
                             onPointerDown={(event) => beginDragSelect(entry, event)}
                             onClick={(event) => {
                               if (consumeSuppressedClick()) return;
-                              if (event.shiftKey) selectRange(entry);
-                              else if (event.metaKey || event.ctrlKey) toggleCheck(entry);
-                              else {
-                                focusEntry(entry);
-                                if (!checked.has(entry.path)) toggleCheck(entry, true);
-                              }
+                              handleItemClick(entry, event);
                             }}
                             onDoubleClick={() => void openFolder(entry)}
                           >
@@ -1772,7 +1801,7 @@ export default function App() {
                     </div>
                   ) : (
                     <p className="text-sm text-zinc-500">
-                      チェックで複数選択、クリックでプレビュー対象を切り替え。
+                      クリックで1件選択。⌘/Ctrl+クリックやチェックで複数選択。
                     </p>
                   )}
                 </div>

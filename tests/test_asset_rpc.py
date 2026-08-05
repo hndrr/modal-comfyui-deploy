@@ -162,6 +162,69 @@ class MaterializeConcurrencyTests(unittest.TestCase):
                     Path(first["path"]).unlink()
 
 
+class VideoPosterExtractionTests(unittest.TestCase):
+    def test_extract_tries_multiple_strategies_until_one_succeeds(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(list(cmd))
+            out = Path(cmd[-1])
+            # Fail first attempt, succeed on second.
+            if len(calls) < 2:
+                return mock.Mock(returncode=1, stdout=b"", stderr=b"fail")
+            out.write_bytes(b"x" * 200)
+            return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "clip.mp4"
+            dest = root / "poster.jpg"
+            source.write_bytes(b"fake-video")
+            with (
+                mock.patch.object(asset_rpc.shutil, "which", return_value="/usr/bin/ffmpeg"),
+                mock.patch("subprocess.run", side_effect=fake_run),
+            ):
+                ok = asset_rpc._extract_video_poster(source, dest)
+
+            self.assertTrue(ok)
+            self.assertTrue(dest.exists())
+            self.assertGreater(dest.stat().st_size, 128)
+            self.assertGreaterEqual(len(calls), 2)
+            # First strategy seeks to 1s (skip black intro frames).
+            self.assertIn("-ss", calls[0])
+            self.assertIn("1", calls[0])
+
+    def test_extract_returns_false_when_ffmpeg_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "clip.mp4"
+            dest = Path(directory) / "poster.jpg"
+            source.write_bytes(b"fake")
+            with mock.patch.object(asset_rpc.shutil, "which", return_value=None):
+                self.assertFalse(asset_rpc._extract_video_poster(source, dest))
+            self.assertFalse(dest.exists())
+
+    def test_thumb_digest_includes_generation_version(self) -> None:
+        entry = AssetEntry(
+            volume="comfy-outputs",
+            path="out/a.mp4",
+            name="a.mp4",
+            kind="file",
+            size=99,
+            modified_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            media_type="video",
+        )
+        with mock.patch.object(asset_rpc, "THUMB_GEN_VERSION", "v-test"):
+            digest_a = asset_rpc._entry_digest(entry, kind="thumb")
+        with mock.patch.object(asset_rpc, "THUMB_GEN_VERSION", "v-other"):
+            digest_b = asset_rpc._entry_digest(entry, kind="thumb")
+        self.assertNotEqual(digest_a, digest_b)
+        # File cache keys stay stable across thumb gen bumps.
+        file_a = asset_rpc._entry_digest(entry, kind="file")
+        with mock.patch.object(asset_rpc, "THUMB_GEN_VERSION", "v-other"):
+            file_b = asset_rpc._entry_digest(entry, kind="file")
+        self.assertEqual(file_a, file_b)
+
+
 class MaterializeEntryValidationTests(unittest.TestCase):
     def test_current_server_entry_replaces_supplied_metadata(self) -> None:
         current = AssetEntry(
