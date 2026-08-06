@@ -23,7 +23,7 @@ export interface Env {
    * 例:
    * {
    *   "comfy.example.com": "https://<workspace>--comfyui-ui.modal.run",
-   *   "model.example.com": "https://<workspace>--preserve-model-web-web.modal.run"
+   *   "model.example.com": "https://<workspace>--preserve-model-web.modal.run"
    * }
    */
   MODAL_ORIGINS: string;

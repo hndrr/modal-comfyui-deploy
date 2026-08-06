@@ -11,7 +11,7 @@
 # ホスト名も Modal の URL も環境固有の値なので、リポジトリには置かず
 # まとめてここ（と secret）に入れる。
 # URL は `uv run modal deploy ...` の出力に表示される。すべて https であること。
-MODAL_ORIGINS={"comfy.example.com":"https://<workspace>--comfyui-ui.modal.run","model.example.com":"https://<workspace>--preserve-model-web-web.modal.run"}
+MODAL_ORIGINS={"comfy.example.com":"https://<workspace>--comfyui-ui.modal.run","model.example.com":"https://<workspace>--preserve-model-web.modal.run"}
 
 # Zero Trust → Settings → Custom Pages に表示される Team domain
 TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com

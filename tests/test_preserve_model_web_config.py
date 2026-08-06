@@ -2,22 +2,30 @@ import os
 import unittest
 from unittest.mock import patch
 
-import preserve_model_web
+import preserve_model
+
+
+class AppCompositionTests(unittest.TestCase):
+    def test_download_and_web_functions_are_deployed_as_one_app(self) -> None:
+        self.assertEqual(
+            {"preserve_model", "web"},
+            set(preserve_model.app.registered_functions),
+        )
 
 
 class ResolveIntEnvTests(unittest.TestCase):
     CONFIGS = (
         (
-            preserve_model_web.PRESERVE_WEB_SCALEDOWN_WINDOW_ENV,
-            preserve_model_web.DEFAULT_SCALEDOWN_WINDOW,
-            preserve_model_web.MIN_SCALEDOWN_WINDOW,
-            preserve_model_web.MAX_SCALEDOWN_WINDOW,
+            preserve_model.PRESERVE_WEB_SCALEDOWN_WINDOW_ENV,
+            preserve_model.DEFAULT_SCALEDOWN_WINDOW,
+            preserve_model.MIN_SCALEDOWN_WINDOW,
+            preserve_model.MAX_SCALEDOWN_WINDOW,
         ),
         (
-            preserve_model_web.PRESERVE_WEB_FUNCTION_TIMEOUT_ENV,
-            preserve_model_web.DEFAULT_FUNCTION_TIMEOUT,
-            preserve_model_web.MIN_FUNCTION_TIMEOUT,
-            preserve_model_web.MAX_FUNCTION_TIMEOUT,
+            preserve_model.PRESERVE_WEB_FUNCTION_TIMEOUT_ENV,
+            preserve_model.DEFAULT_FUNCTION_TIMEOUT,
+            preserve_model.MIN_FUNCTION_TIMEOUT,
+            preserve_model.MAX_FUNCTION_TIMEOUT,
         ),
     )
 
@@ -27,7 +35,7 @@ class ResolveIntEnvTests(unittest.TestCase):
                 with patch.dict(os.environ, {}, clear=False):
                     os.environ.pop(env_name, None)
                     self.assertEqual(
-                        preserve_model_web._resolve_int_env(
+                        preserve_model._resolve_int_env(
                             env_name, default, minimum, maximum
                         ),
                         default,
@@ -39,7 +47,7 @@ class ResolveIntEnvTests(unittest.TestCase):
                 with self.subTest(env_name=env_name, value=value):
                     with patch.dict(os.environ, {env_name: f"  {value}  "}):
                         self.assertEqual(
-                            preserve_model_web._resolve_int_env(
+                            preserve_model._resolve_int_env(
                                 env_name, default, minimum, maximum
                             ),
                             value,
@@ -62,18 +70,18 @@ class ResolveIntEnvTests(unittest.TestCase):
                             ValueError,
                             rf"{env_name}.*{minimum}.*{maximum}",
                         ):
-                            preserve_model_web._resolve_int_env(
+                            preserve_model._resolve_int_env(
                                 env_name, default, minimum, maximum
                             )
 
 
 class ResolveOnOffEnvTests(unittest.TestCase):
-    ENV_NAME = preserve_model_web.PRESERVE_WEB_REQUIRES_PROXY_AUTH_ENV
+    ENV_NAME = preserve_model.PRESERVE_WEB_REQUIRES_PROXY_AUTH_ENV
 
     def test_defaults_to_off_when_missing(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop(self.ENV_NAME, None)
-            self.assertFalse(preserve_model_web._resolve_on_off_env(self.ENV_NAME))
+            self.assertFalse(preserve_model._resolve_on_off_env(self.ENV_NAME))
 
     def test_accepts_on_and_off_with_whitespace_and_case(self) -> None:
         cases = (
@@ -88,7 +96,7 @@ class ResolveOnOffEnvTests(unittest.TestCase):
             with self.subTest(value=value):
                 with patch.dict(os.environ, {self.ENV_NAME: value}):
                     self.assertEqual(
-                        preserve_model_web._resolve_on_off_env(self.ENV_NAME),
+                        preserve_model._resolve_on_off_env(self.ENV_NAME),
                         expected,
                     )
 
@@ -97,7 +105,7 @@ class ResolveOnOffEnvTests(unittest.TestCase):
             with self.subTest(value=value):
                 with patch.dict(os.environ, {self.ENV_NAME: value}):
                     with self.assertRaisesRegex(ValueError, self.ENV_NAME):
-                        preserve_model_web._resolve_on_off_env(self.ENV_NAME)
+                        preserve_model._resolve_on_off_env(self.ENV_NAME)
 
 
 class ImageSourceLayoutTests(unittest.TestCase):
@@ -106,8 +114,8 @@ class ImageSourceLayoutTests(unittest.TestCase):
 
     def test_both_sources_land_in_the_same_remote_directory(self) -> None:
         remote_paths = [
-            f"{preserve_model_web.REMOTE_SOURCE_DIR}/preserve_model.py",
-            f"{preserve_model_web.REMOTE_SOURCE_DIR}/preserve_model_gui.py",
+            f"{preserve_model.REMOTE_SOURCE_DIR}/preserve_model.py",
+            f"{preserve_model.REMOTE_SOURCE_DIR}/preserve_model_gui.py",
         ]
         directories = {path.rsplit("/", 1)[0] for path in remote_paths}
         self.assertEqual(len(directories), 1)
