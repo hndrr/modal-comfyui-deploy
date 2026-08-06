@@ -34,18 +34,22 @@ _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
 
 @dataclass
 class AppConfig:
+    """実行モードの設定。
+
+    `use_deployed` はローカル実行では常に False で、デプロイ不要の
+    `modal.App.run()`（一時コンテナ）モードで動く。
+
+    True にするのは `preserve_model_web.py` だけ。Modal のコンテナ内では
+    一時 App を起動できないため、Web 版はデプロイ済み関数を呼ぶ必要がある。
+    """
+
     use_deployed: bool
     deployed_app_name: str
     deployed_function_name: str
 
 
 CONFIG = AppConfig(
-    use_deployed=os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower()
-    in {
-        "1",
-        "true",
-        "yes",
-    },
+    use_deployed=False,
     deployed_app_name=os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model"),
     deployed_function_name=os.getenv(
         "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"
@@ -407,30 +411,6 @@ def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Hugging FaceモデルをModalへ保存するGUIを起動します",
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--use-deployed",
-        dest="use_deployed",
-        action="store_true",
-        help="デプロイ済みのModal関数を利用して実行します",
-    )
-    group.add_argument(
-        "--use-local",
-        dest="use_deployed",
-        action="store_false",
-        help="ローカルからmodal.App.run()で一時コンテナを起動します",
-    )
-    parser.set_defaults(use_deployed=None)
-    parser.add_argument(
-        "--deployed-app-name",
-        dest="deployed_app_name",
-        help="デプロイ済みアプリの名前を指定します",
-    )
-    parser.add_argument(
-        "--deployed-function-name",
-        dest="deployed_function_name",
-        help="デプロイ済み関数の名前を指定します",
-    )
     parser.add_argument(
         "--share",
         action="store_true",
@@ -452,14 +432,20 @@ def build_model_import_panel(*, show_standalone_options: bool = True) -> None:
     """Render the reusable Hugging Face import controls in the current Blocks."""
 
     options_help = (
-        "- デプロイ済み関数を利用したい場合は `--use-deployed` フラグ、または環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。\n"
-        "- デフォルト以外のアプリ名・関数名でデプロイしているときは `--deployed-app-name` / `--deployed-function-name` あるいは環境変数 `PRESERVE_MODEL_DEPLOYED_APP` / `PRESERVE_MODEL_DEPLOYED_FUNCTION` で上書きできます。"
+        "実行のたびに `modal.App.run()` で一時コンテナを起動します。事前のデプロイは不要です。"
         if show_standalone_options
-        else "デプロイ済み関数を利用する場合は、起動前に環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。"
+        else f"デプロイ済みの `{CONFIG.deployed_app_name}` App の `{CONFIG.deployed_function_name}` 関数を呼び出します。"
+    )
+    # Modal CLI へのログインが要るのはローカル実行のときだけ。
+    # コンテナ内ではコンテナ ID で認証されるため、その案内を出すと誤りになる。
+    intro = (
+        "`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。"
+        if show_standalone_options
+        else "`preserve_model.py` の処理をGUIから呼び出します。"
     )
     gr.Markdown(
         "### Hugging FaceのモデルをModalボリュームに保存\n"
-        "`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。\n\n"
+        f"{intro}\n\n"
         f"{options_help}"
     )
 
@@ -512,13 +498,6 @@ def build_interface() -> gr.Blocks:
 
 def main(argv: Optional[list[str]] = None) -> None:
     args = _parse_cli_args(argv)
-
-    if args.use_deployed is not None:
-        CONFIG.use_deployed = args.use_deployed
-    if args.deployed_app_name:
-        CONFIG.deployed_app_name = args.deployed_app_name
-    if args.deployed_function_name:
-        CONFIG.deployed_function_name = args.deployed_function_name
 
     launch_kwargs = {}
     if args.share:

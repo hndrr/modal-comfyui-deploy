@@ -14,8 +14,19 @@ import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
  */
 
 export interface Env {
-  /** 例: https://<workspace>--comfyui-ui.modal.run */
-  MODAL_ORIGIN: string;
+  /**
+   * 公開ホスト名 → Modal のオリジン、の JSON マップ。
+   *
+   * ホスト名も Modal の URL も環境固有の値なので、リポジトリには置かず
+   * まとめて 1 つの secret に入れる。
+   *
+   * 例:
+   * {
+   *   "comfy.example.com": "https://<workspace>--comfyui-ui.modal.run",
+   *   "model.example.com": "https://<workspace>--preserve-model-web-web.modal.run"
+   * }
+   */
+  MODAL_ORIGINS: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -30,7 +41,7 @@ const ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
 const ACCESS_JWT_COOKIE = "CF_Authorization";
 
 const REQUIRED_CONFIG_KEYS = [
-  "MODAL_ORIGIN",
+  "MODAL_ORIGINS",
   "TEAM_DOMAIN",
   "POLICY_AUD",
   "MODAL_KEY",
@@ -78,28 +89,86 @@ function normalizeTeamDomain(raw: string): string {
 }
 
 /**
- * 転送前に設定を検証する。問題があれば理由を返し、無ければ null を返す。
+ * MODAL_ORIGINS のパース結果。生の文字列をキーにメモ化する。
  *
- * MODAL_ORIGIN が https でない場合も設定エラーとして扱う。http のオリジンへ
- * 転送すると Modal-Key / Modal-Secret が平文で流れるため、転送そのものを止める。
+ * 保持するのはプレーンなオブジェクトだけなので、リクエストをまたいで
+ * 再利用してよい（I/O オブジェクトを持ち越せないという Workers の制約は、
+ * fetch 由来のストリームやソケットの話であってこれには当たらない）。
  */
+let cachedOrigins: { raw: string; map: Map<string, string> } | undefined;
+
+/** MODAL_ORIGINS をパースする。不正なら理由を Error として投げる。 */
+function parseOrigins(raw: string): Map<string, string> {
+  if (cachedOrigins?.raw === raw) {
+    return cachedOrigins.map;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("MODAL_ORIGINS is not valid JSON");
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("MODAL_ORIGINS must be a JSON object of hostname -> origin");
+  }
+
+  const map = new Map<string, string>();
+  for (const [hostname, origin] of Object.entries(parsed as Record<string, unknown>)) {
+    const host = hostname.trim().toLowerCase();
+    if (!host) {
+      throw new Error("MODAL_ORIGINS contains an empty hostname");
+    }
+    if (typeof origin !== "string") {
+      throw new Error(`MODAL_ORIGINS["${host}"] must be a string`);
+    }
+
+    let url: URL;
+    try {
+      url = new URL(origin.trim());
+    } catch {
+      throw new Error(`MODAL_ORIGINS["${host}"] is not a valid URL`);
+    }
+    // http のオリジンへ転送すると Modal-Key / Modal-Secret が平文経路に載る。
+    if (url.protocol !== "https:") {
+      throw new Error(
+        `MODAL_ORIGINS["${host}"] must use https (got ${url.protocol})`
+      );
+    }
+
+    map.set(host, url.origin);
+  }
+
+  if (map.size === 0) {
+    throw new Error("MODAL_ORIGINS must contain at least one hostname");
+  }
+
+  cachedOrigins = { raw, map };
+  return map;
+}
+
 function findConfigError(env: Env): string | null {
   const missing = REQUIRED_CONFIG_KEYS.filter((key) => !env[key]?.trim());
   if (missing.length > 0) {
     return `Missing configuration: ${missing.join(", ")}`;
   }
 
-  let origin: URL;
   try {
-    origin = new URL(env.MODAL_ORIGIN.trim());
-  } catch {
-    return `MODAL_ORIGIN is not a valid URL`;
-  }
-  if (origin.protocol !== "https:") {
-    return `MODAL_ORIGIN must use https (got ${origin.protocol})`;
+    parseOrigins(env.MODAL_ORIGINS.trim());
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
   }
 
   return null;
+}
+
+/**
+ * 受け取ったホスト名に対応する Modal のオリジンを返す。
+ * マップに無いホスト名では転送しない（fail-closed）。
+ */
+function resolveUpstreamOrigin(env: Env, hostname: string): string | null {
+  return parseOrigins(env.MODAL_ORIGINS.trim()).get(hostname.toLowerCase()) ?? null;
 }
 
 function readCookie(cookieHeader: string | null, name: string): string | null {
@@ -341,7 +410,16 @@ export default {
     }
 
     const requestUrl = new URL(request.url);
-    const upstreamUrl = upstreamUrlFor(requestUrl, env.MODAL_ORIGIN);
+
+    const modalOrigin = resolveUpstreamOrigin(env, requestUrl.hostname);
+    if (!modalOrigin) {
+      // Custom Domain は明示的に割り当てるものなので、ここに来るのは
+      // MODAL_ORIGINS への追加漏れを意味する。転送せずに落とす。
+      console.error(`No upstream configured for hostname: ${requestUrl.hostname}`);
+      return textResponse("Proxy is not configured for this hostname.", 500);
+    }
+
+    const upstreamUrl = upstreamUrlFor(requestUrl, modalOrigin);
 
     if (isWebSocketUpgrade(request)) {
       return proxyWebSocket(request, env, upstreamUrl);
@@ -356,6 +434,6 @@ export default {
       })
     );
 
-    return rewriteLocationHeader(upstream, env.MODAL_ORIGIN, requestUrl.origin);
+    return rewriteLocationHeader(upstream, modalOrigin, requestUrl.origin);
   },
 } satisfies ExportedHandler<Env>;
