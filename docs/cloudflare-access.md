@@ -162,7 +162,7 @@ Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合�
 ```json
 {
   "comfy.example.com": "https://<workspace>--comfyui-ui.modal.run",
-  "model.example.com": "https://<workspace>--preserve-model-web-web.modal.run"
+  "model.example.com": "https://<workspace>--preserve-model-web.modal.run"
 }
 ```
 

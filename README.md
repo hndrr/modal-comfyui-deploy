@@ -2,12 +2,11 @@
 
 Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
 
-今の主要機能は次の 5 つです。
+今の主要機能は次の 4 つです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
-- `preserve_model.py`: Hugging Face の単一ファイルを Modal Volume に保存する
+- `preserve_model.py`: Hugging Face の単一ファイル保存と、その Web GUI を Modal にデプロイする
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す（ローカル実行）
-- `preserve_model_web.py`: 上記の GUI を Modal にデプロイしてブラウザから使えるようにする
 - `web/`: ComfyUI のモデル・入力・出力を React + Hono 管理画面から操作する（`modal volume` CLI 経由）
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
@@ -214,6 +213,8 @@ uv run modal run preserve_model.py::preserve_model \
 uv run modal deploy preserve_model.py --name preserve-model
 ```
 
+このコマンドではモデル保存用の `preserve_model` と GUI 用の `web` が常にまとめてデプロイされます。
+
 Python から呼ぶ例:
 
 ```bash
@@ -243,28 +244,13 @@ uv run modal app logs preserve-model --tail
 
 `preserve_model_gui.py` は `preserve_model.py` を UI から実行するためのラッパーです。
 
-ローカルの `app.run()` を使う既定モード:
-
 ```bash
 uv run preserve_model_gui.py
 ```
 
-デプロイ済み関数を使う:
+実行のたびに `modal.App.run()` で一時コンテナを起動するため、**事前のデプロイは不要**です。既定 URL は `http://127.0.0.1:7860`。
 
-```bash
-uv run preserve_model_gui.py --use-deployed
-```
-
-既定のアクセス先:
-
-- App 名: `preserve-model`
-- Function 名: `preserve_model`
-
-上書き方法:
-
-- CLI 引数: `--deployed-app-name`, `--deployed-function-name`
-- 環境変数: `PRESERVE_MODEL_DEPLOYED_APP`, `PRESERVE_MODEL_DEPLOYED_FUNCTION`
-- デプロイ済み利用フラグ: `PRESERVE_MODEL_USE_DEPLOYED=1`
+ブラウザから使いたい場合は、同じ UI を Modal にデプロイできます（後述）。
 
 ### GUI で受け付ける入力
 
@@ -290,27 +276,24 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 
 主な起動オプション:
 
-- `--use-deployed`
-- `--use-local`
 - `--share`
 - `--server-port`
 - `--server-name`
 
 ### Modal にデプロイしてブラウザから使う
 
-`preserve_model_web.py` は同じ GUI を Modal 上の Web アプリとして公開するラッパーです。UI の組み立ては `preserve_model_gui.py` を再利用しており、ローカル実行の手順は変わりません。
-
-先に `preserve-model` App をデプロイしておきます（GUI がこの関数を呼ぶため）。
+`preserve_model.py` は同じ GUI を Modal 上の Web アプリとしても公開します。UI の組み立ては `preserve_model_gui.py` を再利用しており、ローカル実行の手順は変わりません。
 
 ```bash
-uv run modal deploy preserve_model.py --name preserve-model
+PRESERVE_WEB_REQUIRES_PROXY_AUTH=on uv run modal deploy preserve_model.py
 ```
 
-GUI をデプロイします。
+Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 つ並びます。
 
-```bash
-PRESERVE_WEB_REQUIRES_PROXY_AUTH=on uv run modal deploy preserve_model_web.py
-```
+- `preserve_model`: ダウンロードして Volume に保存する処理
+- `web`: この GUI
+
+両方の Function は同じファイルと App に定義されているため、どちらか一方だけが消えることはありません。
 
 環境変数:
 
@@ -468,9 +451,8 @@ uv run python move_volume_file.py \
 ## ファイル一覧
 
 - `comfyapp.py`: ComfyUI の Modal デプロイ本体
-- `preserve_model.py`: Hugging Face モデル保存処理
+- `preserve_model.py`: Hugging Face モデル保存処理と Modal 上の Web GUI
 - `preserve_model_gui.py`: モデル保存 GUI（ローカル実行）
-- `preserve_model_web.py`: モデル保存 GUI を Modal で公開するラッパー
 - `asset_manager.py`: Modal Volume 資産の CRUD サービス（Python / テスト・CLI 向け）
 - `web/`: React GUI + Hono API（`modal volume` CLI 経由の資産管理画面）
 - `asset_manager_gui.py`: 旧 Gradio 起動の廃止スタブ
