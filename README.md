@@ -303,9 +303,6 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 
 ## 4. ComfyUI 資産を管理する
 
-<img width="1342" height="1050" alt="スクリーンショット 2026-08-04 20 47 32" src="https://github.com/user-attachments/assets/fc568c18-7f0e-4e2f-9f1f-7591fda7e3d7" />
-
-
 `web/` の React + Hono アプリが、次の Modal Volume をローカル管理画面から操作します。
 
 - `comfy-model`
@@ -345,6 +342,9 @@ npm run dev
 ```bash
 PORT=7861 npm start
 ```
+
+<img width="1342" height="1050" alt="スクリーンショット 2026-08-04 20 47 32" src="https://github.com/user-attachments/assets/fc568c18-7f0e-4e2f-9f1f-7591fda7e3d7" />
+
 
 管理画面はローカル利用専用です。`HOST` は `127.0.0.1`、`localhost`、`::1` などのloopbackアドレスだけを受け付けます。`0.0.0.0`、LANアドレス、公開アドレスを指定するとサーバーは起動を拒否します。リバースプロキシやトンネルを使った外部公開もサポートしません。
 
