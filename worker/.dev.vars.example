@@ -7,8 +7,11 @@
 # wrangler.jsonc には環境固有の値を一切書かない方針のため、ここが唯一の
 # ローカル設定ファイルになる。詳細は docs/cloudflare-access.md を参照。
 
-# `uv run modal deploy comfyapp.py` の出力に表示される URL
-MODAL_ORIGIN=https://<workspace>--comfyui-ui.modal.run
+# 公開ホスト名 → Modal のオリジン、の JSON マップ（1 行で書く）。
+# ホスト名も Modal の URL も環境固有の値なので、リポジトリには置かず
+# まとめてここ（と secret）に入れる。
+# URL は `uv run modal deploy ...` の出力に表示される。すべて https であること。
+MODAL_ORIGINS={"comfy.example.com":"https://<workspace>--comfyui-ui.modal.run","model.example.com":"https://<workspace>--preserve-model-web-web.modal.run"}
 
 # Zero Trust → Settings → Custom Pages に表示される Team domain
 TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com

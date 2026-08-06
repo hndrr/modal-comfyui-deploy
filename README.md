@@ -2,11 +2,12 @@
 
 Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
 
-今の主要機能は次の 4 つです。
+今の主要機能は次の 5 つです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
 - `preserve_model.py`: Hugging Face の単一ファイルを Modal Volume に保存する
-- `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す
+- `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す（ローカル実行）
+- `preserve_model_web.py`: 上記の GUI を Modal にデプロイしてブラウザから使えるようにする
 - `web/`: ComfyUI のモデル・入力・出力を React + Hono 管理画面から操作する（`modal volume` CLI 経由）
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
@@ -295,6 +296,35 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 - `--server-port`
 - `--server-name`
 
+### Modal にデプロイしてブラウザから使う
+
+`preserve_model_web.py` は同じ GUI を Modal 上の Web アプリとして公開するラッパーです。UI の組み立ては `preserve_model_gui.py` を再利用しており、ローカル実行の手順は変わりません。
+
+先に `preserve-model` App をデプロイしておきます（GUI がこの関数を呼ぶため）。
+
+```bash
+uv run modal deploy preserve_model.py --name preserve-model
+```
+
+GUI をデプロイします。
+
+```bash
+PRESERVE_WEB_REQUIRES_PROXY_AUTH=on uv run modal deploy preserve_model_web.py
+```
+
+環境変数:
+
+- `PRESERVE_WEB_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`（既定 `off`）
+- `PRESERVE_WEB_SCALEDOWN_WINDOW`: 縮退までの最大秒数（`2`〜`1200`、既定 `30`）
+- `PRESERVE_WEB_FUNCTION_TIMEOUT`: 1入力の最大実行秒数（`1`〜`86400`、既定 `1800`）
+
+コンテナ内では次の点がローカル実行と異なります。
+
+- `modal.App.run()` による一時コンテナ起動は Modal が禁じているため、**デプロイ済み関数を呼ぶモードに固定**されます
+- Modal の認証はコンテナ ID で自動的に通るため、`modal token` でのログインは不要です
+
+`PRESERVE_WEB_REQUIRES_PROXY_AUTH=on` にすると Modal の直 URL は 401 になるので、ブラウザから使うには Cloudflare Access 越しに公開します。手順は [docs/cloudflare-access.md](docs/cloudflare-access.md) を参照してください。1 つの Worker で ComfyUI と併せて出せます（`MODAL_ORIGINS` にホスト名を足すだけで、Worker のコード変更は不要）。
+
 デフォルト URL:
 
 `http://127.0.0.1:7860`
@@ -439,7 +469,8 @@ uv run python move_volume_file.py \
 
 - `comfyapp.py`: ComfyUI の Modal デプロイ本体
 - `preserve_model.py`: Hugging Face モデル保存処理
-- `preserve_model_gui.py`: モデル保存 GUI
+- `preserve_model_gui.py`: モデル保存 GUI（ローカル実行）
+- `preserve_model_web.py`: モデル保存 GUI を Modal で公開するラッパー
 - `asset_manager.py`: Modal Volume 資産の CRUD サービス（Python / テスト・CLI 向け）
 - `web/`: React GUI + Hono API（`modal volume` CLI 経由の資産管理画面）
 - `asset_manager_gui.py`: 旧 Gradio 起動の廃止スタブ
