@@ -147,7 +147,7 @@ DOTENV_PATH = Path(__file__).with_name(".env")
 load_dotenv(DOTENV_PATH, override=False)
 
 
-def _resolve_on_off_env(env_name: str, default: str = "off") -> bool:
+def _resolve_on_off_env(env_name: str, default: str = "on") -> bool:
     raw = os.environ.get(env_name, default).strip().lower()
     if raw == "on":
         return True

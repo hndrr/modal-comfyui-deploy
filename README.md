@@ -297,7 +297,7 @@ Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 �
 
 環境変数:
 
-- `PRESERVE_WEB_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`（既定 `off`）
+- `PRESERVE_WEB_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`（既定 `on`）。公開 GUI にする場合のみ明示的に `off`
 - `PRESERVE_WEB_SCALEDOWN_WINDOW`: 縮退までの最大秒数（`2`〜`1200`、既定 `30`）
 - `PRESERVE_WEB_FUNCTION_TIMEOUT`: 1入力の最大実行秒数（`1`〜`86400`、既定 `1800`）
 
