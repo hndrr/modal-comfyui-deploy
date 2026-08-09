@@ -78,10 +78,10 @@ class ResolveIntEnvTests(unittest.TestCase):
 class ResolveOnOffEnvTests(unittest.TestCase):
     ENV_NAME = preserve_model.PRESERVE_WEB_REQUIRES_PROXY_AUTH_ENV
 
-    def test_defaults_to_off_when_missing(self) -> None:
+    def test_defaults_to_on_when_missing(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop(self.ENV_NAME, None)
-            self.assertFalse(preserve_model._resolve_on_off_env(self.ENV_NAME))
+            self.assertTrue(preserve_model._resolve_on_off_env(self.ENV_NAME))
 
     def test_accepts_on_and_off_with_whitespace_and_case(self) -> None:
         cases = (

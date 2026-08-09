@@ -116,10 +116,33 @@ function parseOrigins(raw: string): Map<string, string> {
 
   const map = new Map<string, string>();
   for (const [hostname, origin] of Object.entries(parsed as Record<string, unknown>)) {
-    const host = hostname.trim().toLowerCase();
-    if (!host) {
+    const rawHost = hostname.trim();
+    if (!rawHost) {
       throw new Error("MODAL_ORIGINS contains an empty hostname");
     }
+
+    const host = rawHost.toLowerCase();
+    let hostnameUrl: URL;
+    try {
+      hostnameUrl = new URL(`https://${rawHost}`);
+    } catch {
+      throw new Error(`MODAL_ORIGINS contains an invalid hostname: ${hostname}`);
+    }
+    if (
+      hostnameUrl.hostname.toLowerCase() !== host ||
+      hostnameUrl.host.toLowerCase() !== host ||
+      hostnameUrl.pathname !== "/" ||
+      hostnameUrl.search ||
+      hostnameUrl.hash ||
+      hostnameUrl.username ||
+      hostnameUrl.password
+    ) {
+      throw new Error(`MODAL_ORIGINS contains an invalid hostname: ${hostname}`);
+    }
+    if (map.has(host)) {
+      throw new Error(`MODAL_ORIGINS contains a duplicate hostname: ${host}`);
+    }
+
     if (typeof origin !== "string") {
       throw new Error(`MODAL_ORIGINS["${host}"] must be a string`);
     }

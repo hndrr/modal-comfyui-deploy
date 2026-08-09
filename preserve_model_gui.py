@@ -37,7 +37,7 @@ _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
 class AppConfig:
     """デプロイ済み関数を引くときの参照先。
 
-    Modal のコンテナ内で動く場合（`preserve_model.py::web`）は一時 App を
+    Modal のコンテナ内で動く場合 (`preserve_model.py::web`) は一時 App を
     起動できないため、ここで指定した名前の関数を `Function.from_name()` で引く。
     ローカル実行では `modal.App.run()` の一時コンテナを使うので参照されない。
     """
