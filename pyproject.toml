@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "beam-client==0.2.207",
     "gradio>=5.47.2",
     "modal>=1.1.4",
     "pillow>=11.0.0",

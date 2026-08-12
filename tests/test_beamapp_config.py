@@ -1,0 +1,93 @@
+import os
+import unittest
+from unittest.mock import patch
+
+import beamapp
+
+
+class BeamConfigTests(unittest.TestCase):
+    def test_gpu_profiles_match_beam_gpu_names(self) -> None:
+        expected = {
+            "rtx5090": ("RTX5090", "12.0", "120f", "serverless"),
+            "rtx4090": ("RTX4090", "8.9", "89", "serverless"),
+            "a10g": ("A10G", "8.6", "86", "serverless"),
+            "rtx-pro-6000": ("RTXPro6000", "12.0", "120f", "on-demand"),
+            "h100": ("H100", "9.0", "90a", "on-demand"),
+        }
+        for name, (gpu, arch, kitchen_arch, capacity) in expected.items():
+            with self.subTest(name=name):
+                with patch.dict(os.environ, {beamapp.COMFYUI_BEAM_GPU_ENV: name}):
+                    resolved_name, profile = beamapp._resolve_gpu_profile()
+                self.assertEqual(resolved_name, name)
+                self.assertEqual(profile["beam_gpu"], gpu)
+                self.assertEqual(profile["cuda_arch_list"], arch)
+                self.assertEqual(profile["comfy_cuda_archs"], kitchen_arch)
+                self.assertEqual(profile["capacity"], capacity)
+
+    def test_rejects_unknown_gpu(self) -> None:
+        with patch.dict(
+            os.environ,
+            {beamapp.COMFYUI_BEAM_GPU_ENV: "not-a-gpu"},
+        ):
+            with self.assertRaisesRegex(ValueError, "h100.*rtx5090"):
+                beamapp._resolve_gpu_profile()
+
+    def test_default_profile_is_serverless_blackwell(self) -> None:
+        self.assertEqual(beamapp.DEFAULT_GPU_PROFILE, "rtx5090")
+        self.assertEqual(beamapp.GPU_PROFILE_NAME, "rtx5090")
+        self.assertEqual(beamapp.COMFY_CUDA_ARCHS, "120f")
+
+    def test_optional_pool_name(self) -> None:
+        with patch.dict(os.environ, {beamapp.COMFYUI_BEAM_POOL_ENV: "gpu-pool"}):
+            self.assertEqual(
+                beamapp._resolve_optional_name(beamapp.COMFYUI_BEAM_POOL_ENV),
+                "gpu-pool",
+            )
+        with patch.dict(os.environ, {beamapp.COMFYUI_BEAM_POOL_ENV: ""}):
+            self.assertIsNone(
+                beamapp._resolve_optional_name(beamapp.COMFYUI_BEAM_POOL_ENV)
+            )
+
+    def test_switch_accepts_only_on_or_off(self) -> None:
+        env_name = "TEST_BEAM_SWITCH"
+        for value, expected in (("on", True), (" OFF ", False)):
+            with self.subTest(value=value):
+                with patch.dict(os.environ, {env_name: value}):
+                    self.assertEqual(beamapp._resolve_switch(env_name, False), expected)
+        with patch.dict(os.environ, {env_name: "yes"}):
+            with self.assertRaisesRegex(ValueError, "on, off"):
+                beamapp._resolve_switch(env_name, False)
+
+    def test_pod_mounts_all_comfyui_state(self) -> None:
+        mounts = {volume.mount_path: volume.name for volume in beamapp.volumes}
+        self.assertEqual(
+            mounts,
+            {
+                "/models": "comfyui-models",
+                "/data/custom_nodes": "comfyui-custom-nodes",
+                "/data/output": "comfyui-outputs",
+                "/data/input": "comfyui-inputs",
+                "/data/user": "comfyui-user-data",
+            },
+        )
+        self.assertEqual(beamapp.comfyui.ports, [8000])
+        self.assertEqual(beamapp.comfyui.entrypoint, ["python3", "beam_runtime.py"])
+        self.assertEqual(beamapp.image.base_image, "")
+        self.assertIsNone(beamapp.comfyui.pool)
+        pod_env = dict(item.split("=", 1) for item in beamapp.comfyui.env)
+        self.assertEqual(pod_env[beamapp.COMFYUI_EXPECTED_CUDA_ARCH_ENV], "12.0")
+        self.assertEqual(pod_env[beamapp.COMFYUI_SAGE_ATTENTION_ENV], "off")
+
+    def test_image_builds_comfy_kitchen_from_pinned_source(self) -> None:
+        commands = "\n".join(command.command for command in beamapp.image.build_steps)
+        self.assertIn("cuda-toolkit-12-8", commands)
+        self.assertIn("--cuda-version 12.8", commands)
+        self.assertIn(beamapp.COMFYUI_COMMIT, commands)
+        self.assertIn("comfy-kitchen.git", commands)
+        self.assertIn("--branch \"v0.2.30\"", commands)
+        self.assertIn("--no-build-isolation --no-deps", commands)
+        self.assertNotIn("SageAttention.git", commands)
+
+
+if __name__ == "__main__":
+    unittest.main()
