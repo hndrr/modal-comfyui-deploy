@@ -58,7 +58,7 @@ Modal の Proxy Auth は `fastapi_endpoint` / `asgi_app` / `wsgi_app` / `web_ser
 
 `worker/src/index.ts` は次の 4 つだけを行う。ComfyUI のパスや API を解釈しない、素通しのリバースプロキシとする。
 
-前提として、必要な設定値（`MODAL_ORIGIN` / `TEAM_DOMAIN` / `POLICY_AUD` / `MODAL_KEY` / `MODAL_SECRET`）が 1 つでも欠けている場合は、転送せずに **500** を返す。設定漏れのまま素通しさせないためである。
+前提として、必要な設定値（`MODAL_ORIGINS` / `TEAM_DOMAIN` / `POLICY_AUD` / `MODAL_KEY` / `MODAL_SECRET`）が 1 つでも欠けている場合は、転送せずに **500** を返す。設定漏れのまま素通しさせないためである。
 
 ### 1. Access の JWT を検証する（fail-closed）
 
@@ -75,7 +75,7 @@ Cloudflare のドキュメントは、オリジンがすでに公開されてい
 
 ### 2. Modal-Key / Modal-Secret を付与する
 
-受け取った URL のパスとクエリをそのまま `MODAL_ORIGIN` へ引き継ぎ、`Modal-Key` と `Modal-Secret` を `set` で付ける。`set` なので、クライアントが同名ヘッダーを送ってきても上書きされる。
+受け取った URL のパスとクエリを、ホスト名から解決した Modal オリジンへ引き継ぎ、`Modal-Key` と `Modal-Secret` を `set` で付ける。`set` なので、クライアントが同名ヘッダーを送ってきても上書きされる。
 
 あわせて次の 2 つのヘッダーを落とす。
 
@@ -137,7 +137,7 @@ Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合�
 
 ### 4. Location ヘッダーを書き換える
 
-`redirect: "manual"` で転送し、`Location` が `MODAL_ORIGIN` を指す絶対 URL だった場合はリクエスト元の origin に書き換える。ComfyUI の末尾スラッシュリダイレクト等で Modal のホスト名が漏れるのを防ぐ。
+`redirect: "manual"` で転送し、`Location` が転送先の Modal オリジンを指す絶対 URL だった場合はリクエスト元の origin に書き換える。ComfyUI の末尾スラッシュリダイレクト等で Modal のホスト名が漏れるのを防ぐ。
 
 ## 設定値
 
@@ -147,15 +147,32 @@ Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合�
 
 | 名前 | 例 / 形式 | 取得元 |
 | --- | --- | --- |
-| `MODAL_ORIGIN` | `https://<workspace>--comfyui-ui.modal.run` | `uv run modal deploy comfyapp.py` の出力。ワークスペース名は `uv run modal profile current` で確認できる |
+| `MODAL_ORIGINS` | ホスト名 → オリジンの JSON マップ（下記） | `uv run modal deploy ...` の出力。ワークスペース名は `uv run modal profile current` で確認できる |
 | `TEAM_DOMAIN` | `https://<team-name>.cloudflareaccess.com` | Zero Trust → Settings → Custom Pages の Team domain |
 | `POLICY_AUD` | 64 桁の 16 進文字列 | Access アプリの Overview にある Application Audience (AUD) Tag |
 | `MODAL_KEY` | `wk-` 始まり | Modal ダッシュボード → Settings → Proxy Auth Tokens の Token ID |
 | `MODAL_SECRET` | `ws-` 始まり | 同上の Token Secret（作成時のみ表示される） |
 
-`MODAL_ORIGIN` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」である。`wrangler dev` / `wrangler deploy` には `--var key:value` があるのでコマンドラインからも渡せるが、値がシェル履歴に残るうえ毎回指定が必要になるため、デプロイ用の値は secret に寄せている。
+`MODAL_ORIGINS` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」である。`wrangler dev` / `wrangler deploy` には `--var key:value` があるのでコマンドラインからも渡せるが、値がシェル履歴に残るうえ毎回指定が必要になるため、デプロイ用の値は secret に寄せている。
 
-**`MODAL_ORIGIN` は https でなければならない。** Worker は起動時にこれを検証し、https 以外や不正な URL の場合は転送せずに 500 を返す。http のオリジンへ転送すると `Modal-Key` / `Modal-Secret` が平文経路に載るためである。
+### MODAL_ORIGINS — 1 つの Worker で複数の Modal app を出す
+
+`MODAL_ORIGINS` は**公開ホスト名から転送先 Modal オリジンへのマップ**である。ホスト名も Modal の URL も環境固有なので、両方まとめてこの secret に入れることでリポジトリから追い出している。
+
+```json
+{
+  "comfy.example.com": "https://<workspace>--comfyui-ui.modal.run",
+  "model.example.com": "https://<workspace>--preserve-model-web.modal.run"
+}
+```
+
+Worker はリクエストの `Host` を見て転送先を決める。app を増やしたいときは、この JSON にエントリを足し、ホスト名を Custom Domain として割り当て、Access アプリの `destinations` に追加すればよい。**Worker のコード変更は不要。**
+
+検証は起動時に行い、次のいずれかに当たると転送せず **500** を返す。
+
+- JSON として壊れている / オブジェクトでない / エントリが 0 件
+- 値が URL として不正、または **https でない**（http へ転送すると `Modal-Key` / `Modal-Secret` が平文経路に載るため）
+- リクエストのホスト名がマップに無い（Custom Domain は明示的に割り当てるものなので、これは設定の追加漏れを意味する）
 
 接続先ホスト名（`comfy.example.com`）も `wrangler.jsonc` に書かず、Cloudflare ダッシュボードで Custom Domain として登録する。Cloudflare のドキュメントは *To manage routes via the Cloudflare dashboard only, remove any route and routes keys from your Wrangler configuration file* としており、`routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
 
@@ -195,7 +212,7 @@ Token ID（`wk-` 始まり）と Token Secret（`ws-` 始まり）を控える�
 
 ### 2. 接続先の URL を確認する
 
-Worker に渡す `MODAL_ORIGIN` を控える。
+Worker に渡す Modal のオリジンを控える。
 
 ```bash
 uv run modal profile current   # ワークスペース名
@@ -249,7 +266,7 @@ npx wrangler deploy
 `wrangler.jsonc` は編集しない。5 つとも対話入力で登録する。
 
 ```bash
-npx wrangler secret put MODAL_ORIGIN    # https://<workspace>--comfyui-ui.modal.run
+npx wrangler secret put MODAL_ORIGINS   # {"comfy.example.com":"https://..."} を 1 行で
 npx wrangler secret put TEAM_DOMAIN     # https://<team-name>.cloudflareaccess.com
 npx wrangler secret put POLICY_AUD      # 手順 4 でコピーした AUD タグ
 npx wrangler secret put MODAL_KEY       # wk-... を貼り付け
@@ -368,7 +385,7 @@ rm /tmp/modal-secrets.json
 
 `wrangler secret bulk` は複数の secret を 1 リクエストで更新する。`wrangler deploy --secrets-file <file>` でも同じことができる。Modal 側の再デプロイは不要である。
 
-Modal の URL が変わった場合（ワークスペース名の変更など）は、単独の値なので `npx wrangler secret put MODAL_ORIGIN` で構わない。
+Modal の URL が変わった場合（ワークスペース名の変更など）は、単独の値なので `npx wrangler secret put MODAL_ORIGINS` で JSON ごと入れ直せばよい。
 
 ## トラブルシューティング
 

@@ -13,6 +13,7 @@ from typing import Optional, Tuple, Any
 from urllib.parse import urlparse
 
 import gradio as gr
+import modal
 from modal import Function, FunctionCall
 from modal.exception import ConnectionError as ModalConnectionError
 from modal.exception import InvalidError as ModalInvalidError
@@ -34,18 +35,18 @@ _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
 
 @dataclass
 class AppConfig:
-    use_deployed: bool
+    """デプロイ済み関数を引くときの参照先。
+
+    Modal のコンテナ内で動く場合 (`preserve_model.py::web`) は一時 App を
+    起動できないため、ここで指定した名前の関数を `Function.from_name()` で引く。
+    ローカル実行では `modal.App.run()` の一時コンテナを使うので参照されない。
+    """
+
     deployed_app_name: str
     deployed_function_name: str
 
 
 CONFIG = AppConfig(
-    use_deployed=os.getenv("PRESERVE_MODEL_USE_DEPLOYED", "").strip().lower()
-    in {
-        "1",
-        "true",
-        "yes",
-    },
     deployed_app_name=os.getenv("PRESERVE_MODEL_DEPLOYED_APP", "preserve-model"),
     deployed_function_name=os.getenv(
         "PRESERVE_MODEL_DEPLOYED_FUNCTION", "preserve_model"
@@ -124,7 +125,9 @@ async def _invoke_preserve(
             completed = False
         return call, completed, result, app_handle
 
-    if CONFIG.use_deployed:
+    # Modal のコンテナ内では一時 App を起動できないため、デプロイ済み関数を引く。
+    # ローカルでは app.run() の一時コンテナを使うので事前デプロイは要らない。
+    if not modal.is_local():
         try:
             remote_function: Function = await _get_remote_function(
                 CONFIG.deployed_app_name, CONFIG.deployed_function_name
@@ -363,7 +366,7 @@ def download_model(
 
         msg_lines = [
             status_message,
-            f"- 実行モード: {'デプロイ済み関数' if CONFIG.use_deployed else 'ローカル(app.run)'}",
+            f"- 実行モード: {'ローカル(app.run)' if modal.is_local() else 'デプロイ済み関数'}",
             f"- リポジトリ: {repo_id.strip()}",
             f"- 対象ファイル: {filename.strip()}",
             f"- リビジョン: {chosen_revision}",
@@ -407,30 +410,6 @@ def _parse_cli_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Hugging FaceモデルをModalへ保存するGUIを起動します",
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--use-deployed",
-        dest="use_deployed",
-        action="store_true",
-        help="デプロイ済みのModal関数を利用して実行します",
-    )
-    group.add_argument(
-        "--use-local",
-        dest="use_deployed",
-        action="store_false",
-        help="ローカルからmodal.App.run()で一時コンテナを起動します",
-    )
-    parser.set_defaults(use_deployed=None)
-    parser.add_argument(
-        "--deployed-app-name",
-        dest="deployed_app_name",
-        help="デプロイ済みアプリの名前を指定します",
-    )
-    parser.add_argument(
-        "--deployed-function-name",
-        dest="deployed_function_name",
-        help="デプロイ済み関数の名前を指定します",
-    )
     parser.add_argument(
         "--share",
         action="store_true",
@@ -452,14 +431,20 @@ def build_model_import_panel(*, show_standalone_options: bool = True) -> None:
     """Render the reusable Hugging Face import controls in the current Blocks."""
 
     options_help = (
-        "- デプロイ済み関数を利用したい場合は `--use-deployed` フラグ、または環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。\n"
-        "- デフォルト以外のアプリ名・関数名でデプロイしているときは `--deployed-app-name` / `--deployed-function-name` あるいは環境変数 `PRESERVE_MODEL_DEPLOYED_APP` / `PRESERVE_MODEL_DEPLOYED_FUNCTION` で上書きできます。"
+        "実行のたびに `modal.App.run()` で一時コンテナを起動します。事前のデプロイは不要です。"
         if show_standalone_options
-        else "デプロイ済み関数を利用する場合は、起動前に環境変数 `PRESERVE_MODEL_USE_DEPLOYED=1` を指定してください。"
+        else f"デプロイ済みの `{CONFIG.deployed_app_name}` App の `{CONFIG.deployed_function_name}` 関数を呼び出します。"
+    )
+    # Modal CLI へのログインが要るのはローカル実行のときだけ。
+    # コンテナ内ではコンテナ ID で認証されるため、その案内を出すと誤りになる。
+    intro = (
+        "`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。"
+        if show_standalone_options
+        else "`preserve_model.py` の処理をGUIから呼び出します。"
     )
     gr.Markdown(
         "### Hugging FaceのモデルをModalボリュームに保存\n"
-        "`preserve_model.py` の処理をGUIから呼び出します。Modal CLIでログイン済みであることを確認してください。\n\n"
+        f"{intro}\n\n"
         f"{options_help}"
     )
 
@@ -503,22 +488,21 @@ def build_model_import_panel(*, show_standalone_options: bool = True) -> None:
     )
 
 
-def build_interface() -> gr.Blocks:
+def build_interface(*, show_standalone_options: bool = True) -> gr.Blocks:
+    """UI 全体を組み立てて返す。
+
+    ローカル実行と Modal 上の Web 版で同じものを使う。違いは
+    `show_standalone_options` による説明文だけ。
+    """
+
     with gr.Blocks(title="Modal: Hugging Face モデル取り込み") as demo:
-        build_model_import_panel()
+        build_model_import_panel(show_standalone_options=show_standalone_options)
 
     return demo
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     args = _parse_cli_args(argv)
-
-    if args.use_deployed is not None:
-        CONFIG.use_deployed = args.use_deployed
-    if args.deployed_app_name:
-        CONFIG.deployed_app_name = args.deployed_app_name
-    if args.deployed_function_name:
-        CONFIG.deployed_function_name = args.deployed_function_name
 
     launch_kwargs = {}
     if args.share:

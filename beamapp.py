@@ -1,3 +1,4 @@
+import math
 import os
 import re
 from pathlib import Path
@@ -59,8 +60,18 @@ FLASH_ATTN_WHEEL_URL: Final = (
     "download/v0.9.0/"
     "flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl"
 )
-SAGEATTENTION_REF: Final = "abi3_stable"
+FLASH_ATTN_WHEEL_SHA256: Final = (
+    "bb67bd3c2784ffedf07a2633b18722ccdaf54eb0aba18203fc02cae9ced44977"
+)
+FLASH_ATTN_WHEEL_FILENAME: Final = (
+    "flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl"
+)
+SAGEATTENTION_REPOSITORY: Final = "https://github.com/woct0rdho/SageAttention.git"
+SAGEATTENTION_COMMIT: Final = "93128b972683e52cd382c6731c1f09505e7524b5"
 PREBUILT_WHEEL_DIR: Final = "/opt/prebuilt-wheels"
+FLASH_ATTN_WHEEL_PATH: Final = (
+    f"{PREBUILT_WHEEL_DIR}/{FLASH_ATTN_WHEEL_FILENAME}"
+)
 COMFYUI_COMMIT: Final = "024cbc5fc1c779ea7905356d3f3239b90dd0dae3"
 COMFY_KITCHEN_VERSION: Final = "0.2.30"
 
@@ -109,10 +120,26 @@ GPU_PROFILES: Final = {
 }
 
 CUSTOM_NODES: Final = (
-    "https://github.com/crystian/ComfyUI-Crystools",
-    "https://github.com/Firetheft/ComfyUI_Local_Media_Manager",
-    "https://github.com/hayden-fr/ComfyUI-Image-Browsing",
-    "https://github.com/rgthree/rgthree-comfy",
+    (
+        "ComfyUI-Crystools",
+        "https://github.com/crystian/ComfyUI-Crystools.git",
+        "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
+    ),
+    (
+        "ComfyUI_Local_Media_Manager",
+        "https://github.com/Firetheft/ComfyUI_Local_Media_Manager.git",
+        "5e74ce0cc708798ed25a77097d6059b6c796da87",
+    ),
+    (
+        "ComfyUI-Image-Browsing",
+        "https://github.com/hayden-fr/ComfyUI-Image-Browsing.git",
+        "dd2e03e4815fa94c24e2820040cf75b9d4898805",
+    ),
+    (
+        "rgthree-comfy",
+        "https://github.com/rgthree/rgthree-comfy.git",
+        "6b76ee6f2c5a007710b5a16f97c94330d6ecc871",
+    ),
 )
 
 
@@ -158,9 +185,58 @@ def _resolve_positive_float_env(env_name: str, default: float) -> float:
         raise ValueError(
             f"Invalid {env_name}: {raw!r}. Expected a positive number."
         ) from exc
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ValueError(f"Invalid {env_name}: {raw!r}. Expected a positive number.")
     return value
+
+
+def _verified_download_command(url: str, sha256: str, destination: str) -> str:
+    """Build a command that downloads a file and verifies its SHA-256."""
+
+    return (
+        "set -eux; "
+        f'mkdir -p "{Path(destination).parent}"; '
+        f'wget -q "{url}" -O "{destination}"; '
+        f'echo "{sha256}  {destination}" | sha256sum -c -'
+    )
+
+
+def _custom_node_install_command(name: str, repository: str, commit: str) -> str:
+    """Clone and install one custom node at an audited commit."""
+
+    destination = f"/root/comfy/ComfyUI/custom_nodes/{name}"
+    return (
+        "set -eux; "
+        f'rm -rf "{destination}"; '
+        f'git clone --filter=blob:none --no-checkout "{repository}" "{destination}"; '
+        f'git -C "{destination}" checkout --detach "{commit}"; '
+        f'git -C "{destination}" submodule update --init --recursive; '
+        f'if [ -f "{destination}/requirements.txt" ]; then '
+        f'python3 -m pip install --no-cache-dir -r "{destination}/requirements.txt"; '
+        "fi; "
+        f'if [ -f "{destination}/install.py" ]; then '
+        f'cd "{destination}" && python3 install.py; '
+        "fi"
+    )
+
+
+def _sage_attention_build_command(build_prefix: str) -> str:
+    """Build SageAttention from the reviewed immutable commit."""
+
+    return (
+        "set -eux; "
+        f"{build_prefix}"
+        f'mkdir -p "{PREBUILT_WHEEL_DIR}"; '
+        "rm -rf /tmp/SageAttention; "
+        f'git clone --filter=blob:none --no-checkout "{SAGEATTENTION_REPOSITORY}" '
+        '"/tmp/SageAttention"; '
+        f'git -C /tmp/SageAttention checkout --detach "{SAGEATTENTION_COMMIT}"; '
+        "git -C /tmp/SageAttention submodule update --init --recursive; "
+        "cd /tmp/SageAttention; "
+        "python3 -m build --wheel --no-isolation; "
+        f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
+        "rm -rf /tmp/SageAttention"
+    )
 
 
 def _resolve_name(env_name: str, default: str) -> str:
@@ -220,22 +296,7 @@ SAGE_ATTENTION_BUILD_PREFIX = (
     else ""
 )
 SAGE_ATTENTION_BUILD_COMMANDS = (
-    [
-        (
-            "set -eux; "
-            f"{SAGE_ATTENTION_BUILD_PREFIX}"
-            f'mkdir -p "{PREBUILT_WHEEL_DIR}"; '
-            "rm -rf /tmp/SageAttention; "
-            f'git clone --depth 1 --branch "{SAGEATTENTION_REF}" '
-            "--recurse-submodules --shallow-submodules "
-            "https://github.com/woct0rdho/SageAttention.git /tmp/SageAttention; "
-            "cd /tmp/SageAttention; "
-            "git submodule update --init --recursive; "
-            "python3 -m build --wheel --no-isolation; "
-            f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
-            "rm -rf /tmp/SageAttention"
-        )
-    ]
+    [_sage_attention_build_command(SAGE_ATTENTION_BUILD_PREFIX)]
     if SAGE_ATTENTION_ENABLED
     else []
 )
@@ -281,7 +342,12 @@ image = (
                 f'"{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" '
                 f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}"'
             ),
-            f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_URL}"',
+            _verified_download_command(
+                FLASH_ATTN_WHEEL_URL,
+                FLASH_ATTN_WHEEL_SHA256,
+                FLASH_ATTN_WHEEL_PATH,
+            ),
+            f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_PATH}"',
             *SAGE_ATTENTION_BUILD_COMMANDS,
         ]
     )
@@ -313,7 +379,7 @@ image = (
                 f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}"'
             ),
             (
-                f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_URL}"'
+                f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_PATH}"'
                 f"{SAGE_ATTENTION_INSTALL_TARGET}"
             ),
             (
@@ -324,7 +390,10 @@ image = (
                 "python3 -m pip show comfy-kitchen | "
                 f"grep -F 'Version: {COMFY_KITCHEN_VERSION}'"
             ),
-            *[f'comfy node install "{node}"' for node in CUSTOM_NODES],
+            *[
+                _custom_node_install_command(name, repository, commit)
+                for name, repository, commit in CUSTOM_NODES
+            ],
         ]
     )
 )
