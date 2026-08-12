@@ -6,7 +6,6 @@ from typing import Final
 from beam import Image, Pod, Volume
 from dotenv import load_dotenv
 
-
 DOTENV_PATH: Final = Path(__file__).with_name(".env")
 load_dotenv(DOTENV_PATH, override=False)
 
@@ -21,6 +20,9 @@ COMFYUI_BEAM_SAGE_ATTENTION_ENV: Final = "COMFYUI_BEAM_SAGE_ATTENTION"
 COMFYUI_BEAM_VOLUME_PREFIX_ENV: Final = "COMFYUI_BEAM_VOLUME_PREFIX"
 COMFYUI_CLI_ARGS_ENV: Final = "COMFYUI_CLI_ARGS"
 COMFYUI_EXPECTED_CUDA_ARCH_ENV: Final = "COMFYUI_EXPECTED_CUDA_ARCH"
+COMFYUI_REQUIRED_KITCHEN_CAPABILITIES_ENV: Final = (
+    "COMFYUI_REQUIRED_KITCHEN_CAPABILITIES"
+)
 COMFYUI_SAGE_ATTENTION_ENV: Final = "COMFYUI_SAGE_ATTENTION"
 
 DEFAULT_APP_NAME: Final = "comfyui"
@@ -36,16 +38,30 @@ CUDA_KEYRING_URL: Final = (
     "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/"
     "cuda-keyring_1.1-1_all.deb"
 )
-PYTORCH_INDEX_URL: Final = "https://download.pytorch.org/whl/cu128"
+TORCH_WHEEL_URL: Final = (
+    "https://download.pytorch.org/whl/cu130/"
+    "torch-2.10.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl"
+)
+TORCHVISION_WHEEL_URL: Final = (
+    "https://download.pytorch.org/whl/cu130/"
+    "torchvision-0.25.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl"
+)
+TORCHAUDIO_WHEEL_URL: Final = (
+    "https://download.pytorch.org/whl/cu130/"
+    "torchaudio-2.10.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl"
+)
+XFORMERS_WHEEL_URL: Final = (
+    "https://download.pytorch.org/whl/cu130/"
+    "xformers-0.0.34-cp39-abi3-manylinux_2_28_x86_64.whl"
+)
 FLASH_ATTN_WHEEL_URL: Final = (
     "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/"
     "download/v0.9.0/"
-    "flash_attn-2.8.3+cu128torch2.10-cp312-cp312-linux_x86_64.whl"
+    "flash_attn-2.8.3+cu130torch2.10-cp312-cp312-linux_x86_64.whl"
 )
 SAGEATTENTION_REF: Final = "abi3_stable"
 PREBUILT_WHEEL_DIR: Final = "/opt/prebuilt-wheels"
 COMFYUI_COMMIT: Final = "024cbc5fc1c779ea7905356d3f3239b90dd0dae3"
-COMFY_KITCHEN_REPOSITORY: Final = "https://github.com/Comfy-Org/comfy-kitchen.git"
 COMFY_KITCHEN_VERSION: Final = "0.2.30"
 
 GPU_PROFILES: Final = {
@@ -54,30 +70,41 @@ GPU_PROFILES: Final = {
         "cuda_arch_list": "12.0",
         "comfy_cuda_archs": "120f",
         "capacity": "serverless",
+        "required_kitchen_capabilities": (
+            "int8_linear,quantize_per_tensor_fp8,quantize_nvfp4,"
+            "quantize_mxfp8,scaled_mm_nvfp4"
+        ),
     },
     "rtx4090": {
         "beam_gpu": "RTX4090",
         "cuda_arch_list": "8.9",
         "comfy_cuda_archs": "89",
         "capacity": "serverless",
-    },
-    "a10g": {
-        "beam_gpu": "A10G",
-        "cuda_arch_list": "8.6",
-        "comfy_cuda_archs": "86",
-        "capacity": "serverless",
+        "required_kitchen_capabilities": "int8_linear,quantize_per_tensor_fp8",
     },
     "rtx-pro-6000": {
         "beam_gpu": "RTXPro6000",
         "cuda_arch_list": "12.0",
         "comfy_cuda_archs": "120f",
         "capacity": "on-demand",
+        "required_kitchen_capabilities": (
+            "int8_linear,quantize_per_tensor_fp8,quantize_nvfp4,"
+            "quantize_mxfp8,scaled_mm_nvfp4"
+        ),
     },
     "h100": {
         "beam_gpu": "H100",
         "cuda_arch_list": "9.0",
         "comfy_cuda_archs": "90a",
         "capacity": "on-demand",
+        "required_kitchen_capabilities": "int8_linear,quantize_per_tensor_fp8",
+    },
+    "a100-80gb": {
+        "beam_gpu": "A100-80",
+        "cuda_arch_list": "8.0",
+        "comfy_cuda_archs": "80",
+        "capacity": "on-demand",
+        "required_kitchen_capabilities": "int8_linear",
     },
 }
 
@@ -117,9 +144,7 @@ def _resolve_int_env(
             f"Invalid {env_name}: {raw!r}. Expected {minimum}..{maximum}."
         ) from exc
     if not minimum <= value <= maximum:
-        raise ValueError(
-            f"Invalid {env_name}: {raw!r}. Expected {minimum}..{maximum}."
-        )
+        raise ValueError(f"Invalid {env_name}: {raw!r}. Expected {minimum}..{maximum}.")
     return value
 
 
@@ -130,7 +155,9 @@ def _resolve_positive_float_env(env_name: str, default: float) -> float:
     try:
         value = float(raw.strip())
     except ValueError as exc:
-        raise ValueError(f"Invalid {env_name}: {raw!r}. Expected a positive number.") from exc
+        raise ValueError(
+            f"Invalid {env_name}: {raw!r}. Expected a positive number."
+        ) from exc
     if value <= 0:
         raise ValueError(f"Invalid {env_name}: {raw!r}. Expected a positive number.")
     return value
@@ -186,6 +213,7 @@ BEAM_POOL = _resolve_optional_name(COMFYUI_BEAM_POOL_ENV)
 SAGE_ATTENTION_ENABLED = _resolve_switch(COMFYUI_BEAM_SAGE_ATTENTION_ENV, False)
 CUDA_ARCH_LIST = GPU_PROFILE["cuda_arch_list"]
 COMFY_CUDA_ARCHS = GPU_PROFILE["comfy_cuda_archs"]
+REQUIRED_KITCHEN_CAPABILITIES = GPU_PROFILE["required_kitchen_capabilities"]
 SAGE_ATTENTION_BUILD_PREFIX = (
     "export LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH:-}; "
     if GPU_PROFILE_NAME == "h100"
@@ -193,18 +221,20 @@ SAGE_ATTENTION_BUILD_PREFIX = (
 )
 SAGE_ATTENTION_BUILD_COMMANDS = (
     [
-        "set -eux; "
-        f"{SAGE_ATTENTION_BUILD_PREFIX}"
-        f'mkdir -p "{PREBUILT_WHEEL_DIR}"; '
-        "rm -rf /tmp/SageAttention; "
-        f'git clone --depth 1 --branch "{SAGEATTENTION_REF}" '
-        "--recurse-submodules --shallow-submodules "
-        "https://github.com/woct0rdho/SageAttention.git /tmp/SageAttention; "
-        "cd /tmp/SageAttention; "
-        "git submodule update --init --recursive; "
-        "python3 -m build --wheel --no-isolation; "
-        f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
-        "rm -rf /tmp/SageAttention"
+        (
+            "set -eux; "
+            f"{SAGE_ATTENTION_BUILD_PREFIX}"
+            f'mkdir -p "{PREBUILT_WHEEL_DIR}"; '
+            "rm -rf /tmp/SageAttention; "
+            f'git clone --depth 1 --branch "{SAGEATTENTION_REF}" '
+            "--recurse-submodules --shallow-submodules "
+            "https://github.com/woct0rdho/SageAttention.git /tmp/SageAttention; "
+            "cd /tmp/SageAttention; "
+            "git submodule update --init --recursive; "
+            "python3 -m build --wheel --no-isolation; "
+            f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
+            "rm -rf /tmp/SageAttention"
+        )
     ]
     if SAGE_ATTENTION_ENABLED
     else []
@@ -219,7 +249,6 @@ image = (
     .with_envs(
         {
             "CUDA_HOME": "/usr/local/cuda",
-            "COMFY_CUDA_ARCHS": COMFY_CUDA_ARCHS,
             "FORCE_CUDA": "1",
             "MAX_JOBS": "8",
             "NVCC_THREADS": "8",
@@ -230,19 +259,28 @@ image = (
     )
     .add_commands(
         [
-            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
-            "git wget curl ca-certificates build-essential python3-dev pkg-config "
-            "cmake ninja-build libgl1 libglib2.0-0 ffmpeg",
-            f'wget -q "{CUDA_KEYRING_URL}" -O /tmp/cuda-keyring.deb && '
-            "dpkg -i /tmp/cuda-keyring.deb && "
-            "apt-get update && DEBIAN_FRONTEND=noninteractive "
-            "apt-get install -y cuda-toolkit-12-8 && "
-            "rm -f /tmp/cuda-keyring.deb && rm -rf /var/lib/apt/lists/*",
-            "python3 -m pip install --no-cache-dir -U "
-            "pip setuptools wheel build uv packaging ninja 'nanobind>=2.0.0' "
-            "'cmake>=3.26'",
-            f"python3 -m pip install --no-cache-dir --index-url {PYTORCH_INDEX_URL} "
-            "torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 xformers==0.0.34",
+            (
+                "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+                "git wget curl ca-certificates build-essential python3-dev pkg-config "
+                "cmake ninja-build libgl1 libglib2.0-0 ffmpeg"
+            ),
+            (
+                f'wget -q "{CUDA_KEYRING_URL}" -O /tmp/cuda-keyring.deb && '
+                "dpkg -i /tmp/cuda-keyring.deb && "
+                "apt-get update && DEBIAN_FRONTEND=noninteractive "
+                "apt-get install -y cuda-toolkit-13-0 && "
+                "rm -f /tmp/cuda-keyring.deb && rm -rf /var/lib/apt/lists/*"
+            ),
+            (
+                "python3 -m pip install --no-cache-dir -U "
+                "pip setuptools wheel build uv packaging ninja 'nanobind>=2.0.0' "
+                "'cmake>=3.26'"
+            ),
+            (
+                "python3 -m pip install --no-cache-dir "
+                f'"{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" '
+                f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}"'
+            ),
             f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_URL}"',
             *SAGE_ATTENTION_BUILD_COMMANDS,
         ]
@@ -265,22 +303,27 @@ image = (
     )
     .add_commands(
         [
-            "comfy --skip-prompt install --nvidia --cuda-version 12.8 "
-            f'--commit "{COMFYUI_COMMIT}"',
-            f"python3 -m pip install --no-cache-dir --index-url {PYTORCH_INDEX_URL} "
-            "torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 xformers==0.0.34",
-            f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_URL}"'
-            f"{SAGE_ATTENTION_INSTALL_TARGET}",
-            "set -eux; "
-            "python3 -m pip uninstall -y comfy-kitchen; "
-            "rm -rf /tmp/comfy-kitchen; "
-            f'git clone --depth 1 --branch "v{COMFY_KITCHEN_VERSION}" '
-            f'"{COMFY_KITCHEN_REPOSITORY}" /tmp/comfy-kitchen; '
-            "COMFY_CUDA_ARCHS=\"${COMFY_CUDA_ARCHS}\" "
-            "python3 -m pip install --no-cache-dir --no-build-isolation --no-deps "
-            "/tmp/comfy-kitchen; "
-            "rm -rf /tmp/comfy-kitchen; "
-            f"python3 -m pip show comfy-kitchen | grep -F 'Version: {COMFY_KITCHEN_VERSION}'",
+            (
+                "comfy --skip-prompt install --nvidia --cuda-version 13.0 "
+                f'--commit "{COMFYUI_COMMIT}"'
+            ),
+            (
+                "python3 -m pip install --no-cache-dir "
+                f'"{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" '
+                f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}"'
+            ),
+            (
+                f'python3 -m pip install --no-cache-dir "{FLASH_ATTN_WHEEL_URL}"'
+                f"{SAGE_ATTENTION_INSTALL_TARGET}"
+            ),
+            (
+                "set -eux; "
+                "python3 -m pip install --no-cache-dir 'nvidia-cublas>=13.0.0'; "
+                "python3 -m pip install --no-cache-dir --force-reinstall --no-deps "
+                f"'comfy-kitchen=={COMFY_KITCHEN_VERSION}'; "
+                "python3 -m pip show comfy-kitchen | "
+                f"grep -F 'Version: {COMFY_KITCHEN_VERSION}'"
+            ),
             *[f'comfy node install "{node}"' for node in CUSTOM_NODES],
         ]
     )
@@ -308,6 +351,7 @@ comfyui = Pod(
     env={
         COMFYUI_CLI_ARGS_ENV: os.environ.get(COMFYUI_CLI_ARGS_ENV, "").strip(),
         COMFYUI_EXPECTED_CUDA_ARCH_ENV: CUDA_ARCH_LIST,
+        COMFYUI_REQUIRED_KITCHEN_CAPABILITIES_ENV: REQUIRED_KITCHEN_CAPABILITIES,
         COMFYUI_SAGE_ATTENTION_ENV: "on" if SAGE_ATTENTION_ENABLED else "off",
         "PYTHONUNBUFFERED": "1",
     },

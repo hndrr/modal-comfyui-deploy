@@ -1,12 +1,14 @@
 import filecmp
+import importlib
 import os
 import shlex
 import shutil
 import subprocess
-from importlib.metadata import PackageNotFoundError, version as package_version
+import sys
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Final
-
 
 MODEL_VOLUME_DIR: Final = Path("/models")
 CUSTOM_NODE_VOLUME_MOUNT: Final = Path("/data/custom_nodes")
@@ -20,8 +22,13 @@ COMFY_ROOT_CANDIDATES: Final = (
 )
 COMFYUI_CLI_ARGS_ENV: Final = "COMFYUI_CLI_ARGS"
 COMFYUI_EXPECTED_CUDA_ARCH_ENV: Final = "COMFYUI_EXPECTED_CUDA_ARCH"
+COMFYUI_REQUIRED_KITCHEN_CAPABILITIES_ENV: Final = (
+    "COMFYUI_REQUIRED_KITCHEN_CAPABILITIES"
+)
 COMFYUI_SAGE_ATTENTION_ENV: Final = "COMFYUI_SAGE_ATTENTION"
 EXPECTED_COMFY_KITCHEN_VERSION: Final = "0.2.30"
+EXPECTED_TORCH_CUDA_MAJOR: Final = 13
+MINIMUM_NVIDIA_DRIVER_MAJOR: Final = 580
 SAGE_ATTENTION_FLAG: Final = "--use-sage-attention"
 WORKFLOWS_PATCH_MARKER: Final = "# COMFYUI_PATCH_ALLOW_WORKFLOWS_START"
 WORKFLOWS_PATCH_SNIPPET: Final = """
@@ -84,11 +91,56 @@ def build_launch_command(extra_cli_args: str, *, sage_attention: bool) -> list[s
     return command
 
 
-def validate_acceleration(expected_arch: str) -> dict[str, str]:
+def _query_nvidia_smi() -> tuple[str, int]:
+    try:
+        output = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,driver_version",
+                "--format=csv,noheader",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            "nvidia-smi failed; CUDA 13 driver compatibility is unknown"
+        ) from exc
+
+    first_line = output.splitlines()[0] if output else ""
+    try:
+        driver_major = int(first_line.rsplit(",", 1)[1].strip().split(".", 1)[0])
+    except (IndexError, ValueError) as exc:
+        raise RuntimeError(f"Could not parse nvidia-smi output: {output!r}") from exc
+    if driver_major < MINIMUM_NVIDIA_DRIVER_MAJOR:
+        raise RuntimeError(
+            "CUDA 13 requires NVIDIA driver 580 or newer; "
+            f"nvidia-smi reported {first_line}"
+        )
+    return output, driver_major
+
+
+def _load_comfyui_quantization_policy(comfy_roots: tuple[Path, ...]) -> None:
+    for root in reversed(comfy_roots):
+        root_string = str(root)
+        if root_string not in sys.path:
+            sys.path.insert(0, root_string)
+    importlib.import_module("comfy.quant_ops")
+
+
+def validate_acceleration(
+    expected_arch: str,
+    *,
+    required_capabilities: str = "",
+    comfy_roots: tuple[Path, ...] = (),
+) -> dict[str, str]:
     """Fail before launch if Beam attached the wrong GPU or Kitchen lacks CUDA."""
 
     if not expected_arch:
         raise RuntimeError(f"{COMFYUI_EXPECTED_CUDA_ARCH_ENV} is required")
+
+    nvidia_smi, driver_major = _query_nvidia_smi()
 
     import comfy_kitchen
     import torch
@@ -106,12 +158,29 @@ def validate_acceleration(expected_arch: str) -> dict[str, str]:
     if not torch.cuda.is_available():
         raise RuntimeError("PyTorch cannot access a CUDA GPU")
 
+    torch_cuda = str(torch.version.cuda)
+    try:
+        torch_cuda_major = int(torch_cuda.split(".", 1)[0])
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Could not parse PyTorch CUDA version: {torch_cuda!r}"
+        ) from exc
+    if torch_cuda_major != EXPECTED_TORCH_CUDA_MAJOR:
+        raise RuntimeError(
+            f"PyTorch CUDA {EXPECTED_TORCH_CUDA_MAJOR}.x is required; got {torch_cuda}"
+        )
+
     device = torch.cuda.current_device()
-    capability = ".".join(str(part) for part in torch.cuda.get_device_capability(device))
+    capability = ".".join(
+        str(part) for part in torch.cuda.get_device_capability(device)
+    )
     if capability != expected_arch:
         raise RuntimeError(
             f"Unexpected CUDA compute capability: expected {expected_arch}, got {capability}"
         )
+
+    if comfy_roots:
+        _load_comfyui_quantization_policy(comfy_roots)
 
     backends = comfy_kitchen.list_backends()
     cuda_backend = backends.get("cuda", {})
@@ -119,28 +188,26 @@ def validate_acceleration(expected_arch: str) -> dict[str, str]:
         reason = cuda_backend.get("unavailable_reason") or "unknown reason"
         raise RuntimeError(f"Comfy Kitchen CUDA backend is unavailable: {reason}")
 
-    try:
-        nvidia_smi = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name,driver_version",
-                "--format=csv,noheader",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        nvidia_smi = "unavailable"
+    available_capabilities = set(cuda_backend.get("capabilities", []))
+    required = {
+        item.strip() for item in required_capabilities.split(",") if item.strip()
+    }
+    missing = sorted(required - available_capabilities)
+    if missing:
+        raise RuntimeError(
+            "Comfy Kitchen CUDA backend is missing required capabilities: "
+            + ", ".join(missing)
+        )
 
     return {
         "device": torch.cuda.get_device_name(device),
         "compute_capability": capability,
         "torch": str(torch.__version__),
-        "torch_cuda": str(torch.version.cuda),
+        "torch_cuda": torch_cuda,
         "comfy_kitchen": kitchen_version,
         "kitchen_cuda_capabilities": ",".join(cuda_backend.get("capabilities", [])),
         "nvidia_smi": nvidia_smi,
+        "driver_major": str(driver_major),
     }
 
 
@@ -266,7 +333,9 @@ def prepare_persistent_storage(
     existing_roots = [root for root in comfy_roots if root.exists()]
     if not existing_roots:
         expected = ", ".join(str(root) for root in comfy_roots)
-        raise FileNotFoundError(f"ComfyUI installation was not found. Checked: {expected}")
+        raise FileNotFoundError(
+            f"ComfyUI installation was not found. Checked: {expected}"
+        )
 
     links = {
         "models": models,
@@ -286,15 +355,19 @@ def prepare_persistent_storage(
 
 
 def main() -> None:
+    roots = prepare_persistent_storage()
     acceleration = validate_acceleration(
-        os.environ.get(COMFYUI_EXPECTED_CUDA_ARCH_ENV, "").strip()
+        os.environ.get(COMFYUI_EXPECTED_CUDA_ARCH_ENV, "").strip(),
+        required_capabilities=os.environ.get(
+            COMFYUI_REQUIRED_KITCHEN_CAPABILITIES_ENV, ""
+        ),
+        comfy_roots=tuple(roots),
     )
     print(
         "Acceleration: "
         + "; ".join(f"{key}={value}" for key, value in acceleration.items()),
         flush=True,
     )
-    roots = prepare_persistent_storage()
     extra_cli_args = os.environ.get(COMFYUI_CLI_ARGS_ENV, "").strip()
     sage_attention = resolve_switch(
         os.environ.get(COMFYUI_SAGE_ATTENTION_ENV, "off"),

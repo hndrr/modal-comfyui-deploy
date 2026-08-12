@@ -5,19 +5,19 @@
 ## 構成
 
 - Python 3.12
-- CUDA 12.8 toolkit
-- PyTorch 2.10.0 + CUDA 12.8
-- Comfy Kitchen 0.2.30（CUDA 12.8からGPU別にソースビルド）
+- CUDA 13.0 toolkit
+- PyTorch 2.10.0 + CUDA 13.0
+- Comfy Kitchen 0.2.30公式CUDA wheel + cuBLAS 13
 - xFormers / FlashAttention / SageAttention（SageAttentionは既定off）
 - `comfy-cli==1.7.3`
 - Modal版と同じ4つのcustom nodes
-- RTX 5090 / RTX 4090 / A10G（serverless）
-- RTX PRO 6000 Blackwell / H100（on-demand pool）
+- RTX 5090 / RTX 4090（serverless）
+- RTX PRO 6000 Blackwell / H100 / A100 80GB（on-demand pool）
 - アイドル時のscale-to-zero
 
-Comfy Kitchen 0.2.30の配布済みCUDA wheelはCUDA runtime 13.0以上を要求します。一方、ソースビルドはCUDA Toolkit 12.8以上をサポートします。BeamのA10Gを含めて動かせるように、この構成ではPyPI wheelを使わず、`v0.2.30`をCUDA 12.8でGPU architecture別にビルドします。ComfyUI本体も、`comfy-kitchen==0.2.30`を要求する確認済みcommit `024cbc5fc1c779ea7905356d3f3239b90dd0dae3`へ固定しています。
+Comfy Kitchen 0.2.30の公式CUDA wheelとcuBLAS拡張はCUDA 13およびNVIDIA driver 580以上を要求します。さらに、固定しているComfyUI commit `024cbc5fc1c779ea7905356d3f3239b90dd0dae3`は、PyTorchがcu130未満の場合にKitchen CUDA backendを明示的に無効化します。そのためBeam版もModal版と同じCUDA 13へ統一しています。
 
-起動時には`torch.cuda`のGPU、compute capability、Comfy KitchenのCUDA backendを検証します。別GPUへの誤配置やCUDA拡張のロード失敗時は、ComfyUIを低速なfallback状態で起動せずエラー終了します。
+起動時にはdriver 580以上、PyTorch cu130、GPU compute capability、Kitchen 0.2.30、ComfyUIのquantization policy適用後のCUDA backendを検証します。Blackwellでは`scaled_mm_nvfp4`も必須です。別GPUへの誤配置やfallback状態を検出した場合はComfyUIを起動せずエラー終了します。
 
 ## 1. セットアップ
 
@@ -116,19 +116,21 @@ COMFYUI_CLI_ARGS=
 
 ### GPU
 
-`COMFYUI_BEAM_GPU`で次のプロファイルを選べます。`serverless`の可否は2026-08-12に、このworkspaceの`beam machine list --format json`で確認したスナップショットです。在庫は変動するため、デプロイ直前にも確認してください。
+`COMFYUI_BEAM_GPU`で次のプロファイルを選べます。`serverless`の可否は2026-08-12に、このworkspaceの`beam machine list --format json`で確認したスナップショットです。在庫とon-demandホストのdriverは変動するため、デプロイ直前にも確認してください。
 
-| 値 | Beam GPU | SM | Kitchen build | 容量 | Kitchenでの位置づけ |
+| 値 | Beam GPU | SM | Kitchen wheel target | 容量 | Kitchenでの位置づけ |
 | --- | --- | --- | --- | --- | --- |
 | `rtx5090`（既定） | RTX5090 | 12.0 | `120f` | serverless `ready` | Blackwell。KitchenのFP8 / NVFP4 / MXFP8のハードウェア条件を満たす |
 | `rtx4090` | RTX4090 | 8.9 | `89` | serverless `ready` | Ada。KitchenのFP8条件を満たす |
-| `a10g` | A10G | 8.6 | `86` | serverless `available` | Kitchen CUDAの汎用kernel / INT8向けfallback |
 | `rtx-pro-6000` | RTXPro6000 | 12.0 | `120f` | on-demand | Blackwell、96GB。Kitchenのハードウェア条件と大規模workflow向け |
 | `h100` | H100 | 9.0 | `90a` | on-demand | Hopper、80GB。KitchenのFP8条件を満たす |
+| `a100-80gb` | A100-80 | 8.0 | `80` | on-demand | Ampere、80GB。汎用CUDA / INT8向け。FP8 / NVFP4 / MXFP8対象外 |
 
-この5種類にした理由は、Beam SDK 0.2.207が受理するGPU名、実際の`beam machine list`の供給状況、NVIDIA公式compute capability、Comfy Kitchen 0.2.30のハードウェア要件を突き合わせたためです。単に「速そうなGPUを3つ」選んだものではありません。
+この5種類にした理由は、Beam SDK 0.2.207が受理するGPU名、実際の`beam machine list`の供給状況、NVIDIA公式compute capability、Comfy Kitchen 0.2.30のハードウェア要件を突き合わせたためです。
 
-Comfy KitchenのTensorCore FP8 layoutはSM 8.9以上、NVFP4/MXFP8 layoutはSM 10.0以上を要求します。そのためKitchenを主目的にする既定値は、serverlessで使えるBlackwellのRTX 5090です。A10GでもKitchen CUDA backend自体はビルド・ロードしますが、この3種類の量子化layout目的では選びません。
+Comfy KitchenのTensorCore FP8 layoutはSM 8.9以上、NVFP4/MXFP8 layoutはSM 10.0以上を要求します。そのためKitchenを主目的にする既定値は、serverlessで使えるBlackwellのRTX 5090です。A100はVRAM 80GBが必要なworkflowには有効ですが、KitchenのFP8/NVFP4/MXFP8目的では選びません。
+
+BeamのA10Gはserverless在庫がありますが、公式driverスナップショットが575.57.08（最大CUDA 12.9）です。現在のComfyUIはcu130未満でKitchen CUDA backendを無効化するため、CUDA 13版の選択肢から除外しています。RTX4090は公式にdriver 580.126.18 / CUDA 13.0対応です。RTX5090およびon-demand GPUは実コンテナの`nvidia-smi`を起動時に検証します。
 
 ここでいう「ハードウェア条件を満たす」は、すべての演算が必ずCUDA kernelへdispatchされるという意味ではありません。例えば`scaled_mm_nvfp4`はcuBLASLtの実行時可用性にも依存し、MXFP8を含む一部演算は入力条件に応じてTriton/eagerへfallbackします。起動ログの`kitchen_cuda_capabilities`が、そのコンテナで実際に登録されたCUDA演算です。
 
@@ -144,11 +146,11 @@ uv run beam machine list
 COMFYUI_BEAM_GPU=rtx4090 uv run beam deploy beamapp.py:comfyui
 ```
 
-GPUを変えるとComfy KitchenとSageAttentionのCUDA architectureも変わるため、該当レイヤーは再ビルドされます。
+Comfy Kitchen公式wheelは対応architectureをまとめて含みます。`COMFYUI_BEAM_SAGE_ATTENTION=on`の場合だけ、GPUを変えるとSageAttentionの該当architectureが再ビルドされます。
 
 ### on-demand GPU
 
-`rtx-pro-6000`と`h100`は、現在このworkspaceのserverless在庫にはありません。先に有料のon-demand machineをpoolへ予約し、そのpoolをPodへ指定します。例えばRTX PRO 6000を2時間予約する場合:
+`rtx-pro-6000`、`h100`、`a100-80gb`は、現在このworkspaceのserverless在庫にはありません。先に有料のon-demand machineをpoolへ予約し、そのpoolをPodへ指定します。例えばRTX PRO 6000を2時間予約する場合:
 
 ```bash
 uv run beam machine reserve --gpu RTXPro6000 --ttl 2h --name comfyui-blackwell
@@ -162,6 +164,17 @@ uv run beam deploy beamapp.py:comfyui
 ```bash
 uv run beam machine release --pool comfyui-blackwell
 ```
+
+A100 80GBの場合:
+
+```bash
+uv run beam machine reserve --gpu A100-80 --ttl 2h --name comfyui-a100
+COMFYUI_BEAM_GPU=a100-80gb \
+COMFYUI_BEAM_POOL=comfyui-a100 \
+uv run beam deploy beamapp.py:comfyui
+```
+
+on-demandホストのdriverが580未満ならCUDA 13を実行できないため、Podは起動時検証で停止します。その場合は予約を解放し、別のofferまたはGPUを選んでください。
 
 ### scale-to-zero
 
@@ -233,3 +246,5 @@ GPUの在庫がない場合は`beam machine list`で確認し、別の`COMFYUI_B
 - [Beam公式: Container Images / CUDA driver互換性](https://docs.beam.cloud/v2/environment/custom-images)
 - [Comfy Kitchen 0.2.30 README](https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.30/README.md)
 - [NVIDIA公式: CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus)
+- [NVIDIA公式: CUDA 13はdriver 580以上](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
+- [固定ComfyUI: cu130未満ではKitchen CUDAを無効化](https://github.com/Comfy-Org/ComfyUI/blob/024cbc5fc1c779ea7905356d3f3239b90dd0dae3/comfy/quant_ops.py)

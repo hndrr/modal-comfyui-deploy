@@ -34,7 +34,7 @@ cp .env.example .env
 
 ## Beam Cloudへデプロイする
 
-Beam版は、Modal版と同じComfyUI構成・custom nodes・永続ディレクトリをBeamの`Pod`と`Volume`へ移植したものです。CUDA 12.8でComfy Kitchen 0.2.30をGPU別にソースビルドし、既定ではserverlessのRTX 5090を使います。
+Beam版は、Modal版と同じComfyUI構成・custom nodes・永続ディレクトリをBeamの`Pod`と`Volume`へ移植したものです。CUDA 13.0、PyTorch cu130、Comfy Kitchen 0.2.30 + cuBLAS 13を固定し、既定ではserverlessのRTX 5090を使います。
 
 ```bash
 uv run beam config create production
