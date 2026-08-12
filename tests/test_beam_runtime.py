@@ -36,8 +36,8 @@ class AccelerationValidationTests(unittest.TestCase):
         )
         return SimpleNamespace(
             cuda=cuda,
-            version=SimpleNamespace(cuda="12.8"),
-            __version__="2.10.0+cu128",
+            version=SimpleNamespace(cuda="13.0"),
+            __version__="2.10.0+cu130",
         )
 
     def test_validates_cuda_arch_and_kitchen_backend(self) -> None:
@@ -60,23 +60,30 @@ class AccelerationValidationTests(unittest.TestCase):
             patch("beam_runtime.subprocess.run", return_value=completed),
             patch("beam_runtime.package_version", return_value="0.2.30"),
         ):
-            result = beam_runtime.validate_acceleration("12.0")
+            result = beam_runtime.validate_acceleration(
+                "12.0", required_capabilities="int8_linear,scaled_mm_nvfp4"
+            )
 
         self.assertEqual(result["compute_capability"], "12.0")
-        self.assertEqual(result["torch_cuda"], "12.8")
+        self.assertEqual(result["torch_cuda"], "13.0")
+        self.assertEqual(result["driver_major"], "580")
         self.assertIn("scaled_mm_nvfp4", result["kitchen_cuda_capabilities"])
 
     def test_rejects_wrong_compute_capability(self) -> None:
-        kitchen = SimpleNamespace(list_backends=lambda: {})
-        with patch.dict(
-            sys.modules,
-            {
-                "torch": self._torch(capability=(8, 9)),
-                "comfy_kitchen": kitchen,
-            },
-        ), patch("beam_runtime.package_version", return_value="0.2.30"):
-            with self.assertRaisesRegex(RuntimeError, "expected 12.0, got 8.9"):
-                beam_runtime.validate_acceleration("12.0")
+        kitchen = SimpleNamespace(list_backends=dict)
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    "torch": self._torch(capability=(8, 9)),
+                    "comfy_kitchen": kitchen,
+                },
+            ),
+            patch("beam_runtime.package_version", return_value="0.2.30"),
+            patch("beam_runtime._query_nvidia_smi", return_value=("GPU, 580.1", 580)),
+            self.assertRaisesRegex(RuntimeError, "expected 12.0, got 8.9"),
+        ):
+            beam_runtime.validate_acceleration("12.0")
 
     def test_rejects_missing_kitchen_cuda_backend(self) -> None:
         kitchen = SimpleNamespace(
@@ -88,24 +95,109 @@ class AccelerationValidationTests(unittest.TestCase):
                 }
             }
         )
-        with patch.dict(
-            sys.modules,
-            {"torch": self._torch(), "comfy_kitchen": kitchen},
-        ), patch("beam_runtime.package_version", return_value="0.2.30"):
-            with self.assertRaisesRegex(RuntimeError, "extension not found"):
-                beam_runtime.validate_acceleration("12.0")
+        with (
+            patch.dict(
+                sys.modules,
+                {"torch": self._torch(), "comfy_kitchen": kitchen},
+            ),
+            patch("beam_runtime.package_version", return_value="0.2.30"),
+            patch("beam_runtime._query_nvidia_smi", return_value=("GPU, 580.1", 580)),
+            self.assertRaisesRegex(RuntimeError, "extension not found"),
+        ):
+            beam_runtime.validate_acceleration("12.0")
 
     def test_rejects_wrong_kitchen_version(self) -> None:
-        kitchen = SimpleNamespace(list_backends=lambda: {})
+        kitchen = SimpleNamespace(list_backends=dict)
         with (
             patch.dict(
                 sys.modules,
                 {"torch": self._torch(), "comfy_kitchen": kitchen},
             ),
             patch("beam_runtime.package_version", return_value="0.2.31"),
+            patch("beam_runtime._query_nvidia_smi", return_value=("GPU, 580.1", 580)),
+            self.assertRaisesRegex(RuntimeError, "expected 0.2.30, got 0.2.31"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "expected 0.2.30, got 0.2.31"):
-                beam_runtime.validate_acceleration("12.0")
+            beam_runtime.validate_acceleration("12.0")
+
+    def test_rejects_cuda_12_pytorch(self) -> None:
+        kitchen = SimpleNamespace(list_backends=dict)
+        torch = self._torch()
+        torch.version.cuda = "12.8"
+        with (
+            patch.dict(sys.modules, {"torch": torch, "comfy_kitchen": kitchen}),
+            patch("beam_runtime.package_version", return_value="0.2.30"),
+            patch("beam_runtime._query_nvidia_smi", return_value=("GPU, 580.1", 580)),
+            self.assertRaisesRegex(RuntimeError, "CUDA 13.x is required"),
+        ):
+            beam_runtime.validate_acceleration("12.0")
+
+    def test_rejects_driver_older_than_580(self) -> None:
+        completed = Mock(stdout="NVIDIA A100-SXM4-80GB, 575.57.08\n")
+        with (
+            patch("beam_runtime.subprocess.run", return_value=completed),
+            self.assertRaisesRegex(RuntimeError, "driver 580 or newer"),
+        ):
+            beam_runtime._query_nvidia_smi()
+
+    def test_rejects_missing_required_kitchen_capability(self) -> None:
+        kitchen = SimpleNamespace(
+            list_backends=lambda: {
+                "cuda": {
+                    "available": True,
+                    "disabled": False,
+                    "unavailable_reason": None,
+                    "capabilities": ["int8_linear"],
+                }
+            }
+        )
+        with (
+            patch.dict(
+                sys.modules,
+                {"torch": self._torch(), "comfy_kitchen": kitchen},
+            ),
+            patch("beam_runtime.package_version", return_value="0.2.30"),
+            patch("beam_runtime._query_nvidia_smi", return_value=("GPU, 580.1", 580)),
+            self.assertRaisesRegex(RuntimeError, "scaled_mm_nvfp4"),
+        ):
+            beam_runtime.validate_acceleration(
+                "12.0", required_capabilities="scaled_mm_nvfp4"
+            )
+
+    def test_checks_backend_after_comfyui_quantization_policy(self) -> None:
+        state = {"disabled": False}
+        kitchen = SimpleNamespace(
+            list_backends=lambda: {
+                "cuda": {
+                    "available": True,
+                    "disabled": state["disabled"],
+                    "unavailable_reason": None,
+                    "capabilities": ["int8_linear"],
+                }
+            }
+        )
+
+        def apply_comfyui_policy(_module_name: str):
+            state["disabled"] = True
+            return SimpleNamespace()
+
+        with (
+            patch.dict(
+                sys.modules,
+                {"torch": self._torch(), "comfy_kitchen": kitchen},
+            ),
+            patch("beam_runtime.package_version", return_value="0.2.30"),
+            patch("beam_runtime._query_nvidia_smi", return_value=("GPU, 580.1", 580)),
+            patch(
+                "beam_runtime.importlib.import_module",
+                side_effect=apply_comfyui_policy,
+            ) as import_module,
+            self.assertRaisesRegex(RuntimeError, "CUDA backend is unavailable"),
+        ):
+            beam_runtime.validate_acceleration(
+                "12.0", comfy_roots=(Path("/opt/ComfyUI"),)
+            )
+
+        import_module.assert_called_once_with("comfy.quant_ops")
 
 
 class PersistentStorageTests(unittest.TestCase):
@@ -143,7 +235,7 @@ class PersistentStorageTests(unittest.TestCase):
                 "model",
             )
             patched = user_manager.read_text(encoding="utf-8")
-            self.assertIn('/userdata/{file:.*}', patched)
+            self.assertIn("/userdata/{file:.*}", patched)
             self.assertIn(beam_runtime.WORKFLOWS_PATCH_MARKER, patched)
 
     def test_missing_comfyui_installation_fails_fast(self) -> None:
