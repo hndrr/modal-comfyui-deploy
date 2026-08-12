@@ -213,9 +213,6 @@ def _custom_node_install_command(name: str, repository: str, commit: str) -> str
         f'git -C "{destination}" submodule update --init --recursive; '
         f'if [ -f "{destination}/requirements.txt" ]; then '
         f'python3 -m pip install --no-cache-dir -r "{destination}/requirements.txt"; '
-        "fi; "
-        f'if [ -f "{destination}/install.py" ]; then '
-        f'cd "{destination}" && python3 install.py; '
         "fi"
     )
 

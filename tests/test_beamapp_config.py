@@ -117,6 +117,7 @@ class BeamConfigTests(unittest.TestCase):
         self.assertIn(beamapp.FLASH_ATTN_WHEEL_SHA256, commands)
         self.assertIn("sha256sum -c -", commands)
         self.assertNotIn("comfy node install", commands)
+        self.assertNotIn("install.py", commands)
         for name, repository, commit in beamapp.CUSTOM_NODES:
             with self.subTest(name=name):
                 self.assertIn(repository, commands)
