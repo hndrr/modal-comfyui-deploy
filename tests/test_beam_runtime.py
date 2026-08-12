@@ -1,3 +1,6 @@
+import contextlib
+import errno
+import os
 import sys
 import tempfile
 import unittest
@@ -6,6 +9,49 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import beam_runtime
+
+
+@contextlib.contextmanager
+def _volume_mount(boundary: Path):
+    """Simulate a Beam Volume.
+
+    Renaming onto it fails with EXDEV, and it refuses the metadata calls
+    shutil.copystat makes, which is what broke the shutil.move fallback.
+    """
+
+    real_rename = os.rename
+    real_utime = os.utime
+    real_chmod = os.chmod
+
+    def _on_volume(path) -> bool:
+        try:
+            return Path(path).is_relative_to(boundary)
+        except TypeError:  # file descriptors are never on the volume
+            return False
+
+    def fake_rename(src, dst, *args, **kwargs):
+        if _on_volume(dst):
+            raise OSError(
+                errno.EXDEV, "Invalid cross-device link", str(src), None, str(dst)
+            )
+        return real_rename(src, dst, *args, **kwargs)
+
+    def fake_utime(path, *args, **kwargs):
+        if _on_volume(path):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        return real_utime(path, *args, **kwargs)
+
+    def fake_chmod(path, *args, **kwargs):
+        if _on_volume(path):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        return real_chmod(path, *args, **kwargs)
+
+    with (
+        patch.object(beam_runtime.os, "rename", fake_rename),
+        patch.object(beam_runtime.os, "utime", fake_utime),
+        patch.object(beam_runtime.os, "chmod", fake_chmod),
+    ):
+        yield
 
 
 class BuildLaunchCommandTests(unittest.TestCase):
@@ -282,6 +328,47 @@ class PersistentStorageTests(unittest.TestCase):
             patched = user_manager.read_text(encoding="utf-8")
             self.assertIn("/userdata/{file:.*}", patched)
             self.assertIn(beam_runtime.WORKFLOWS_PATCH_MARKER, patched)
+
+    def test_moves_image_content_onto_a_separate_mount(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            comfy_root = root / "ComfyUI"
+            volumes = root / "volumes"
+            nodes = comfy_root / "custom_nodes" / "rgthree-comfy"
+            nodes.mkdir(parents=True)
+            (nodes / "__init__.py").write_text("node", encoding="utf-8")
+            (comfy_root / "custom_nodes" / "example.py").write_text(
+                "example", encoding="utf-8"
+            )
+            (comfy_root / "custom_nodes" / "link.py").symlink_to("example.py")
+            (comfy_root / "models" / "gligen").mkdir(parents=True)
+
+            with _volume_mount(volumes):
+                beam_runtime.prepare_persistent_storage(
+                    comfy_roots=(comfy_root,),
+                    models=volumes / "models",
+                    custom_nodes=volumes / "custom_nodes",
+                    output=volumes / "output",
+                    input_dir=volumes / "input",
+                    user=volumes / "user",
+                )
+
+            for directory in ("models", "custom_nodes", "output", "input", "user"):
+                self.assertTrue((comfy_root / directory).is_symlink())
+            self.assertEqual(
+                (volumes / "custom_nodes" / "rgthree-comfy" / "__init__.py").read_text(
+                    encoding="utf-8"
+                ),
+                "node",
+            )
+            self.assertEqual(
+                (volumes / "custom_nodes" / "example.py").read_text(encoding="utf-8"),
+                "example",
+            )
+            moved_link = volumes / "custom_nodes" / "link.py"
+            self.assertTrue(moved_link.is_symlink())
+            self.assertEqual(os.readlink(moved_link), "example.py")
+            self.assertTrue((volumes / "models" / "gligen").is_dir())
 
     def test_missing_comfyui_installation_fails_fast(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

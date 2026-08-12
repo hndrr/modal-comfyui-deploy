@@ -367,8 +367,10 @@ image = (
     .add_commands(
         [
             (
+                # comfy-cli validates --commit against --version, which click resolves
+                # in command-line order, so --version must come first.
                 "comfy --skip-prompt install --nvidia --cuda-version 13.0 "
-                f'--commit "{COMFYUI_COMMIT}"'
+                f'--version nightly --commit "{COMFYUI_COMMIT}"'
             ),
             (
                 "python3 -m pip install --no-cache-dir "
