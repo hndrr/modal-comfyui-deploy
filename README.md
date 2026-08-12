@@ -1,10 +1,11 @@
 # modal-comfyui
 
-Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
+Modal または Beam Cloud 上で ComfyUI を動かし、モデル・入力・出力・workflowを永続化して利用するためのリポジトリです。
 
-今の主要機能は次の 4 つです。
+今の主要機能は次の 5 つです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
+- `beamapp.py`: ComfyUI 本体を Beam Cloud の serverless Pod にデプロイする
 - `preserve_model.py`: Hugging Face の単一ファイル保存と、その Web GUI を Modal にデプロイする
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す（ローカル実行）
 - `web/`: ComfyUI のモデル・入力・出力を React + Hono 管理画面から操作する（`modal volume` CLI 経由）
@@ -30,6 +31,20 @@ cp .env.example .env
 ```
 
 `.env` は `comfyapp.py` 実行時に自動で読み込まれます。すでにシェルで設定済みの環境変数がある場合はそちらが優先されます。
+
+## Beam Cloudへデプロイする
+
+Beam版は、Modal版と同じComfyUI構成・custom nodes・永続ディレクトリをBeamの`Pod`と`Volume`へ移植したものです。CUDA 13.0、PyTorch cu130、Comfy Kitchen 0.2.30 + cuBLAS 13を固定し、既定ではserverlessのRTX 5090を使います。
+
+```bash
+uv run beam config create production
+uv run beam config select production
+uv run beam deploy beamapp.py:comfyui
+```
+
+初回はCUDA拡張を含むイメージをビルドするため時間がかかります。デプロイ後に表示されるHTTPS URLをブラウザで開いてください。
+
+GPU、アイドル停止、認証、モデルのアップロード、Volume構成を含む詳しい手順は [docs/beam-cloud.md](docs/beam-cloud.md) にまとめています。
 
 ## 1. ComfyUI を Modal で起動する
 
