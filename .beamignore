@@ -1,0 +1,14 @@
+.git/
+.venv/
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.vscode/
+assets/
+docs/
+tests/
+web/
+worker/
+comfy-docker/
