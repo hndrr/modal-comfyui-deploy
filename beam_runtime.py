@@ -1,3 +1,4 @@
+import errno
 import filecmp
 import importlib
 import os
@@ -222,24 +223,57 @@ def _conflict_destination(destination: Path, suffix: str) -> Path:
     return candidate
 
 
+def _move_entry(source: Path, destination: Path) -> None:
+    """Move an image entry onto persistent storage.
+
+    A Beam Volume is a separate mount, so os.rename fails with EXDEV and the
+    copy fallback must not depend on metadata the volume refuses to set.
+    """
+
+    try:
+        os.rename(source, destination)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+
+    if source.is_symlink():
+        destination.symlink_to(os.readlink(source))
+        source.unlink()
+        return
+
+    if source.is_dir():
+        destination.mkdir(parents=True, exist_ok=True)
+        _merge_directory_contents(destination, source)
+        source.rmdir()
+        return
+
+    shutil.copyfile(source, destination)
+    try:
+        shutil.copymode(source, destination)
+    except OSError as exc:
+        print(f"Warning: could not copy permissions to {destination}: {exc}")
+    source.unlink()
+
+
 def _merge_directory_contents(persistent_dir: Path, image_dir: Path) -> None:
     """Move image content without overwriting entries in persistent storage."""
 
     for item in list(image_dir.iterdir()):
         destination = persistent_dir / item.name
 
-        if item.is_dir():
+        if item.is_dir() and not item.is_symlink():
             if destination.exists():
                 if destination.is_dir():
                     _merge_directory_contents(destination, item)
                     item.rmdir()
                 else:
-                    shutil.move(
-                        str(item),
+                    _move_entry(
+                        item,
                         _conflict_destination(destination, ".dir_conflict"),
                     )
             else:
-                shutil.move(str(item), destination)
+                _move_entry(item, destination)
             continue
 
         if destination.exists():
@@ -252,12 +286,12 @@ def _merge_directory_contents(persistent_dir: Path, image_dir: Path) -> None:
             if same_file:
                 item.unlink()
             else:
-                shutil.move(
-                    str(item),
+                _move_entry(
+                    item,
                     _conflict_destination(destination, ".conflict"),
                 )
         else:
-            shutil.move(str(item), destination)
+            _move_entry(item, destination)
 
 
 def link_directory(target: Path, source: Path) -> bool:

@@ -110,7 +110,10 @@ class BeamConfigTests(unittest.TestCase):
         self.assertIn("cuda-toolkit-13-0", commands)
         self.assertIn("--cuda-version 13.0", commands)
         self.assertIn("torch-2.10.0%2Bcu130", commands)
-        self.assertIn(beamapp.COMFYUI_COMMIT, commands)
+        # comfy-cli rejects --commit unless --version precedes it on the command line.
+        self.assertIn(
+            f'--version nightly --commit "{beamapp.COMFYUI_COMMIT}"', commands
+        )
         self.assertIn("nvidia-cublas>=13.0.0", commands)
         self.assertIn("comfy-kitchen==0.2.30", commands)
         self.assertIn("--force-reinstall --no-deps", commands)
