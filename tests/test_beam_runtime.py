@@ -201,6 +201,51 @@ class AccelerationValidationTests(unittest.TestCase):
 
 
 class PersistentStorageTests(unittest.TestCase):
+    def test_merge_preserves_persistent_files_and_rehomes_image_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            persistent = root / "persistent"
+            image = root / "image"
+            (persistent / "node").mkdir(parents=True)
+            (image / "node").mkdir(parents=True)
+
+            (persistent / "node" / "settings.json").write_text(
+                "user settings", encoding="utf-8"
+            )
+            (persistent / "node" / "settings.json.conflict").write_text(
+                "older image settings", encoding="utf-8"
+            )
+            (image / "node" / "settings.json").write_text(
+                "new image settings", encoding="utf-8"
+            )
+            (persistent / "node" / "same.txt").write_text("same", encoding="utf-8")
+            (image / "node" / "same.txt").write_text("same", encoding="utf-8")
+            (image / "node" / "new.txt").write_text("new", encoding="utf-8")
+
+            beam_runtime._merge_directory_contents(persistent, image)
+
+            self.assertEqual(
+                (persistent / "node" / "settings.json").read_text(encoding="utf-8"),
+                "user settings",
+            )
+            self.assertEqual(
+                (persistent / "node" / "settings.json.conflict").read_text(
+                    encoding="utf-8"
+                ),
+                "older image settings",
+            )
+            self.assertEqual(
+                (persistent / "node" / "settings.json.conflict.1").read_text(
+                    encoding="utf-8"
+                ),
+                "new image settings",
+            )
+            self.assertEqual(
+                (persistent / "node" / "new.txt").read_text(encoding="utf-8"),
+                "new",
+            )
+            self.assertEqual(list(image.iterdir()), [])
+
     def test_moves_image_content_and_links_all_persistent_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

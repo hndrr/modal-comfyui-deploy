@@ -68,6 +68,19 @@ class BeamConfigTests(unittest.TestCase):
         ):
             beamapp._resolve_switch(env_name, False)
 
+    def test_cpu_rejects_non_finite_values(self) -> None:
+        env_name = "TEST_BEAM_CPU"
+        for value in ("nan", "inf", "+inf", "-inf"):
+            with (
+                self.subTest(value=value),
+                patch.dict(os.environ, {env_name: value}),
+                self.assertRaisesRegex(ValueError, "positive number"),
+            ):
+                beamapp._resolve_positive_float_env(env_name, 1.0)
+
+        with patch.dict(os.environ, {env_name: "1.5"}):
+            self.assertEqual(beamapp._resolve_positive_float_env(env_name, 1.0), 1.5)
+
     def test_pod_mounts_all_comfyui_state(self) -> None:
         mounts = {volume.mount_path: volume.name for volume in beamapp.volumes}
         self.assertEqual(
@@ -101,8 +114,21 @@ class BeamConfigTests(unittest.TestCase):
         self.assertIn("nvidia-cublas>=13.0.0", commands)
         self.assertIn("comfy-kitchen==0.2.30", commands)
         self.assertIn("--force-reinstall --no-deps", commands)
+        self.assertIn(beamapp.FLASH_ATTN_WHEEL_SHA256, commands)
+        self.assertIn("sha256sum -c -", commands)
+        self.assertNotIn("comfy node install", commands)
+        for name, repository, commit in beamapp.CUSTOM_NODES:
+            with self.subTest(name=name):
+                self.assertIn(repository, commands)
+                self.assertIn(f'checkout --detach "{commit}"', commands)
         self.assertNotIn("cuda-toolkit-12-8", commands)
         self.assertNotIn("SageAttention.git", commands)
+
+    def test_sage_attention_uses_an_immutable_commit(self) -> None:
+        self.assertRegex(beamapp.SAGEATTENTION_COMMIT, r"^[0-9a-f]{40}$")
+        command = beamapp._sage_attention_build_command("")
+        self.assertIn(f'checkout --detach "{beamapp.SAGEATTENTION_COMMIT}"', command)
+        self.assertNotIn("--branch", command)
 
 
 if __name__ == "__main__":

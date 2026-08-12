@@ -20,7 +20,7 @@
   //   で Custom Domain として登録する。
   //   `routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
   //
-  // - MODAL_ORIGIN / TEAM_DOMAIN / POLICY_AUD / MODAL_KEY / MODAL_SECRET は
+  // - MODAL_ORIGINS / TEAM_DOMAIN / POLICY_AUD / MODAL_KEY / MODAL_SECRET は
   //   すべて `wrangler secret put <NAME>` で登録する。secret は Cloudflare 側に
   //   保存され、設定ファイルに書かれていなくてもデプロイで消えない。
   //

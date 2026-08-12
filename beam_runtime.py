@@ -211,19 +211,33 @@ def validate_acceleration(
     }
 
 
-def _merge_directory_contents(source_dir: Path, target_dir: Path) -> None:
-    """Move an image-provided directory into its persistent volume."""
+def _conflict_destination(destination: Path, suffix: str) -> Path:
+    """Return an unused path beside a persistent entry for image conflicts."""
 
-    for item in list(target_dir.iterdir()):
-        destination = source_dir / item.name
+    candidate = destination.with_name(f"{destination.name}{suffix}")
+    counter = 1
+    while candidate.exists():
+        candidate = destination.with_name(f"{destination.name}{suffix}.{counter}")
+        counter += 1
+    return candidate
+
+
+def _merge_directory_contents(persistent_dir: Path, image_dir: Path) -> None:
+    """Move image content without overwriting entries in persistent storage."""
+
+    for item in list(image_dir.iterdir()):
+        destination = persistent_dir / item.name
 
         if item.is_dir():
             if destination.exists():
                 if destination.is_dir():
-                    shutil.copytree(item, destination, dirs_exist_ok=True)
-                    shutil.rmtree(item)
+                    _merge_directory_contents(destination, item)
+                    item.rmdir()
                 else:
-                    shutil.move(str(item), destination.with_suffix(".dir_conflict"))
+                    shutil.move(
+                        str(item),
+                        _conflict_destination(destination, ".dir_conflict"),
+                    )
             else:
                 shutil.move(str(item), destination)
             continue
@@ -238,7 +252,10 @@ def _merge_directory_contents(source_dir: Path, target_dir: Path) -> None:
             if same_file:
                 item.unlink()
             else:
-                shutil.move(str(item), destination.with_suffix(".conflict"))
+                shutil.move(
+                    str(item),
+                    _conflict_destination(destination, ".conflict"),
+                )
         else:
             shutil.move(str(item), destination)
 

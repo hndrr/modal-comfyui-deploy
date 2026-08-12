@@ -221,7 +221,10 @@ onのときだけSageAttentionをイメージへビルドし、`COMFYUI_CLI_ARGS
 - `https://github.com/hayden-fr/ComfyUI-Image-Browsing`
 - `https://github.com/rgthree/rgthree-comfy`
 
-追加・削除する場合は`beamapp.py`の`CUSTOM_NODES`を編集して再デプロイしてください。
+各custom nodeは、レビュー済みcommitへ固定してインストールします。追加・更新・削除する場合は
+`beamapp.py`の`CUSTOM_NODES`にあるURLとcommit SHAを編集して再デプロイしてください。
+SageAttentionもcommit SHAへ固定し、FlashAttention wheelはダウンロード時にSHA-256を検証します。
+Comfy Kitchenは公式PyPI版`0.2.30`を指定しています。一般のAPT/PyPI依存を含む完全なlockは行いません。
 
 ## 7. トラブルシュート
 
