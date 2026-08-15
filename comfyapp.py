@@ -259,6 +259,11 @@ SAGE_ATTENTION_BUILD_PREFIX = (
     if GPU_PROFILE_NAME == "h100"
     else ""
 )
+# torch 2.10 の shim.h は aoti_torch_get_current_cuda_stream を #ifdef USE_CUDA で
+# 囲んでいる。ビルドコンテナには GPU が無く torch が CUDA ランタイムを検出しないため
+# USE_CUDA が付かず、SageAttention の utils.cuh が未定義参照でコンパイルに失敗する。
+# setup.py は Windows でしか -DUSE_CUDA=1 を足さないので、公式の env フックで補う。
+SAGE_ATTENTION_BUILD_PREFIX += "export NVCC_APPEND_FLAGS='-DUSE_CUDA=1'; "
 
 # 使用するカスタムノードのリスト
 NODES = [
