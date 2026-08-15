@@ -11,13 +11,16 @@ from typing import Final, Optional
 import modal
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
 except ModuleNotFoundError:  # pragma: no cover - Modal コンテナ内のみ通る経路
     # `.env` を読むのはデプロイを実行するローカル側だけ。
     # 解決済みの設定値は
     # Web UI イメージの環境変数として渡すため、コンテナでは何もしない。
     def load_dotenv(*_args, **_kwargs) -> bool:
         return False
+
+    def dotenv_values(*_args, **_kwargs) -> dict[str, str | None]:
+        return {}
 
 # create a Volume, or retrieve it if     it exists
 volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
@@ -155,18 +158,16 @@ def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> 
     """
     if not dotenv_path.exists():
         return
-    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
-        name, separator, value = line.strip().removeprefix("export ").partition("=")
-        if not separator or name.strip() != "MODAL_PROFILE":
-            continue
-        wanted = value.strip().strip("\"'")
-        if wanted and wanted != (shell_value or ""):
-            raise RuntimeError(
-                f"{dotenv_path.name} の MODAL_PROFILE={wanted} は modal に渡りません"
-                "（プロファイルは modal の import 時に確定するため）。"
-                f"その行を消して、MODAL_PROFILE={wanted} uv run modal ... または"
-                f" ./scripts/modal.sh {wanted} ... を使ってください。"
-            )
+    # 値の解釈は load_dotenv と同じパーサーに任せる。自前で分解すると
+    # インラインコメントや引用符の扱いがズレて誤検知になる。
+    wanted = (dotenv_values(dotenv_path).get("MODAL_PROFILE") or "").strip()
+    if wanted and wanted != (shell_value or ""):
+        raise RuntimeError(
+            f"{dotenv_path.name} の MODAL_PROFILE={wanted} は modal に渡りません"
+            "（プロファイルは modal の import 時に確定するため）。"
+            f"その行を消して、MODAL_PROFILE={wanted} uv run modal ... または"
+            f" ./scripts/modal.sh --profile {wanted} ... を使ってください。"
+        )
 
 
 # `.env` は MODAL_PROFILE を上書きできないので、読み込む前の値を控えておく。

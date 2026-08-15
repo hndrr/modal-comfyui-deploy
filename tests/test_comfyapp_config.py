@@ -109,10 +109,15 @@ class RejectDotenvModalProfileTests(unittest.TestCase):
             )
 
     def test_allows_dotenv_that_matches_the_shell(self) -> None:
-        comfyapp._reject_dotenv_modal_profile(
-            self._dotenv("MODAL_PROFILE=same\n"),
-            "same",
-        )
+        # Inline comments belong to the .env syntax, not to the value.
+        for body in (
+            "MODAL_PROFILE=same\n",
+            "MODAL_PROFILE=same # note\n",
+            'MODAL_PROFILE="same"\n',
+            "export MODAL_PROFILE=same\n",
+        ):
+            with self.subTest(body=body):
+                comfyapp._reject_dotenv_modal_profile(self._dotenv(body), "same")
 
     def test_ignores_comments_empty_values_and_missing_files(self) -> None:
         for body in (
