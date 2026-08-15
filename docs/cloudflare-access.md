@@ -159,6 +159,8 @@ Modal が 101 以外（Proxy Auth 失敗時の 401 など）を返した場合�
 
 `MODAL_ORIGINS` は**公開ホスト名から転送先 Modal オリジンへのマップ**である。ホスト名も Modal の URL も環境固有なので、両方まとめてこの secret に入れることでリポジトリから追い出している。
 
+URL の `<workspace>` はワークスペース名なので、**別の Modal アカウントでデプロイし直した場合は `MODAL_ORIGINS` と Proxy Auth トークン（`MODAL_KEY` / `MODAL_SECRET`）を入れ直す**必要がある。アカウントの切り替え自体は [modal-profiles.md](modal-profiles.md) を参照。
+
 ```json
 {
   "comfy.example.com": "https://<workspace>--comfyui-ui.modal.run",

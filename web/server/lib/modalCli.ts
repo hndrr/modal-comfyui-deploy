@@ -18,7 +18,14 @@ export type ModalCliRunner = (
   options?: { cwd?: string },
 ) => Promise<RunResult>;
 
+/** Which Modal account (profile) the CLI calls are going to hit. */
+export type ModalProfileInfo = {
+  profile: string;
+  workspace: string | null;
+};
+
 let cachedModalInvocation: string[] | null = null;
+let cachedProfileInfo: Promise<ModalProfileInfo | null> | null = null;
 
 /** Modal CLI may emit rich/ANSI markup even with --json. */
 export function stripAnsi(text: string): string {
@@ -114,6 +121,53 @@ export const defaultModalCliRunner: ModalCliRunner = async (args, options) => {
     timeoutMs: 300_000,
   });
 };
+
+type ProfileRow = {
+  name?: unknown;
+  workspace?: unknown;
+  active?: unknown;
+};
+
+/**
+ * Resolve the profile the CLI actually uses (MODAL_PROFILE overrides the active
+ * one in ~/.modal.toml). Returns null instead of throwing: this is a hint shown
+ * in the UI, never a reason to fail a request.
+ */
+export async function modalActiveProfile(
+  runner: ModalCliRunner = defaultModalCliRunner,
+): Promise<ModalProfileInfo | null> {
+  const result = await runner(["profile", "list", "--json"]);
+  if (result.code !== 0) return null;
+
+  const text = stripAnsi(result.stdout).trim();
+  if (!text) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  // No active row means MODAL_PROFILE points at a profile that is not configured.
+  const active = (parsed as ProfileRow[]).find((row) => row?.active === true);
+  if (!active || typeof active.name !== "string" || !active.name) return null;
+
+  // The workspace column carries "Unknown (...)" when the lookup fails.
+  const workspace =
+    typeof active.workspace === "string" && !active.workspace.startsWith("Unknown")
+      ? active.workspace
+      : null;
+  return { profile: active.name, workspace };
+}
+
+/** Same as modalActiveProfile, resolved once per server process. */
+export function modalActiveProfileCached(
+  runner: ModalCliRunner = defaultModalCliRunner,
+): Promise<ModalProfileInfo | null> {
+  cachedProfileInfo ??= modalActiveProfile(runner).catch(() => null);
+  return cachedProfileInfo;
+}
 
 export async function modalVolumeLs(
   volume: string,
@@ -236,4 +290,8 @@ export async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T
 
 export function resetModalInvocationCache(): void {
   cachedModalInvocation = null;
+}
+
+export function resetModalProfileCache(): void {
+  cachedProfileInfo = null;
 }
