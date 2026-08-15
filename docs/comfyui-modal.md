@@ -101,7 +101,7 @@ COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
 
 ブラウザからそのまま使いたい場合は、Cloudflare Access を ComfyUI の手前に置き、Cloudflare Worker に `Modal-Key` / `Modal-Secret` を付与させる構成が使えます。ComfyUI 本体にも Modal にもログイン機能を足さずに、メールのワンタイム PIN や Google ログインで利用者を制限できます。
 
-構成の説明とセットアップ手順は [docs/cloudflare-access.md](cloudflare-access.md) にまとめています。
+構成の説明とセットアップ手順は [cloudflare-access.md](cloudflare-access.md) にまとめています。
 
 ## アイドル時のscale-to-zero
 

@@ -147,7 +147,7 @@ Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 �
 - `modal.App.run()` による一時コンテナ起動は Modal が禁じているため、**デプロイ済み関数を呼ぶモードに固定**されます
 - Modal の認証はコンテナ ID で自動的に通るため、`modal token` でのログインは不要です
 
-`PRESERVE_WEB_REQUIRES_PROXY_AUTH=on` にすると Modal の直 URL は 401 になるので、ブラウザから使うには Cloudflare Access 越しに公開します。手順は [docs/cloudflare-access.md](cloudflare-access.md) を参照してください。1 つの Worker で ComfyUI と併せて出せます（`MODAL_ORIGINS` にホスト名を足すだけで、Worker のコード変更は不要）。
+`PRESERVE_WEB_REQUIRES_PROXY_AUTH=on` にすると Modal の直 URL は 401 になるので、ブラウザから使うには Cloudflare Access 越しに公開します。手順は [cloudflare-access.md](cloudflare-access.md) を参照してください。1 つの Worker で ComfyUI と併せて出せます（`MODAL_ORIGINS` にホスト名を足すだけで、Worker のコード変更は不要）。
 
 デフォルト URL:
 
