@@ -96,9 +96,10 @@ modal: using profile 'personal' (--profile)
 | `./scripts/modal.sh <modal のコマンド>` | 使う |
 | `cd web && npm start`（資産管理画面） | 使う |
 | `uv run preserve_model_gui.py`（モデル保存 GUI） | 使う |
+| `uv run python rename_volume.py ...` / `move_volume_file.py ...` | 使う |
 | `uv run modal ...` を素で打つ | **使わない**（Modal CLI の既定） |
 
-`preserve_model_gui.py` は `import modal` の前に固定先を `MODAL_PROFILE` へ反映している。素の `uv run modal` だけは Modal CLI が先にプロファイルを確定してしまうので、後から差し込めない。
+`uv run python ...` で起動するスクリプトは、`import modal` の前に固定先を `MODAL_PROFILE` へ反映している。素の `uv run modal` だけは Modal CLI が先にプロファイルを確定してしまうので、後から差し込めない。
 
 つまり `uv run modal` で始まるコマンドは、すべて `./scripts/modal.sh` に置き換える。引数はそのままでよい。
 
