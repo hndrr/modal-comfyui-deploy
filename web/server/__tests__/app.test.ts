@@ -192,7 +192,11 @@ describe("asset streaming", () => {
 describe("health", () => {
   it("reports which Modal account the server talks to", async () => {
     const app = createApp({
-      modalProfile: async () => ({ profile: "alpha", workspace: "alpha-workspace" }),
+      modalProfile: async () => ({
+        profile: "alpha",
+        workspace: "alpha-workspace",
+        source: "repo" as const,
+      }),
     });
 
     const response = await app.request("/api/health");
@@ -200,7 +204,7 @@ describe("health", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       status: "ok",
-      modal: { profile: "alpha", workspace: "alpha-workspace" },
+      modal: { profile: "alpha", workspace: "alpha-workspace", source: "repo" },
     });
   });
 

@@ -15,9 +15,10 @@ describe("modalActiveProfile", () => {
       ]),
     });
 
-    await expect(modalActiveProfile(call)).resolves.toEqual({
+    await expect(modalActiveProfile(call, "repo")).resolves.toEqual({
       profile: "beta",
       workspace: "beta-workspace",
+      source: "repo",
     });
     expect(call).toHaveBeenCalledWith(["profile", "list", "--json"]);
   });
@@ -29,9 +30,10 @@ describe("modalActiveProfile", () => {
       ])}\u001b[0m\n`,
     });
 
-    await expect(modalActiveProfile(call)).resolves.toEqual({
+    await expect(modalActiveProfile(call, "env")).resolves.toEqual({
       profile: "alpha",
       workspace: "alpha-workspace",
+      source: "env",
     });
   });
 
@@ -42,9 +44,10 @@ describe("modalActiveProfile", () => {
       ]),
     });
 
-    await expect(modalActiveProfile(call)).resolves.toEqual({
+    await expect(modalActiveProfile(call, "active")).resolves.toEqual({
       profile: "alpha",
       workspace: null,
+      source: "active",
     });
   });
 
