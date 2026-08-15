@@ -35,422 +35,48 @@ Modal アカウントを複数使い分けている場合のみ、[docs/modal-pr
 
 ## 1. ComfyUI を Modal で起動する
 
-ローカル開発:
-
 ```bash
-uv run modal serve comfyapp.py
-```
-
-デプロイ:
-
-```bash
-uv run modal deploy comfyapp.py
+uv run modal serve comfyapp.py    # ローカル開発
+uv run modal deploy comfyapp.py   # デプロイ
 ```
 
 `comfyapp.py` は `modal.App(name="comfyui")` を定義し、ComfyUI を `8000` 番ポートの Web サーバーとして起動します。
 
-### 実装上のポイント
-
-- Python 3.12 ベース
-- PyTorch 2.10.0 + CUDA 13.0 系の wheel を利用
-- `xformers`、`flash-attn`、`SageAttention` を組み込み
-- `comfy-cli` で ComfyUI をインストール
-- custom node を起動時イメージへ組み込み
-- ComfyUI の `models` / `custom_nodes` / `output` / `input` / `user` を Modal Volume に接続
-- ComfyUI の user data API を起動時に補正し、`user/workflows` 配下の workflow JSON を保存できるようにする
-
-### 永続化に使う Volume
-
-- `comfy-model`
-- `comfy-custom-nodes`
-- `comfy-outputs`
-- `comfy-inputs`
-- `comfy-user-data`
-
-### GPU 切り替え
-
-GPU はコード編集ではなく環境変数 `COMFYUI_GPU_PROFILE` で切り替えます。
-
-利用可能な値:
-
-- `rtx-pro-6000` 既定値
-- `h100`
-- `a100-80gb`
-
-各プロファイルの対応:
-
-- `rtx-pro-6000` -> Modal GPU `RTX-PRO-6000` / `TORCH_CUDA_ARCH_LIST=12.0+PTX`
-- `h100` -> Modal GPU `H100` / `TORCH_CUDA_ARCH_LIST=9.0`
-- `a100-80gb` -> Modal GPU `A100-80GB` / `TORCH_CUDA_ARCH_LIST=8.0`
-
-例:
-
-```bash
-COMFYUI_GPU_PROFILE=h100 uv run modal serve comfyapp.py
-```
-
-### 環境変数
-
-`.env.example`:
-
-```env
-COMFYUI_GPU_PROFILE=rtx-pro-6000
-COMFYUI_SAGE_ATTENTION=on
-COMFYUI_REQUIRES_PROXY_AUTH=off
-COMFYUI_SCALEDOWN_WINDOW=30
-COMFYUI_FUNCTION_TIMEOUT=1800
-COMFYUI_CLI_ARGS=
-COMFYUI_FORCE_BUILD=on
-```
-
-意味:
-
-- `COMFYUI_GPU_PROFILE`: 使用する GPU プロファイル
-- `COMFYUI_SAGE_ATTENTION`: `on` または `off`
-- `COMFYUI_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`
-- `COMFYUI_SCALEDOWN_WINDOW`: 接続終了後にコンテナを縮退するまでの最大秒数（`2`〜`1200`、既定値 `30`）
-- `COMFYUI_FUNCTION_TIMEOUT`: 1入力または接続の最大実行秒数（`1`〜`86400`、既定値 `1800`）
-- `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
-- `COMFYUI_FORCE_BUILD`: ComfyUIのインストール層以降を再ビルドする場合は `on`
-
-`COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
-
-ComfyUI をその時点の最新版に更新してデプロイする場合:
-
-```bash
-COMFYUI_FORCE_BUILD=on uv run modal deploy comfyapp.py
-```
-
-この指定では CUDA、PyTorch、SageAttention のビルド層には既存キャッシュを利用し、ComfyUI のインストール層とそれ以降の層だけを再ビルドします。
-
-Modal の公開 URL に `Modal-Key` / `Modal-Secret` ヘッダーを必須にする場合:
-
-```bash
-COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
-```
-
-`COMFYUI_REQUIRES_PROXY_AUTH=off` が既定です。`on` にすると通常のブラウザアクセスでは開けないため、ヘッダーを付与できるクライアントやプロキシ経由で利用します。
-
-### Cloudflare Access でログイン画面を付ける
-
-ブラウザからそのまま使いたい場合は、Cloudflare Access を ComfyUI の手前に置き、Cloudflare Worker に `Modal-Key` / `Modal-Secret` を付与させる構成が使えます。ComfyUI 本体にも Modal にもログイン機能を足さずに、メールのワンタイム PIN や Google ログインで利用者を制限できます。
-
-構成の説明とセットアップ手順は [docs/cloudflare-access.md](docs/cloudflare-access.md) にまとめています。
-
-### アイドル時のscale-to-zero
-
-ComfyUI用Functionは `min_containers=0` のため、アクティブな入力がなければGPUコンテナをゼロ台まで縮退できます。`COMFYUI_SCALEDOWN_WINDOW` は、最後の入力が終了してから縮退するまでの最大アイドル時間です。短くするとアイドル中のコンピュート消費を抑えやすくなりますが、次回アクセス時のコールドスタートが増えます。
-
-`COMFYUI_FUNCTION_TIMEOUT` はアイドル停止時間ではありません。生成処理を含む1入力やWebSocket接続を継続できる最大時間です。長時間の生成を行う場合は、想定する処理時間より長い値を指定してください。
-
-例として、接続終了から10秒で縮退対象にし、Function timeoutを1時間にする場合:
-
-```bash
-COMFYUI_SCALEDOWN_WINDOW=10 \
-COMFYUI_FUNCTION_TIMEOUT=3600 \
-uv run modal deploy comfyapp.py
-```
-
-これらはデプロイ時に決まる設定なので、変更後は再デプロイが必要です。不正な整数や許容範囲外の値を指定すると、イメージビルド前にエラーになります。
-
-ComfyUIはブラウザとの状態同期にWebSocketを使います。生成が終わっていてもComfyUIのタブやAPIクライアントが接続中だと、Modalではアクティブな入力として扱われ、scale-to-zeroしない可能性があります。確実に停止させる場合は、生成完了後にすべてのComfyUIタブとクライアントを閉じてください。再アクセス時は同じURLからコールドスタートします。
-
-GPUコンテナがゼロ台になった後も、モデル、入力、出力、workflowなどを保持するModal Volumeのストレージは維持されます。
-
-### 追加される custom nodes
-
-- `https://github.com/crystian/ComfyUI-Crystools`
-- `https://github.com/Firetheft/ComfyUI_Local_Media_Manager`
-- `https://github.com/hayden-fr/ComfyUI-Image-Browsing`
-- `https://github.com/rgthree/rgthree-comfy`
-
-![ComfyUI](assets/2025-09-28-21-11-34.png)
+GPU の切り替え、環境変数、永続化に使う Volume、custom nodes は [docs/comfyui-modal.md](docs/comfyui-modal.md) を参照してください。
 
 ## 2. Hugging Face のモデルを Volume に保存する
-
-`preserve_model.py` は Hugging Face 上の単一ファイルをダウンロードし、ComfyUI が参照する `comfy-model` Volume に保存します。
 
 ```bash
 uv run modal run preserve_model.py::preserve_model \
   --repo-id "Comfy-Org/Qwen-Image_ComfyUI" \
   --filename "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-  --revision "main" \
   --destination-subdir "text_encoders"
 ```
 
-### 保存先の決まり方
-
-- `--destination-subdir` を指定した場合は、そのサブディレクトリ直下に保存
-- 未指定の場合は `filename` のパス中から ComfyUI 向けサブディレクトリを自動判定
-- 保存ファイル名は常に basename を使う
-
-指定できる保存先:
-
-- `audio_encoders`
-- `checkpoints`
-- `clip`
-- `clip_vision`
-- `controlnet`
-- `detection`
-- `diffusion_models`
-- `embeddings`
-- `latent_upscale_models`
-- `loras`
-- `text_encoders`
-- `upscale_models`
-- `vae`
-
-注意点:
-
-- `repo_id` と `filename` は必須
-- Hugging Face へのアクセスには Modal Secret `huggingface-secret` が必要
-- 既定のタイムアウトは 24 時間
-- `max_containers=1` で同時実行を抑制
-
-### デプロイ済み関数として使う
-
-先にデプロイ:
+Gradio GUI からも実行できます。
 
 ```bash
-uv run modal deploy preserve_model.py --name preserve-model
+uv run preserve_model_gui.py      # http://127.0.0.1:7860
 ```
 
-このコマンドではモデル保存用の `preserve_model` と GUI 用の `web` が常にまとめてデプロイされます。
+保存先の決まり方、GUI の入力形式、Modal へのデプロイは [docs/preserve-model.md](docs/preserve-model.md) を参照してください。
 
-Python から呼ぶ例:
+## 3. ComfyUI 資産を管理する
+
+`web/` の React + Hono アプリから、`comfy-model` / `comfy-inputs` / `comfy-outputs` をローカル管理画面で操作します。
 
 ```bash
-uv run python - <<'PY'
-import modal
-
-f = modal.Function.from_name("preserve-model", "preserve_model")
-result = f.remote(
-    repo_id="Comfy-Org/Qwen-Image-Edit_ComfyUI",
-    filename="split_files/diffusion_models/qwen_image_edit_2509_bf16.safetensors",
-    revision="main",
-    destination_subdir="diffusion_models",
-)
-print(result)
-PY
-```
-
-ログ確認:
-
-```bash
-uv run modal app logs preserve-model --tail
-```
-
-![Modal/Storage](assets/2025-09-28-23-54-39.png)
-
-## 3. Gradio GUI からモデル保存する
-
-`preserve_model_gui.py` は `preserve_model.py` を UI から実行するためのラッパーです。
-
-```bash
-uv run preserve_model_gui.py
-```
-
-実行のたびに `modal.App.run()` で一時コンテナを起動するため、**事前のデプロイは不要**です。既定 URL は `http://127.0.0.1:7860`。
-
-ブラウザから使いたい場合は、同じ UI を Modal にデプロイできます（後述）。
-
-### GUI で受け付ける入力
-
-1 つ目の入力欄には次のいずれかを入れられます。
-
-- `repo_id::filename`
-- `repo_id filename`
-- Hugging Face の `resolve` / `blob` URL
-
-例:
-
-```text
-Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensors
-```
-
-補足:
-
-- リビジョン未指定時は `main`
-- 保存先サブディレクトリは自動判定可能
-- 自動判定できない場合はプルダウンで明示指定が必要
-- 送信後は `FunctionCall` の完了を短時間だけ待ち、継続中なら確認手順を UI に表示
-- UI から処理が中断された場合は `FunctionCall.cancel(terminate_containers=True)` を試行
-
-主な起動オプション:
-
-- `--share`
-- `--server-port`
-- `--server-name`
-
-### Modal にデプロイしてブラウザから使う
-
-`preserve_model.py` は同じ GUI を Modal 上の Web アプリとしても公開します。UI の組み立ては `preserve_model_gui.py` を再利用しており、ローカル実行の手順は変わりません。
-
-```bash
-PRESERVE_WEB_REQUIRES_PROXY_AUTH=on uv run modal deploy preserve_model.py
-```
-
-Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 つ並びます。
-
-- `preserve_model`: ダウンロードして Volume に保存する処理
-- `web`: この GUI
-
-両方の Function は同じファイルと App に定義されているため、どちらか一方だけが消えることはありません。
-
-環境変数:
-
-- `PRESERVE_WEB_REQUIRES_PROXY_AUTH`: Modal proxy auth を要求する場合は `on`（既定 `on`）。公開 GUI にする場合のみ明示的に `off`
-- `PRESERVE_WEB_SCALEDOWN_WINDOW`: 縮退までの最大秒数（`2`〜`1200`、既定 `30`）
-- `PRESERVE_WEB_FUNCTION_TIMEOUT`: 1入力の最大実行秒数（`1`〜`86400`、既定 `1800`）
-
-コンテナ内では次の点がローカル実行と異なります。
-
-- `modal.App.run()` による一時コンテナ起動は Modal が禁じているため、**デプロイ済み関数を呼ぶモードに固定**されます
-- Modal の認証はコンテナ ID で自動的に通るため、`modal token` でのログインは不要です
-
-`PRESERVE_WEB_REQUIRES_PROXY_AUTH=on` にすると Modal の直 URL は 401 になるので、ブラウザから使うには Cloudflare Access 越しに公開します。手順は [docs/cloudflare-access.md](docs/cloudflare-access.md) を参照してください。1 つの Worker で ComfyUI と併せて出せます（`MODAL_ORIGINS` にホスト名を足すだけで、Worker のコード変更は不要）。
-
-デフォルト URL:
-
-`http://127.0.0.1:7860`
-
-![Gradio](assets/2025-09-28-22-01-40.png)
-
-## 4. ComfyUI 資産を管理する
-
-`web/` の React + Hono アプリが、次の Modal Volume をローカル管理画面から操作します。
-
-- `comfy-model`
-- `comfy-inputs`
-- `comfy-outputs`
-
-前提:
-
-- Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
-- Node.js 22+ 推奨
-
-接続先は Modal CLI の既定プロファイルです。画面ヘッダのバッジに接続先ワークスペース名が出ます（アカウントを使い分けている場合は [docs/modal-profiles.md](docs/modal-profiles.md)）。
-
-初回ビルドと起動:
-
-```bash
-cd web
+cd web 
 npm install
 npm run build
-npm start
+npm start   # http://127.0.0.1:7860
 ```
 
-既定 URL:
+機能と API は [docs/asset-manager.md](docs/asset-manager.md) を参照してください。
 
-`http://127.0.0.1:7860`
+## 4. Volume を操作する補助スクリプト
 
-開発時（Vite が UI、Hono が API）:
-
-```bash
-cd web
-npm run dev
-```
-
-- UI: `http://127.0.0.1:5173`（`/api` は Hono `:7860` へ proxy）
-- API: `http://127.0.0.1:7860`
-
-ポート変更:
-
-```bash
-PORT=7861 npm start
-```
-
-<img width="1342" height="1050" alt="スクリーンショット 2026-08-04 20 47 32" src="https://github.com/user-attachments/assets/fc568c18-7f0e-4e2f-9f1f-7591fda7e3d7" />
-
-
-管理画面はローカル利用専用です。`HOST` は `127.0.0.1`、`localhost`、`::1` などのloopbackアドレスだけを受け付けます。`0.0.0.0`、LANアドレス、公開アドレスを指定するとサーバーは起動を拒否します。リバースプロキシやトンネルを使った外部公開もサポートしません。
-
-アップロード上限は `ASSET_UPLOAD_MAX_FILE_BYTES`（1ファイル、既定10 GiB）と `ASSET_UPLOAD_MAX_TOTAL_BYTES`（multipartリクエスト全体、既定20 GiB）で変更できます。どちらも正のバイト数で指定します。
-
-構成:
-
-- **GUI**: React + React Aria Components + Tailwind
-- **API**: Hono（Node）
-- **Volume I/O**: 常駐 Python ワーカー（`asset_rpc.py` + `asset_manager.py` / Modal SDK）  
-  list はメタデータのみ。一覧はプロセス内キャッシュ。サムネ/本文は on-demand + ディスクキャッシュ。  
-  （`modal volume` CLI は使わない。CLI 毎回起動だと Gradio より遅くなるため）
-
-管理画面では次の操作ができます。
-
-- Volume タブとフォルダを切り替えて、名前・サイズ・更新日時を確認
-- **複数選択（チェック / Shift+クリック範囲選択）からの一括完全削除**（大量整理向け）
-- `comfy-inputs` / `comfy-outputs` の画像ギャラリー（遅延ロード）
-- 画像・動画・音声のプレビューとファイルのダウンロード
-- ローカルファイルの複数アップロード
-- 同一 Volume 内での名前変更・移動（1件）
-- `comfy-inputs` と `comfy-outputs` の間での移動
-- ファイル・フォルダの完全削除
-
-Hugging Face からのモデル取り込みは別途 `preserve_model_gui.py`（Gradio）を使います。
-
-Models へのアップロードと移動は、ComfyUI が認識するモデル種別ディレクトリ配下だけに制限されます。上書きは既定で無効です。
-
-> [!WARNING]
-> 削除はゴミ箱を経由しない完全削除です。確認ダイアログで「完全に削除する」を押した場合だけ実行されます。Volume ルート自体は削除できません。
-
-管理画面はローカル利用前提です。更新系操作はサーバー内で直列化されます。
-
-旧 Gradio の `asset_manager_gui.py` は廃止済みです（起動すると移行手順を表示して終了します）。
-
-## 5. Volume を別名へコピーする
-
-`rename_volume.py` は Modal Volume 間でデータをコピーするユーティリティです。実質的に Volume 名を移行したい時に使います。
-
-```bash
-uv run python rename_volume.py <コピー元ボリューム名> <コピー先ボリューム名>
-```
-
-確認を省略する場合:
-
-```bash
-uv run python rename_volume.py <コピー元> <コピー先> --yes
-```
-
-仕様:
-
-- コピー先 Volume は存在しなければ作成
-- データコピーは `modal.App(name="volume-copier")` 経由で実行
-- コピー後、元 Volume の削除は自動では行わない
-
-## 6. Volume 内のファイルを移動する
-
-`move_volume_file.py` は Modal Volume 内の単一ファイルまたはディレクトリを移動するユーティリティです。同じ Volume 内でのリネームにも、別 Volume への移動にも使えます。
-
-```bash
-uv run python move_volume_file.py \
-  comfy-model \
-  diffusion_models/old-model.safetensors \
-  comfy-model \
-  diffusion_models/archive/old-model.safetensors
-```
-
-別 Volume へ移動する例:
-
-```bash
-uv run python move_volume_file.py \
-  comfy-inputs \
-  uploads/example.png \
-  comfy-outputs \
-  archived/example.png
-```
-
-主なオプション:
-
-- `--yes`: 確認プロンプトをスキップ
-- `--overwrite`: 移動先が存在する場合に上書き
-- `--create-destination-volume`: 移動先 Volume が存在しない場合に作成
-
-注意点:
-
-- パスは Volume 内の相対パスで指定する
-- `..` や絶対パスは受け付けない
-- 移動先に既存ファイルがある場合は `--overwrite` が必要
-- 移動先パスが既存ディレクトリなら、その配下へ元ファイル名のまま移動する
+Volume の別名コピーとファイル移動に `rename_volume.py` / `move_volume_file.py` を用意しています。使い方は [docs/volume-tools.md](docs/volume-tools.md) を参照してください。
 
 ## ファイル一覧
 
@@ -468,7 +94,18 @@ uv run python move_volume_file.py \
 
 ## ドキュメント
 
-- [docs/modal-profiles.md](docs/modal-profiles.md): Modal アカウントを複数使い分ける場合の profile 運用（任意）
-- [docs/cloudflare-access.md](docs/cloudflare-access.md): Cloudflare Access + Worker で ComfyUI にログイン画面を付ける
-- [docs/modal-idle-scale-to-zero.md](docs/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
-- [docs/modal-power-control.md](docs/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
+使い方（`docs/`）:
+
+- [comfyui-modal.md](docs/comfyui-modal.md): ComfyUI の GPU / 環境変数 / Volume / custom nodes
+- [preserve-model.md](docs/preserve-model.md): モデル保存の CLI・GUI・Modal デプロイ
+- [asset-manager.md](docs/asset-manager.md): 資産管理画面（`web/`）
+- [volume-tools.md](docs/volume-tools.md): Volume のコピーとファイル移動
+- [modal-profiles.md](docs/modal-profiles.md): Modal アカウントを複数使い分ける場合の profile 運用（任意）
+- [cloudflare-access.md](docs/cloudflare-access.md): Cloudflare Access + Worker で ComfyUI にログイン画面を付ける
+
+設計・検討メモ（`docs/design/`）:
+
+- [cloudflare-access.md](docs/design/cloudflare-access.md): Worker の責務と WebSocket 透過、迂回経路を塞ぐ設計
+- [modal-idle-scale-to-zero.md](docs/design/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
+- [modal-power-control.md](docs/design/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
+- [pytorch-cu130-upgrade.md](docs/design/pytorch-cu130-upgrade.md): PyTorch / CUDA のアップグレード検討

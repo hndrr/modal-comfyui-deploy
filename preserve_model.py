@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import shutil
-from typing import Final, Optional
+import threading
+import time
+from typing import Any, Final, Optional
 
 import modal
 
@@ -24,6 +26,14 @@ except ModuleNotFoundError:  # pragma: no cover - Modal コンテナ内のみ通
 
 # create a Volume, or retrieve it if     it exists
 volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
+
+# 進捗の受け渡し用。コンテナの print は Modal のログにしか出ないので、
+# 呼び出し側（GUI / CLI）が読める場所に FunctionCall ID をキーとして書く。
+PROGRESS_DICT_NAME: Final = "preserve-model-progress"
+PROGRESS_POLL_SECONDS: Final = 3.0
+PROGRESS_STALE_SECONDS: Final = 60 * 60 * 6
+progress_dict = modal.Dict.from_name(PROGRESS_DICT_NAME, create_if_missing=True)
+
 MODEL_DIR = Path("/models")
 COMFY_MODEL_SUBDIRS = {
     "checkpoints",
@@ -48,6 +58,58 @@ download_image = (
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})  # and enable it
 )
 app = modal.App("preserve-model")
+
+
+def _publish_progress(call_id: str, payload: dict[str, Any]) -> None:
+    """進捗を Dict に書き、Modal のログにも同じ内容を残す。
+
+    表示のためだけの経路なので、書き込みに失敗しても保存処理は続行する。
+    """
+    line = " ".join(f"{key}={value}" for key, value in payload.items())
+    print(f"[progress] {line}", flush=True)
+    if not call_id:
+        return
+    try:
+        progress_dict[call_id] = payload
+    except Exception as exc:  # pragma: no cover - 進捗表示の失敗で本処理は止めない
+        print(f"[progress] 書き込みに失敗しました: {exc}", flush=True)
+
+
+def _remote_file_size(
+    repo_id: str, filename: str, revision: Optional[str]
+) -> Optional[int]:
+    """ダウンロード前に総バイト数を引く。取れなくても進捗表示を諦めるだけ。"""
+    try:
+        from huggingface_hub import get_hf_file_metadata, hf_hub_url
+
+        url = hf_hub_url(repo_id=repo_id, filename=filename, revision=revision)
+        return get_hf_file_metadata(url).size
+    except Exception:  # pragma: no cover - メタデータ取得はベストエフォート
+        return None
+
+
+def _incomplete_download_bytes() -> Optional[int]:
+    """HF キャッシュに出る `*.incomplete` のサイズ（= ダウンロード済み量）。"""
+    cache_root = Path(
+        os.environ.get("HF_HUB_CACHE")
+        or os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")
+    )
+    try:
+        sizes = [path.stat().st_size for path in cache_root.rglob("*.incomplete")]
+    except OSError:  # pragma: no cover - キャッシュ未作成など
+        return None
+    return max(sizes) if sizes else None
+
+
+def _prune_progress(now: float) -> None:
+    """Dict に残り続ける古い進捗を落とす。"""
+    try:
+        for key, value in list(progress_dict.items()):
+            updated_at = float((value or {}).get("updated_at", 0.0))
+            if now - updated_at > PROGRESS_STALE_SECONDS:
+                progress_dict.pop(key, None)
+    except Exception:  # pragma: no cover - 掃除できなくても実害はない
+        pass
 
 
 @app.function(
@@ -96,28 +158,82 @@ def preserve_model(
     if not filename:
         raise ValueError("filename を必ず指定してください")
 
-    filename_path = Path(filename)
-    destination_path = _resolve_destination(filename, destination_subdir)
-    downloaded_path = Path(
-        hf_hub_download(
-            repo_id=repo_id,
-            filename=filename_path.as_posix(),
-            revision=revision,
-            local_dir_use_symlinks=False,
-            resume_download=True,
+    call_id = modal.current_function_call_id() or ""
+    started_at = time.time()
+    _prune_progress(started_at)
+
+    def report(phase: str, **fields: Any) -> None:
+        _publish_progress(
+            call_id,
+            {
+                "phase": phase,
+                "updated_at": time.time(),
+                "started_at": started_at,
+                "repo_id": repo_id,
+                "filename": filename,
+                **fields,
+            },
         )
-    )
-    if downloaded_path.resolve() != destination_path.resolve():
-        shutil.copy2(downloaded_path, destination_path)
-        downloaded_path = destination_path
-    file_stat = downloaded_path.stat()
-    completed_at = datetime.now(timezone.utc).isoformat()
-    print(f"モデルファイルを {downloaded_path} に保存しました")
-    return {
-        "destination": destination_path.as_posix(),
-        "size_bytes": file_stat.st_size,
-        "completed_at": completed_at,
-    }
+
+    filename_path = Path(filename)
+    try:
+        destination_path = _resolve_destination(filename, destination_subdir)
+        report("preparing", destination=destination_path.as_posix())
+
+        total_bytes = _remote_file_size(repo_id, filename_path.as_posix(), revision)
+        report("downloading", downloaded_bytes=0, total_bytes=total_bytes)
+
+        # hf_hub_download は進捗コールバックを持たないので、キャッシュに現れる
+        # `*.incomplete` のサイズを別スレッドで監視して代用する。
+        stop_watching = threading.Event()
+
+        def _watch_download() -> None:
+            while not stop_watching.wait(PROGRESS_POLL_SECONDS):
+                downloaded = _incomplete_download_bytes()
+                if downloaded is not None:
+                    report(
+                        "downloading",
+                        downloaded_bytes=downloaded,
+                        total_bytes=total_bytes,
+                    )
+
+        watcher = threading.Thread(target=_watch_download, daemon=True)
+        watcher.start()
+        try:
+            downloaded_path = Path(
+                hf_hub_download(
+                    repo_id=repo_id,
+                    filename=filename_path.as_posix(),
+                    revision=revision,
+                    local_dir_use_symlinks=False,
+                    resume_download=True,
+                )
+            )
+        finally:
+            stop_watching.set()
+            watcher.join(timeout=PROGRESS_POLL_SECONDS)
+
+        if downloaded_path.resolve() != destination_path.resolve():
+            report("copying", destination=destination_path.as_posix())
+            shutil.copy2(downloaded_path, destination_path)
+            downloaded_path = destination_path
+        file_stat = downloaded_path.stat()
+        completed_at = datetime.now(timezone.utc).isoformat()
+        print(f"モデルファイルを {downloaded_path} に保存しました")
+        report(
+            "done",
+            destination=destination_path.as_posix(),
+            size_bytes=file_stat.st_size,
+            completed_at=completed_at,
+        )
+        return {
+            "destination": destination_path.as_posix(),
+            "size_bytes": file_stat.st_size,
+            "completed_at": completed_at,
+        }
+    except Exception as exc:
+        report("error", message=f"{type(exc).__name__}: {exc}")
+        raise
 
 
 # Gradio Web UI -------------------------------------------------------------
