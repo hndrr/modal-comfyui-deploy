@@ -100,11 +100,80 @@ modal: using profile 'personal' (--profile)
 
 `preserve_model_gui.py` は `import modal` の前に固定先を `MODAL_PROFILE` へ反映している。素の `uv run modal` だけは Modal CLI が先にプロファイルを確定してしまうので、後から差し込めない。
 
+つまり `uv run modal` で始まるコマンドは、すべて `./scripts/modal.sh` に置き換える。引数はそのままでよい。
+
+```bash
+uv run modal deploy comfyapp.py                 → ./scripts/modal.sh deploy comfyapp.py
+uv run modal run preserve_model.py::preserve_model ...
+                                                → ./scripts/modal.sh run preserve_model.py::preserve_model ...
+uv run modal volume ls comfy-model /            → ./scripts/modal.sh volume ls comfy-model /
+```
+
+GUI やサーバーは置き換え不要で、その起動だけ別アカウントにしたいときだけ環境変数で上書きする。
+
+```bash
+MODAL_PROFILE=<profile> uv run preserve_model_gui.py
+MODAL_PROFILE=<profile> npm start
+```
+
+## 資産管理画面（`web/`）の場合
+
+サーバーは `modal volume` CLI と `asset_rpc.py`（Modal SDK）を子プロセスとして起動し、どちらにも固定先を渡す。起動方法はいつもどおりで、ラッパーは要らない。
+
+```bash
+cd web
+npm start                              # 固定先（無ければ Modal CLI の既定）
+MODAL_PROFILE=<profile> npm start      # この起動だけ別アカウント
+```
+
+**固定先を変えたらサーバーを再起動する。** Modal SDK を抱えたワーカーが常駐しているため、起動したまま `.modal-profile` を書き換えても切り替わらない。
+
+接続先は画面ヘッダのバッジに出る。ホバーするとプロファイル名と、どの設定から来たかが出る。
+
+```text
+Modal ComfyUI Asset Manager  [ workspace: work-team ]
+```
+
+`/api/health` でも同じ情報を返す。
+
+```bash
+curl -s 127.0.0.1:7860/api/health
+# {"status":"ok","modal":{"profile":"work","workspace":"work-team","source":"repo"}}
+```
+
+`source` は設定の出どころで、`env`（シェルの `MODAL_PROFILE`）/ `repo`（`.modal-profile`）/ `active`（`~/.modal.toml` の既定）のいずれか。意図した経路で切り替わっているかはここで分かる。
+
+Volume はアカウントごとに別物なので、切り替えると一覧の中身も丸ごと変わる。空に見えるときはまずバッジを見る。
+
+## Cloudflare Access を使っている場合
+
+Access 越しの公開はアカウントを跨げない。切り替えたら Worker 側の secret を入れ直す。
+
+| secret | 入れ直す理由 |
+| --- | --- |
+| `MODAL_ORIGINS` | デプロイ URL に workspace 名が入るため（`https://<workspace>--<app>.modal.run`） |
+| `MODAL_KEY` / `MODAL_SECRET` | Proxy Auth トークンがワークスペース単位のため。新しいアカウントで作り直す |
+
+`MODAL_ORIGINS` はホスト名 → オリジンのマップなので、**両アカウント分のホスト名を 1 つの Worker に並べて置ける**。
+
+```json
+{
+  "comfy.example.com": "https://<本番の workspace>--comfyui-ui.modal.run",
+  "comfy-test.example.com": "https://<検証の workspace>--comfyui-ui.modal.run"
+}
+```
+
+ただし `worker/src/index.ts` は `MODAL_KEY` / `MODAL_SECRET` を**1 組しか持てない**ため、この並記だけでは片方のアカウントにしか認証が通らない。両方を Access で公開するなら、**アカウントごとに Worker を立てる**のが素直である（コード変更が不要で、検証側の設定ミスが本番を巻き込まない）。1 つの Worker に相乗りさせるには、ホスト名ごとに資格情報を持たせる改修が要る。
+
+検証用アカウントで動作確認したいだけなら、Access を組まずに `COMFYUI_REQUIRES_PROXY_AUTH=off` で直 URL を開き、終わったら `./scripts/modal.sh app stop <app-id>` で止めるほうが早い。ただしその間 URL を知っていれば誰でも開ける状態になる。
+
+設定手順そのものは [cloudflare-access.md](cloudflare-access.md) を参照。
+
 ## つまずきやすいところ
 
-**`uv run modal deploy comfyapp.py` と打つと、決めた内容が無視される**
+**`uv run modal ...` を素で打つと、決めた内容が無視される**
 
-`./scripts/modal.sh deploy comfyapp.py` を使う。手順 2 で決めた内容は Modal CLI 本体の機能ではないので、`scripts/modal.sh` を通さないと効かない。うっかり素で打った場合は Modal CLI の既定アカウント（`uv run modal profile current` で分かる）に行く。
+手順 2 で決めた内容は Modal CLI 本体の機能ではないので、`scripts/modal.sh` を通さないと効かない。素で打った場合は Modal CLI の既定アカウント（`uv run modal profile current` で分かる）に行く。デプロイなら別アカウントに出てしまい、`modal run preserve_model.py::preserve_model` なら別アカウントの Volume にモデルが保存される。
 
 **`.env` に `MODAL_PROFILE=work` と書いても効かない**
 

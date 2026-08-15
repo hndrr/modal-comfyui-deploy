@@ -11,7 +11,7 @@ uv run modal run preserve_model.py::preserve_model \
   --destination-subdir "text_encoders"
 ```
 
-アカウントを複数使い分けている場合は `./scripts/modal.sh run ...` を使います（[docs/modal-profiles.md](modal-profiles.md)）。
+Modal アカウントを複数使い分けている場合は `uv run modal` を `./scripts/modal.sh` に置き換えます（[modal-profiles.md](modal-profiles.md)）。
 
 ## 保存先の決まり方
 
@@ -87,7 +87,7 @@ uv run preserve_model_gui.py
 
 実行のたびに `modal.App.run()` で一時コンテナを起動するため、**事前のデプロイは不要**です。既定 URL は `http://127.0.0.1:7860`。
 
-接続先は `.modal-profile` の固定先です（[docs/modal-profiles.md](modal-profiles.md)）。
+GUI は `.modal-profile` の固定先アカウントに繋ぎます（[modal-profiles.md](modal-profiles.md)）。
 
 ブラウザから使いたい場合は、同じ UI を Modal にデプロイできます（後述）。
 
@@ -127,7 +127,7 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 PRESERVE_WEB_REQUIRES_PROXY_AUTH=on uv run modal deploy preserve_model.py
 ```
 
-複数アカウント時は `./scripts/modal.sh deploy preserve_model.py`。デプロイ先に Secret `huggingface-secret` が無いと失敗します。
+デプロイ先のアカウントに Secret `huggingface-secret` が無いと失敗します。`uv run modal secret list` で確認してください（複数アカウント時は [modal-profiles.md](modal-profiles.md)）。
 
 Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 つ並びます。
 
