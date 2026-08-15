@@ -2,6 +2,8 @@
 
 Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Volume に保存して利用するためのリポジトリです。
 
+![ComfyUI](assets/2025-09-28-21-11-34.png)
+
 今の主要機能は次の 4 つです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
@@ -53,11 +55,15 @@ uv run modal run preserve_model.py::preserve_model \
   --destination-subdir "text_encoders"
 ```
 
+![Modal/Storage](assets/2025-09-28-23-54-39.png)
+
 Gradio GUI からも実行できます。
 
 ```bash
 uv run preserve_model_gui.py      # http://127.0.0.1:7860
 ```
+
+![Gradio](assets/2025-09-28-22-01-40.png)
 
 保存先の決まり方、GUI の入力形式、Modal へのデプロイは [docs/preserve-model.md](docs/preserve-model.md) を参照してください。
 
@@ -71,6 +77,8 @@ npm install
 npm run build
 npm start   # http://127.0.0.1:7860
 ```
+
+<img width="1342" height="1050" alt="スクリーンショット 2026-08-04 20 47 32" src="https://github.com/user-attachments/assets/fc568c18-7f0e-4e2f-9f1f-7591fda7e3d7" />
 
 機能と API は [docs/asset-manager.md](docs/asset-manager.md) を参照してください。
 
