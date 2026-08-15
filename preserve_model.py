@@ -104,12 +104,22 @@ def _incomplete_download_bytes() -> Optional[int]:
 def _prune_progress(now: float) -> None:
     """Dict に残り続ける古い進捗を落とす。"""
     try:
-        for key, value in list(progress_dict.items()):
-            updated_at = float((value or {}).get("updated_at", 0.0))
-            if now - updated_at > PROGRESS_STALE_SECONDS:
-                progress_dict.pop(key, None)
+        stale = [
+            key
+            for key, value in progress_dict.items()
+            if now - float((value or {}).get("updated_at", 0.0)) > PROGRESS_STALE_SECONDS
+        ]
     except Exception:  # pragma: no cover - 掃除できなくても実害はない
-        pass
+        return
+    for key in stale:
+        try:
+            # Modal の Dict.pop は既定値を取らない。他の実行と競合して
+            # 既に消えていることがあるので KeyError は無視する。
+            progress_dict.pop(key)
+        except KeyError:
+            pass
+        except Exception:  # pragma: no cover - 掃除できなくても実害はない
+            return
 
 
 @app.function(
@@ -276,7 +286,10 @@ def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> 
         return
     # 値の解釈は load_dotenv と同じパーサーに任せる。自前で分解すると
     # インラインコメントや引用符の扱いがズレて誤検知になる。
-    wanted = (dotenv_values(dotenv_path).get("MODAL_PROFILE") or "").strip()
+    # ただし interpolate=False にする。`${VAR}` を展開すると
+    # load_dotenv(override=False) と結果がズレるため、書かれた文字列のまま見る。
+    raw = dotenv_values(dotenv_path, interpolate=False).get("MODAL_PROFILE")
+    wanted = (raw or "").strip()
     if wanted and wanted != (shell_value or ""):
         raise RuntimeError(
             f"{dotenv_path.name} の MODAL_PROFILE={wanted} は modal に渡りません"

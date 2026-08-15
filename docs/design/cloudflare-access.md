@@ -79,10 +79,11 @@ Cloudflare のドキュメントは、オリジンがすでに公開されてい
 
 受け取った URL のパスとクエリを、ホスト名から解決した Modal オリジンへ引き継ぎ、`Modal-Key` と `Modal-Secret` を `set` で付ける。`set` なので、クライアントが同名ヘッダーを送ってきても上書きされる。
 
-あわせて次の 2 つのヘッダーを落とす。
+あわせて次の 3 つを落とす。
 
 - `Host`: 受け取った値（`comfy.example.com`）を持ち越すと Modal がルーティングできないため、転送先 URL から runtime に決めさせる
 - `Cf-Access-Jwt-Assertion`: 検証済みでこの先は使わないため、ComfyUI へ渡さない
+- `Cookie` の `CF_Authorization`: **Access の JWT はクッキーでも届くため、ヘッダーだけ消しても素通りする。** `CF_Authorization` だけを取り除き、他のクッキーはそのまま残す（`stripAccessCookie`）。残り 0 個になった場合は `Cookie` ヘッダーごと削除する
 
 リクエストボディはバッファリングせずストリームのまま透過させる。
 

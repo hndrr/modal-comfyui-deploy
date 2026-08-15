@@ -98,7 +98,10 @@ def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> 
         return
     # 値の解釈は load_dotenv と同じパーサーに任せる。自前で分解すると
     # インラインコメントや引用符の扱いがズレて誤検知になる。
-    wanted = (dotenv_values(dotenv_path).get("MODAL_PROFILE") or "").strip()
+    # ただし interpolate=False にする。`${VAR}` を展開すると
+    # load_dotenv(override=False) と結果がズレるため、書かれた文字列のまま見る。
+    raw = dotenv_values(dotenv_path, interpolate=False).get("MODAL_PROFILE")
+    wanted = (raw or "").strip()
     if wanted and wanted != (shell_value or ""):
         raise RuntimeError(
             f"{dotenv_path.name} の MODAL_PROFILE={wanted} は modal に渡りません"
