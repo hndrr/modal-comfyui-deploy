@@ -10,6 +10,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { AssetManager, defaultAssetManager } from "./lib/assetManager.js";
+import { modalActiveProfileCached, type ModalProfileInfo } from "./lib/modalCli.js";
 import {
   INPUT_VOLUME,
   MODEL_VOLUME,
@@ -28,6 +29,7 @@ export type AppDeps = {
   manager?: AssetManager;
   maxUploadFileBytes?: number;
   maxUploadTotalBytes?: number;
+  modalProfile?: () => Promise<ModalProfileInfo | null>;
 };
 
 const DEFAULT_MAX_UPLOAD_FILE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -332,6 +334,7 @@ async function streamFileResponse(
 
 export function createApp(deps: AppDeps = {}) {
   const manager = deps.manager ?? defaultAssetManager;
+  const modalProfile = deps.modalProfile ?? (() => modalActiveProfileCached());
   const maxUploadFileBytes = requirePositiveByteLimit(
     deps.maxUploadFileBytes ??
       envByteLimit("ASSET_UPLOAD_MAX_FILE_BYTES", DEFAULT_MAX_UPLOAD_FILE_BYTES),
@@ -362,7 +365,17 @@ export function createApp(deps: AppDeps = {}) {
     );
   });
 
-  app.get("/api/health", (c) => c.json({ status: "ok" }));
+  // `modal` reports which account the CLI calls hit; a failure here must not
+  // make the server look unhealthy, so it degrades to null.
+  app.get("/api/health", async (c) => {
+    let modal: ModalProfileInfo | null = null;
+    try {
+      modal = await modalProfile();
+    } catch {
+      modal = null;
+    }
+    return c.json({ status: "ok", modal });
+  });
 
   app.get("/api/volumes", (c) =>
     c.json(

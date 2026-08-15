@@ -189,6 +189,35 @@ describe("asset streaming", () => {
   });
 });
 
+describe("health", () => {
+  it("reports which Modal account the server talks to", async () => {
+    const app = createApp({
+      modalProfile: async () => ({ profile: "alpha", workspace: "alpha-workspace" }),
+    });
+
+    const response = await app.request("/api/health");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: "ok",
+      modal: { profile: "alpha", workspace: "alpha-workspace" },
+    });
+  });
+
+  it("stays healthy when the profile cannot be resolved", async () => {
+    const app = createApp({
+      modalProfile: async () => {
+        throw new Error("modal CLI not found");
+      },
+    });
+
+    const response = await app.request("/api/health");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok", modal: null });
+  });
+});
+
 describe("upload limits", () => {
   it("streams accepted files to a temporary file", async () => {
     const upload = vi.fn(async (_volume, _destination, localPaths: string[]) => ({

@@ -86,7 +86,34 @@ PREBUILT_WHEEL_DIR = "/opt/prebuilt-wheels"
 SAGE_ATTENTION_FLAG = "--use-sage-attention"
 DOTENV_PATH = Path(__file__).with_name(".env")
 
+
+def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> None:
+    """`.env` に書かれた MODAL_PROFILE を拒否する。
+
+    modal は `import modal` の時点で使用プロファイルを確定するため、その後に走る
+    `load_dotenv()` の値は無視される。放置すると意図しない Modal アカウントへ
+    黙ってデプロイされるので、ここで止める。詳細は docs/modal-profiles.md。
+    """
+    if not dotenv_path.exists():
+        return
+    for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        name, separator, value = line.strip().removeprefix("export ").partition("=")
+        if not separator or name.strip() != "MODAL_PROFILE":
+            continue
+        wanted = value.strip().strip("\"'")
+        if wanted and wanted != (shell_value or ""):
+            raise RuntimeError(
+                f"{dotenv_path.name} の MODAL_PROFILE={wanted} は modal に渡りません"
+                "（プロファイルは modal の import 時に確定するため）。"
+                f"その行を消して、MODAL_PROFILE={wanted} uv run modal ... または"
+                f" ./scripts/modal.sh {wanted} ... を使ってください。"
+            )
+
+
+# `.env` は MODAL_PROFILE を上書きできないので、読み込む前の値を控えておく。
+_SHELL_MODAL_PROFILE = os.environ.get("MODAL_PROFILE")
 load_dotenv(DOTENV_PATH, override=False)
+_reject_dotenv_modal_profile(DOTENV_PATH, _SHELL_MODAL_PROFILE)
 
 GPU_PROFILE_NAME: str
 GPU_PROFILE: dict[str, str | bool]

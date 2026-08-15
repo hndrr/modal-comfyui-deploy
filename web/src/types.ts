@@ -44,6 +44,17 @@ export interface VolumeInfo {
   label: string;
 }
 
+/** Which Modal account the server's CLI calls hit. */
+export interface ModalProfileInfo {
+  profile: string;
+  workspace: string | null;
+}
+
+export interface HealthResponse {
+  status: string;
+  modal: ModalProfileInfo | null;
+}
+
 export const SORT_OPTIONS: { id: SortMode; label: string }[] = [
   { id: "modified_desc", label: "更新日時（新しい順）" },
   { id: "modified_asc", label: "更新日時（古い順）" },

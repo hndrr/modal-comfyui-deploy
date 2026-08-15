@@ -1,4 +1,10 @@
-import type { AssetListResponse, SortMode, VolumeId, VolumeInfo } from "../types";
+import type {
+  AssetListResponse,
+  HealthResponse,
+  SortMode,
+  VolumeId,
+  VolumeInfo,
+} from "../types";
 
 async function parseError(response: Response): Promise<string> {
   try {
@@ -7,6 +13,12 @@ async function parseError(response: Response): Promise<string> {
   } catch {
     return response.statusText || "Request failed";
   }
+}
+
+export async function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  const response = await fetch("/api/health", { signal });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
 }
 
 export async function fetchVolumes(signal?: AbortSignal): Promise<VolumeInfo[]> {

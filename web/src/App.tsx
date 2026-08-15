@@ -37,13 +37,20 @@ import {
   createDirectory,
   deleteAssets,
   fetchAssets,
+  fetchHealth,
   moveAsset,
   thumbnailUrl,
   uploadFiles,
 } from "./api/client";
 import { filterDownloadableFiles } from "./lib/downloadTargets";
 import { formatDate, humanSize, joinVolumePath } from "./lib/format";
-import type { AssetEntry, AssetListResponse, SortMode, VolumeId } from "./types";
+import type {
+  AssetEntry,
+  AssetListResponse,
+  ModalProfileInfo,
+  SortMode,
+  VolumeId,
+} from "./types";
 import { SORT_OPTIONS } from "./types";
 
 const DOWNLOAD_STAGGER_MS = 300;
@@ -124,6 +131,10 @@ export default function App() {
   const [loadStartedAt, setLoadStartedAt] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
+  /** undefined = not fetched yet, null = could not be determined. */
+  const [modalAccount, setModalAccount] = useState<ModalProfileInfo | null | undefined>(
+    undefined,
+  );
   /** Multi-select for bulk delete (path -> entry). Survives page flips within a folder. */
   const [checked, setChecked] = useState<Map<string, AssetEntry>>(() => new Map());
   /** Last focused entry for preview / single move. */
@@ -281,6 +292,18 @@ export default function App() {
   useEffect(() => {
     setUploadDest(path);
   }, [path]);
+
+  // Volumes belong to a Modal workspace, so show which account the server uses.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchHealth(controller.signal)
+      .then((health) => setModalAccount(health.modal))
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setModalAccount(null);
+      });
+    return () => controller.abort();
+  }, []);
 
   // Auto-dismiss completion toasts; keep visible while busy (in-progress).
   useEffect(() => {
@@ -1191,9 +1214,29 @@ export default function App() {
       )}
 
       <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Modal ComfyUI Asset Manager
-        </h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Modal ComfyUI Asset Manager
+          </h1>
+          {modalAccount !== undefined && (
+            <span
+              className={
+                modalAccount
+                  ? "rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-0.5 text-xs text-zinc-400"
+                  : "rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-xs text-amber-300"
+              }
+              title={
+                modalAccount
+                  ? `Modal プロファイル: ${modalAccount.profile}`
+                  : "Modal のプロファイルを判定できませんでした。MODAL_PROFILE の指定ミス、または Modal CLI 未ログインの可能性があります。"
+              }
+            >
+              {modalAccount
+                ? `workspace: ${modalAccount.workspace ?? modalAccount.profile}`
+                : "workspace 不明"}
+            </span>
+          )}
+        </div>
         <p className="text-sm text-zinc-400">
           大量ファイルの整理用。通常クリックは1件選択、⌘/Ctrl+クリックやチェックで複数選択。一括ダウンロード・削除に対応（削除は完全削除・取り消し不可）。
           削除すると一覧から即消え、右上に成功件数の進捗が出ます。
