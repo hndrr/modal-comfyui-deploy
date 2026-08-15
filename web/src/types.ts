@@ -44,10 +44,14 @@ export interface VolumeInfo {
   label: string;
 }
 
+/** Where the server picked up the profile. */
+export type ModalProfileSource = "env" | "repo" | "active";
+
 /** Which Modal account the server's CLI calls hit. */
 export interface ModalProfileInfo {
   profile: string;
   workspace: string | null;
+  source: ModalProfileSource;
 }
 
 export interface HealthResponse {

@@ -48,10 +48,17 @@ import type {
   AssetEntry,
   AssetListResponse,
   ModalProfileInfo,
+  ModalProfileSource,
   SortMode,
   VolumeId,
 } from "./types";
 import { SORT_OPTIONS } from "./types";
+
+const MODAL_PROFILE_SOURCE_LABELS: Record<ModalProfileSource, string> = {
+  env: "シェルの MODAL_PROFILE",
+  repo: ".modal-profile",
+  active: "~/.modal.toml の既定",
+};
 
 const DOWNLOAD_STAGGER_MS = 300;
 /** Downloads leave the page once requested, so the toast counts requests, not successes. */
@@ -1227,8 +1234,8 @@ export default function App() {
               }
               title={
                 modalAccount
-                  ? `Modal プロファイル: ${modalAccount.profile}`
-                  : "Modal のプロファイルを判定できませんでした。MODAL_PROFILE の指定ミス、または Modal CLI 未ログインの可能性があります。"
+                  ? `Modal プロファイル: ${modalAccount.profile}（${MODAL_PROFILE_SOURCE_LABELS[modalAccount.source]}）`
+                  : "Modal のプロファイルを判定できませんでした。MODAL_PROFILE や .modal-profile の指定ミス、または Modal CLI 未ログインの可能性があります。"
               }
             >
               {modalAccount

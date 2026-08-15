@@ -31,18 +31,7 @@ cp .env.example .env
 
 `.env` は `comfyapp.py` 実行時に自動で読み込まれます。すでにシェルで設定済みの環境変数がある場合はそちらが優先されます。
 
-### Modal アカウントが複数ある場合
-
-アカウントごとに profile を登録して切り替えます（Modal の Environment は同一アカウント内の名前空間なので別物です）。
-
-```bash
-uv run modal token set --token-id ak-... --token-secret as-... --no-activate
-uv run modal profile list
-MODAL_PROFILE=<profile> uv run modal deploy comfyapp.py   # 1 コマンドだけ切り替え
-./scripts/modal.sh <profile> deploy comfyapp.py           # 同上（未登録なら実行前に停止）
-```
-
-`--no-activate` を付ける限り既定のプロファイルは変わりません。Volume も Secret もデプロイ URL もワークスペース単位なので、`MODAL_PROFILE` を `.env` に書いても効かない点を含め [docs/modal-profiles.md](docs/modal-profiles.md) にまとめています。
+Modal アカウントを複数使い分けている場合のみ、[docs/modal-profiles.md](docs/modal-profiles.md) を参照してください（1 アカウントなら不要です）。
 
 ## 1. ComfyUI を Modal で起動する
 
@@ -340,7 +329,7 @@ Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 �
 - Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
 - Node.js 22+ 推奨
 
-接続先は既定のプロファイル（`~/.modal.toml` の active）です。別アカウントの Volume を見る場合は `MODAL_PROFILE=<profile> npm start` で起動します。どのワークスペースに繋がっているかは画面ヘッダのバッジと `/api/health` で確認できます（[docs/modal-profiles.md](docs/modal-profiles.md)）。
+接続先は Modal CLI の既定プロファイルです。画面ヘッダのバッジに接続先ワークスペース名が出ます（アカウントを使い分けている場合は [docs/modal-profiles.md](docs/modal-profiles.md)）。
 
 初回ビルドと起動:
 
@@ -474,12 +463,12 @@ uv run python move_volume_file.py \
 - `rename_volume.py`: Volume コピー補助
 - `move_volume_file.py`: Volume 内ファイル移動補助
 - `main.py`: 最小のエントリーポイント
-- `scripts/modal.sh`: profile（Modal アカウント）を指定して Modal CLI を実行するラッパー
+- `scripts/modal.sh`: Modal アカウントを複数使い分ける場合のみ使う CLI ラッパー（任意）
 - `worker/`: Cloudflare Access 用のリバースプロキシ Worker（[docs/cloudflare-access.md](docs/cloudflare-access.md)）
 
 ## ドキュメント
 
-- [docs/modal-profiles.md](docs/modal-profiles.md): Modal アカウントが複数ある場合の profile の使い分け
+- [docs/modal-profiles.md](docs/modal-profiles.md): Modal アカウントを複数使い分ける場合の profile 運用（任意）
 - [docs/cloudflare-access.md](docs/cloudflare-access.md): Cloudflare Access + Worker で ComfyUI にログイン画面を付ける
 - [docs/modal-idle-scale-to-zero.md](docs/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
 - [docs/modal-power-control.md](docs/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想

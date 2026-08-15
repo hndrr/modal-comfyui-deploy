@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  modalProfileEnv,
+  resolveModalProfile,
+  type ModalProfileSource,
+} from "./modalProfile.js";
 import type { ModalLsRow } from "./types.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -18,10 +23,11 @@ export type ModalCliRunner = (
   options?: { cwd?: string },
 ) => Promise<RunResult>;
 
-/** Which Modal account (profile) the CLI calls are going to hit. */
+/** Which Modal account (profile) the CLI calls are going to hit, and why. */
 export type ModalProfileInfo = {
   profile: string;
   workspace: string | null;
+  source: ModalProfileSource;
 };
 
 let cachedModalInvocation: string[] | null = null;
@@ -45,6 +51,8 @@ function enrichedEnv(): NodeJS.ProcessEnv {
   const pathValue = process.env.PATH ?? "";
   return {
     ...process.env,
+    // Honor the repo-local profile pin unless the shell already picked one.
+    ...modalProfileEnv(),
     PATH: [...extras, pathValue].join(":"),
     // Prefer plain output when the CLI honors these.
     NO_COLOR: "1",
@@ -135,6 +143,7 @@ type ProfileRow = {
  */
 export async function modalActiveProfile(
   runner: ModalCliRunner = defaultModalCliRunner,
+  source: ModalProfileSource = resolveModalProfile().source,
 ): Promise<ModalProfileInfo | null> {
   const result = await runner(["profile", "list", "--json"]);
   if (result.code !== 0) return null;
@@ -158,7 +167,7 @@ export async function modalActiveProfile(
     typeof active.workspace === "string" && !active.workspace.startsWith("Unknown")
       ? active.workspace
       : null;
-  return { profile: active.name, workspace };
+  return { profile: active.name, workspace, source };
 }
 
 /** Same as modalActiveProfile, resolved once per server process. */
