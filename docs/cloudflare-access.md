@@ -199,7 +199,7 @@ Cloudflare を経由するリクエストにはサイズ上限がある。
 
 通常の画像入力では問題になりにくいが、100MB を超える動画やモデルファイルを ComfyUI の画面からアップロードすると Free / Pro では `413 Payload Too Large` になる。
 
-大きいファイルは Cloudflare を経由させず、[ComfyUI 資産の管理画面](../README.md#4-comfyui-資産を管理する)（`web/`）を使ってローカルから Modal Volume へ直接アップロードする。管理画面は `asset_rpc.py` 経由で Modal SDK を直接呼ぶため、この構成の影響を受けない。
+大きいファイルは Cloudflare を経由させず、[ComfyUI 資産の管理画面](asset-manager.md)（`web/`）を使ってローカルから Modal Volume へ直接アップロードする。管理画面は `asset_rpc.py` 経由で Modal SDK を直接呼ぶため、この構成の影響を受けない。
 
 ### コールドスタートと 524
 
