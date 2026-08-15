@@ -1,5 +1,7 @@
 # Volume の操作補助スクリプト
 
+どちらも `.modal-profile` の固定先アカウントに接続します（[modal-profiles.md](modal-profiles.md)）。Volume はアカウントごとに別物で、**アカウントを跨いだコピーや移動はできません**。
+
 ## Volume を別名へコピーする
 
 `rename_volume.py` は Modal Volume 間でデータをコピーするユーティリティです。実質的に Volume 名を移行したい時に使います。
