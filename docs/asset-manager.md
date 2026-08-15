@@ -12,7 +12,7 @@
 - Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
 - Node.js 22+ 推奨
 
-接続先は Modal CLI の既定プロファイルです。画面ヘッダのバッジに接続先ワークスペース名が出ます（アカウントを使い分けている場合は [docs/modal-profiles.md](modal-profiles.md)）。
+接続先は `.modal-profile` の固定先です（無ければ Modal CLI の既定）。画面ヘッダのバッジに接続先ワークスペース名が出るので、Volume が空に見えるときはまずそこを見てください。複数アカウントの扱いは [modal-profiles.md](modal-profiles.md) を参照してください。
 
 初回ビルドと起動:
 
