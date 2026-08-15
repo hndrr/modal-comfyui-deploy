@@ -35,8 +35,13 @@ EOF
 }
 
 read_pin() {
+  # sed only: a pipeline whose first stage matches nothing would trip pipefail
+  # and abort the script instead of falling back to the default profile.
   [ -f "$PROFILE_FILE" ] || return 0
-  grep -v '^[[:space:]]*#' "$PROFILE_FILE" | sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}'
+  sed -n \
+    -e '/^[[:space:]]*#/d' \
+    -e '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' \
+    "$PROFILE_FILE"
 }
 
 require_known_profile() {

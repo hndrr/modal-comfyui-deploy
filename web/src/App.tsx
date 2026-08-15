@@ -1228,7 +1228,7 @@ export default function App() {
           {modalAccount !== undefined && (
             <span
               className={
-                modalAccount
+                modalAccount?.workspace
                   ? "rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-0.5 text-xs text-zinc-400"
                   : "rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-xs text-amber-300"
               }
@@ -1238,9 +1238,12 @@ export default function App() {
                   : "Modal のプロファイルを判定できませんでした。MODAL_PROFILE や .modal-profile の指定ミス、または Modal CLI 未ログインの可能性があります。"
               }
             >
-              {modalAccount
-                ? `workspace: ${modalAccount.workspace ?? modalAccount.profile}`
-                : "workspace 不明"}
+              {/* profile 名は workspace 名と別物なので、代わりに出して誤認させない。 */}
+              {modalAccount?.workspace
+                ? `workspace: ${modalAccount.workspace}`
+                : modalAccount
+                  ? `workspace 不明 / profile: ${modalAccount.profile}`
+                  : "workspace 不明"}
             </span>
           )}
         </div>
