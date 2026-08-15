@@ -5,7 +5,7 @@
   "compatibility_date": "2026-08-01",
 
   // カスタムドメイン以外の入口を塞ぐ。外すと Cloudflare Access を迂回できる経路が復活する。
-  // docs/cloudflare-access.md「迂回経路を塞ぐ」を参照。
+  // docs/design/cloudflare-access.md「迂回経路を塞ぐ」を参照。
   "workers_dev": false,
   "preview_urls": false,
 

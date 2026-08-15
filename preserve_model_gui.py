@@ -7,19 +7,46 @@ import asyncio
 import importlib.util
 import os
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Any
 from urllib.parse import urlparse
 
-import gradio as gr
-import modal
-from modal import Function, FunctionCall
-from modal.exception import ConnectionError as ModalConnectionError
-from modal.exception import InvalidError as ModalInvalidError
-from modal.exception import NotFoundError as ModalNotFoundError
-from modal.exception import RemoteError as ModalRemoteError
-from modal.exception import TimeoutError as ModalTimeoutError
+REPO_PROFILE_FILE = Path(__file__).with_name(".modal-profile")
+
+
+def _apply_repo_modal_profile(profile_file: Path = REPO_PROFILE_FILE) -> None:
+    """`.modal-profile` の固定先を MODAL_PROFILE に反映する。
+
+    modal は `import modal` の時点で使用プロファイルを確定するため、必ず
+    その前に呼ぶこと。シェルで指定済みの MODAL_PROFILE が優先される点は
+    `scripts/modal.sh` や資産管理画面と同じ。詳細は docs/modal-profiles.md。
+    """
+    if os.environ.get("MODAL_PROFILE", "").strip():
+        return
+    try:
+        lines = profile_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        pinned = line.strip()
+        if pinned and not pinned.startswith("#"):
+            os.environ["MODAL_PROFILE"] = pinned
+            return
+
+
+# import modal より前に実行する必要がある。
+_apply_repo_modal_profile()
+
+import gradio as gr  # noqa: E402
+import modal  # noqa: E402
+from modal import Function, FunctionCall  # noqa: E402
+from modal.exception import ConnectionError as ModalConnectionError  # noqa: E402
+from modal.exception import InvalidError as ModalInvalidError  # noqa: E402
+from modal.exception import NotFoundError as ModalNotFoundError  # noqa: E402
+from modal.exception import RemoteError as ModalRemoteError  # noqa: E402
+from modal.exception import TimeoutError as ModalTimeoutError  # noqa: E402
 
 # preserve_model.py を動的に読み込んで、元の関数や定数を再利用する
 _MODULE_PATH = Path(__file__).with_name("preserve_model.py")
@@ -31,6 +58,9 @@ _SPEC.loader.exec_module(_MODULE)
 _PRESERVE_FUNCTION = _MODULE.preserve_model
 _APP = _MODULE.app
 _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
+# Modal 側が進捗を書き込む Dict。FunctionCall ID をキーにして読む。
+_PROGRESS_DICT = _MODULE.progress_dict
+PROGRESS_POLL_SECONDS: float = _MODULE.PROGRESS_POLL_SECONDS
 
 
 @dataclass
@@ -154,6 +184,77 @@ async def _invoke_preserve(
             revision=revision or None,
             destination_subdir=destination_subdir or None,
         )
+
+
+def _format_bytes(value: Optional[int]) -> str:
+    if value is None:
+        return "不明"
+    size = float(value)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if size < 1024 or unit == "TiB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} TiB"
+
+
+def _format_progress(entry: Optional[dict], elapsed: float) -> str:
+    """Modal 側が書いた進捗を 1 行にまとめる"""
+
+    minutes, seconds = divmod(int(elapsed), 60)
+    clock = f"{minutes}分{seconds:02d}秒"
+    if not entry:
+        return f"Modal 側で実行中です（経過 {clock}）"
+
+    phase = entry.get("phase")
+    if phase == "preparing":
+        return f"保存先を準備しています（経過 {clock}）"
+    if phase == "downloading":
+        downloaded = entry.get("downloaded_bytes")
+        total = entry.get("total_bytes")
+        ratio = ""
+        if isinstance(downloaded, int) and isinstance(total, int) and total > 0:
+            ratio = f" ({downloaded / total * 100:.1f}%)"
+        return (
+            f"ダウンロード中: {_format_bytes(downloaded)} / {_format_bytes(total)}"
+            f"{ratio}（経過 {clock}）"
+        )
+    if phase == "copying":
+        return f"Volume へコピーしています（経過 {clock}）"
+    if phase == "done":
+        return f"Modal 側の保存処理が完了しました（所要 {clock}）"
+    if phase == "error":
+        return f"Modal 側でエラーが発生しました: {entry.get('message')}"
+    return f"Modal 側で実行中です（経過 {clock}）"
+
+
+def _read_progress(call_id: Optional[str]) -> Optional[dict]:
+    if not call_id:
+        return None
+    try:
+        return _PROGRESS_DICT.get(call_id)
+    except Exception:  # pragma: no cover - 進捗が読めなくても本処理は続く
+        return None
+
+
+def _poll_until_done(
+    call: FunctionCall, call_id: Optional[str]
+) -> Tuple[bool, Optional[dict], Optional[str]]:
+    """完了までポーリングしつつ、その都度の進捗テキストを yield する。
+
+    戻り値は最後の yield ではなく、ジェネレータの StopIteration.value で受け取る。
+    """
+    started = time.monotonic()
+    while True:
+        try:
+            result = _run_async(_await_function_call(call, timeout=PROGRESS_POLL_SECONDS))
+            return True, result, None
+        except (asyncio.TimeoutError, ModalTimeoutError):
+            pass
+        except Exception as exc:  # 実行時エラーは呼び出し側で整形する
+            return False, None, str(exc)
+        entry = _read_progress(call_id)
+        elapsed = time.monotonic() - started
+        yield _format_progress(entry, elapsed)
 
 
 def _schedule_app_stop(call: FunctionCall, app_handle: Optional[Any]) -> None:
@@ -346,23 +447,31 @@ def download_model(
 
         call_id = getattr(call, "object_id", None)
         app_id = getattr(app_handle, "app_id", None) if app_handle else None
-        if completed:
-            status_message = "Modal側でモデル保存処理が完了しました。"
-        else:
-            followups = [
-                "Modal側で処理が継続中です。以下の手順で進捗を確認できます。",
-                "- CLI: `modal app list --limit 5` で対象のApp IDを確認し、`modal app logs <App ID>` でログを表示する",
-                "- Web: Modalのダッシュボードで該当のFunction Callを開く",
-            ]
-            if app_id:
-                followups[1] = (
-                    f"- CLI: `modal app logs {app_id}` でリアルタイムログを確認する"
-                )
-            if call_id:
-                followups.append(
-                    f'- Python: `modal.FunctionCall.from_id("{call_id}").get(timeout=120)` で状態を取得する'
-                )
-            status_message = "\n".join(followups)
+        remote_error: Optional[str] = None
+
+        if not completed:
+            # 完了まで待ちながら、Modal 側が書いた進捗をそのまま画面に流す。
+            poller = _poll_until_done(call, call_id)
+            while True:
+                try:
+                    progress_text = next(poller)
+                except StopIteration as stop:
+                    completed, result_info, remote_error = stop.value
+                    break
+                yield progress_text, gr.update(interactive=False)
+
+        if remote_error:
+            yield (
+                f"リモート実行中にエラーが発生しました: {remote_error}",
+                gr.update(interactive=True),
+            )
+            return
+
+        status_message = (
+            "Modal側でモデル保存処理が完了しました。"
+            if completed
+            else "Modal側で処理が継続中です。`modal app logs` で確認してください。"
+        )
 
         msg_lines = [
             status_message,

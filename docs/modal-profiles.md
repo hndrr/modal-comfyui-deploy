@@ -89,6 +89,17 @@ $ ./scripts/modal.sh --profile personal volume ls comfy-model /
 modal: using profile 'personal' (--profile)
 ```
 
+## どのコマンドが固定先を使うか
+
+| 起動するもの | 固定先を使うか |
+| --- | --- |
+| `./scripts/modal.sh <modal のコマンド>` | 使う |
+| `cd web && npm start`（資産管理画面） | 使う |
+| `uv run preserve_model_gui.py`（モデル保存 GUI） | 使う |
+| `uv run modal ...` を素で打つ | **使わない**（Modal CLI の既定） |
+
+`preserve_model_gui.py` は `import modal` の前に固定先を `MODAL_PROFILE` へ反映している。素の `uv run modal` だけは Modal CLI が先にプロファイルを確定してしまうので、後から差し込めない。
+
 ## つまずきやすいところ
 
 **`uv run modal deploy comfyapp.py` と打つと、決めた内容が無視される**
@@ -108,8 +119,9 @@ modal: using profile 'personal' (--profile)
 正常。Volume はアカウントごとに別物で、共有されない。以下も同様にアカウントごとに用意が必要:
 
 - Volume（`comfy-model` / `comfy-inputs` / `comfy-outputs`）
-- Secret（`huggingface-secret`）
+- Secret（`huggingface-secret`）。無いと `preserve_model` のデプロイと実行が失敗する
 - Modal の Proxy Auth トークン
+- Dict（`preserve-model-progress`。モデル保存 GUI の進捗表示用、初回に自動作成）
 
 また、デプロイ URL に**ワークスペース名が入る**（`https://<workspace>--<app>.modal.run`）。アカウントを変えてデプロイし直したら、Cloudflare Access を使っている場合は Worker の `MODAL_ORIGINS` / `MODAL_KEY` / `MODAL_SECRET` も入れ直す（[cloudflare-access.md](cloudflare-access.md)）。
 
