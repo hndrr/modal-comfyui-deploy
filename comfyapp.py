@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Final
 
 import modal
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
 custom_node_volume = modal.Volume.from_name(
@@ -86,7 +86,35 @@ PREBUILT_WHEEL_DIR = "/opt/prebuilt-wheels"
 SAGE_ATTENTION_FLAG = "--use-sage-attention"
 DOTENV_PATH = Path(__file__).with_name(".env")
 
+
+def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> None:
+    """`.env` に書かれた MODAL_PROFILE を拒否する。
+
+    modal は `import modal` の時点で使用プロファイルを確定するため、その後に走る
+    `load_dotenv()` の値は無視される。放置すると意図しない Modal アカウントへ
+    黙ってデプロイされるので、ここで止める。詳細は docs/modal-profiles.md。
+    """
+    if not dotenv_path.exists():
+        return
+    # 値の解釈は load_dotenv と同じパーサーに任せる。自前で分解すると
+    # インラインコメントや引用符の扱いがズレて誤検知になる。
+    # ただし interpolate=False にする。`${VAR}` を展開すると
+    # load_dotenv(override=False) と結果がズレるため、書かれた文字列のまま見る。
+    raw = dotenv_values(dotenv_path, interpolate=False).get("MODAL_PROFILE")
+    wanted = (raw or "").strip()
+    if wanted and wanted != (shell_value or ""):
+        raise RuntimeError(
+            f"{dotenv_path.name} の MODAL_PROFILE={wanted} は modal に渡りません"
+            "（プロファイルは modal の import 時に確定するため）。"
+            f"その行を消して、MODAL_PROFILE={wanted} uv run modal ... または"
+            f" ./scripts/modal.sh --profile {wanted} ... を使ってください。"
+        )
+
+
+# `.env` は MODAL_PROFILE を上書きできないので、読み込む前の値を控えておく。
+_SHELL_MODAL_PROFILE = os.environ.get("MODAL_PROFILE")
 load_dotenv(DOTENV_PATH, override=False)
+_reject_dotenv_modal_profile(DOTENV_PATH, _SHELL_MODAL_PROFILE)
 
 GPU_PROFILE_NAME: str
 GPU_PROFILE: dict[str, str | bool]
@@ -232,6 +260,11 @@ SAGE_ATTENTION_BUILD_PREFIX = (
     if GPU_PROFILE_NAME == "h100"
     else ""
 )
+# torch 2.10 の shim.h は aoti_torch_get_current_cuda_stream を #ifdef USE_CUDA で
+# 囲んでいる。ビルドコンテナには GPU が無く torch が CUDA ランタイムを検出しないため
+# USE_CUDA が付かず、SageAttention の utils.cuh が未定義参照でコンパイルに失敗する。
+# setup.py は Windows でしか -DUSE_CUDA=1 を足さないので、公式の env フックで補う。
+SAGE_ATTENTION_BUILD_PREFIX += "export NVCC_APPEND_FLAGS='-DUSE_CUDA=1'; "
 
 # 使用するカスタムノードのリスト
 NODES = [

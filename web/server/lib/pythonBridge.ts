@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
+import { modalProfileEnv } from "./modalProfile.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -232,6 +233,9 @@ export class PythonAssetBridge {
       const generation = this.generation;
       const env = {
         ...process.env,
+        // asset_rpc.py talks to Modal directly, so it needs the same account
+        // as the CLI calls (repo pin unless the shell already picked one).
+        ...modalProfileEnv(),
         PATH: ["/opt/homebrew/bin", "/usr/local/bin", process.env.PATH ?? ""].join(
           ":",
         ),

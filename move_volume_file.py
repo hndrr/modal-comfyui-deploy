@@ -1,10 +1,37 @@
 import argparse
+import os
 import shutil
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Tuple
 
-import modal
+REPO_PROFILE_FILE = Path(__file__).with_name(".modal-profile")
+
+
+def _apply_repo_modal_profile(profile_file: Path = REPO_PROFILE_FILE) -> None:
+    """`.modal-profile` の固定先を MODAL_PROFILE に反映する。
+
+    modal は `import modal` の時点で使用プロファイルを確定するため、必ず
+    その前に呼ぶこと。シェルで指定済みの MODAL_PROFILE が優先される。
+    詳細は docs/modal-profiles.md。
+    """
+    if os.environ.get("MODAL_PROFILE", "").strip():
+        return
+    try:
+        lines = profile_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        pinned = line.strip()
+        if pinned and not pinned.startswith("#"):
+            os.environ["MODAL_PROFILE"] = pinned
+            return
+
+
+# import modal より前に実行する必要がある。
+_apply_repo_modal_profile()
+
+import modal  # noqa: E402
 
 
 def _normalize_volume_path(raw_path: str) -> PurePosixPath:
