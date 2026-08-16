@@ -59,7 +59,7 @@ _PRESERVE_FUNCTION = _MODULE.preserve_model
 _APP = _MODULE.app
 _COMFY_MODEL_SUBDIRS = sorted(_MODULE.COMFY_MODEL_SUBDIRS)
 # Modal 側が進捗を書き込む Dict。FunctionCall ID をキーにして読む。
-_PROGRESS_DICT = _MODULE.progress_dict
+_PROGRESS_DICT_GETTER = _MODULE.progress_dict
 PROGRESS_POLL_SECONDS: float = _MODULE.PROGRESS_POLL_SECONDS
 
 
@@ -231,7 +231,7 @@ def _read_progress(call_id: Optional[str]) -> Optional[dict]:
     if not call_id:
         return None
     try:
-        return _PROGRESS_DICT.get(call_id)
+        return _PROGRESS_DICT_GETTER().get(call_id)
     except Exception:  # pragma: no cover - 進捗が読めなくても本処理は続く
         return None
 

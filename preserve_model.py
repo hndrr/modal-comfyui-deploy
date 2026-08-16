@@ -32,7 +32,22 @@ volume = modal.Volume.from_name("comfy-model", create_if_missing=True)
 PROGRESS_DICT_NAME: Final = "preserve-model-progress"
 PROGRESS_POLL_SECONDS: Final = 3.0
 PROGRESS_STALE_SECONDS: Final = 60 * 60 * 6
-progress_dict = modal.Dict.from_name(PROGRESS_DICT_NAME, create_if_missing=True)
+_progress_dict: Optional[modal.Dict] = None
+
+
+def progress_dict() -> modal.Dict:
+    """進捗用 Dict を遅延で引く。
+
+    モジュール直下で `Dict.from_name()` を持つと、未 hydrate のハンドルが
+    関数と一緒にシリアライズされ、`app.run()` 経路が
+    "Can't serialize object ... which hasn't been hydrated" で落ちる。
+    """
+    global _progress_dict
+    if _progress_dict is None:
+        _progress_dict = modal.Dict.from_name(
+            PROGRESS_DICT_NAME, create_if_missing=True
+        )
+    return _progress_dict
 
 MODEL_DIR = Path("/models")
 COMFY_MODEL_SUBDIRS = {
@@ -70,7 +85,7 @@ def _publish_progress(call_id: str, payload: dict[str, Any]) -> None:
     if not call_id:
         return
     try:
-        progress_dict[call_id] = payload
+        progress_dict()[call_id] = payload
     except Exception as exc:  # pragma: no cover - 進捗表示の失敗で本処理は止めない
         print(f"[progress] 書き込みに失敗しました: {exc}", flush=True)
 
@@ -106,7 +121,7 @@ def _prune_progress(now: float) -> None:
     try:
         stale = [
             key
-            for key, value in progress_dict.items()
+            for key, value in progress_dict().items()
             if now - float((value or {}).get("updated_at", 0.0)) > PROGRESS_STALE_SECONDS
         ]
     except Exception:  # pragma: no cover - 掃除できなくても実害はない
@@ -115,7 +130,7 @@ def _prune_progress(now: float) -> None:
         try:
             # Modal の Dict.pop は既定値を取らない。他の実行と競合して
             # 既に消えていることがあるので KeyError は無視する。
-            progress_dict.pop(key)
+            progress_dict().pop(key)
         except KeyError:
             pass
         except Exception:  # pragma: no cover - 掃除できなくても実害はない
