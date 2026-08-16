@@ -496,6 +496,13 @@ app = modal.App(name="comfyui", image=image)
     scaledown_window=SCALEDOWN_WINDOW,
     timeout=FUNCTION_TIMEOUT,
     gpu=str(GPU_PROFILE["modal_gpu"]),
+    # コンテナには comfyapp.py だけが送られ `.env` は入らない。デプロイ時に
+    # 解決した値をここで渡さないと、コンテナ内では既定値に戻ってしまう。
+    secrets=[
+        modal.Secret.from_dict(
+            {COMFYUI_MANAGER_INSTALL_ENV: "on" if MANAGER_INSTALL_ENABLED else "off"}
+        )
+    ],
     volumes={
         MODEL_VOLUME_DIR.as_posix(): volume,
         CUSTOM_NODE_VOLUME_MOUNT.as_posix(): custom_node_volume,
@@ -670,7 +677,9 @@ def ui():
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
 
         # config.ini は user/ 配下なので、Volume へ繋いだ後に書く。
-        configure_manager_install(comfy_root, MANAGER_INSTALL_ENABLED)
+        # 値は Secret 経由で注入されるため、モジュール読み込み時ではなく
+        # ここで読み直す（import と Secret 注入の順序に依存しないため）。
+        configure_manager_install(comfy_root, _resolve_manager_install_enabled())
 
     extra_cli_args = os.environ.get(COMFYUI_CLI_ARGS_ENV, "").strip()
     launch_command = _build_launch_command(extra_cli_args)
