@@ -1,5 +1,8 @@
 import os
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import comfyapp
@@ -76,6 +79,58 @@ class ResolveIntEnvTests(unittest.TestCase):
                                 minimum,
                                 maximum,
                             )
+
+
+class RejectDotenvModalProfileTests(unittest.TestCase):
+    """`.env` の MODAL_PROFILE は modal に届かないので、黙って通してはいけない。"""
+
+    def _dotenv(self, body: str) -> Path:
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = Path(directory) / ".env"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_raises_when_dotenv_overrides_the_shell(self) -> None:
+        for body in (
+            "MODAL_PROFILE=other\n",
+            "export MODAL_PROFILE=other\n",
+            '  MODAL_PROFILE = "other" \n',
+            "COMFYUI_GPU_PROFILE=rtx-pro-6000\nMODAL_PROFILE='other'\n",
+        ):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(RuntimeError, "MODAL_PROFILE=other"):
+                    comfyapp._reject_dotenv_modal_profile(self._dotenv(body), None)
+
+        with self.assertRaisesRegex(RuntimeError, "MODAL_PROFILE=other"):
+            comfyapp._reject_dotenv_modal_profile(
+                self._dotenv("MODAL_PROFILE=other\n"),
+                "shell-profile",
+            )
+
+    def test_allows_dotenv_that_matches_the_shell(self) -> None:
+        # Inline comments belong to the .env syntax, not to the value.
+        for body in (
+            "MODAL_PROFILE=same\n",
+            "MODAL_PROFILE=same # note\n",
+            'MODAL_PROFILE="same"\n',
+            "export MODAL_PROFILE=same\n",
+        ):
+            with self.subTest(body=body):
+                comfyapp._reject_dotenv_modal_profile(self._dotenv(body), "same")
+
+    def test_ignores_comments_empty_values_and_missing_files(self) -> None:
+        for body in (
+            "# MODAL_PROFILE=other\n",
+            "MODAL_PROFILE=\n",
+            "MODAL_PROFILE_EXTRA=other\n",
+            "COMFYUI_CLI_ARGS=\n",
+            "",
+        ):
+            with self.subTest(body=body):
+                comfyapp._reject_dotenv_modal_profile(self._dotenv(body), None)
+
+        comfyapp._reject_dotenv_modal_profile(Path("/nonexistent/.env"), None)
 
 
 if __name__ == "__main__":

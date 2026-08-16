@@ -10,7 +10,7 @@ import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
  *   3. WebSocket（ComfyUI の /ws）を透過する
  *   4. Modal のホスト名を指す Location ヘッダーを書き換える
  *
- * 設計の背景は docs/cloudflare-access.md を参照。
+ * 設計の背景は docs/design/cloudflare-access.md を参照。
  */
 
 export interface Env {
