@@ -53,6 +53,31 @@ asyncio.run(main())
 # 異常: フレーム無しで即クローズ（compression=None を渡すと届く）
 ```
 
+### ComfyUI Manager からのノードインストール
+
+既定では Manager のノードインストールが**拒否されます**。押しても次のエラーが出ます。
+
+```text
+[ERROR] ERROR: To use this action, security_level must be `normal or below`,
+and network_mode must be set to `personal_cloud`.
+```
+
+ComfyUI-Manager v4 の `network_mode` が既定で `public` のためです。`public` では `security_level` が何であってもノードパックのインストールは通りません。
+
+許可するには `COMFYUI_MANAGER_INSTALL=on` にしてデプロイし直します。起動時に `user/__manager/config.ini` へ次を書き込みます（`user/` は Volume なので設定は残ります）。
+
+```ini
+[default]
+network_mode = personal_cloud
+security_level = normal
+```
+
+`off` に戻すと `network_mode = public` を書き戻すので、許可が残り続けることはありません。他のキー（`channel_url` など）には触りません。`security_level` を自分で `strong` にしている場合はそちらを尊重し、インストールできない旨を警告に出します。
+
+**有効にする前に、その URL を誰が開けるかを確認してください。** ノードインストールは任意のコードとその依存を実行環境に入れる操作です。`COMFYUI_REQUIRES_PROXY_AUTH=off` のまま公開している場合、URL を知っている人が同じことをできます。
+
+なお Manager 経由で入れたノードの Python 依存は `site-packages` に入るため、コンテナが落ちると消えます（ノード本体は `custom_nodes` Volume に残ります）。恒久的に使うノードは `comfyapp.py` の `NODES` に足してイメージへ焼く方が確実です。
+
 ## 永続化に使う Volume
 
 - `comfy-model`
@@ -95,6 +120,7 @@ COMFYUI_SCALEDOWN_WINDOW=30
 COMFYUI_FUNCTION_TIMEOUT=1800
 COMFYUI_CLI_ARGS=
 COMFYUI_FORCE_BUILD=on
+COMFYUI_MANAGER_INSTALL=off
 ```
 
 意味:
@@ -106,6 +132,7 @@ COMFYUI_FORCE_BUILD=on
 - `COMFYUI_FUNCTION_TIMEOUT`: 1入力または接続の最大実行秒数（`1`〜`86400`、既定値 `1800`）
 - `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
 - `COMFYUI_FORCE_BUILD`: ComfyUIのインストール層以降を再ビルドする場合は `on`
+- `COMFYUI_MANAGER_INSTALL`: ComfyUI Manager からノードをインストールする場合は `on`（既定 `off`、下記）
 
 `COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
 

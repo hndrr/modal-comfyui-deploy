@@ -1,3 +1,4 @@
+import configparser
 import filecmp
 import os
 import shlex
@@ -70,6 +71,7 @@ FLASH_ATTN_WHEEL_URL = "https://github.com/mjun0812/flash-attention-prebuild-whe
 SAGEATTENTION_REF = "abi3_stable"
 COMFYUI_CLI_ARGS_ENV = "COMFYUI_CLI_ARGS"
 COMFYUI_FORCE_BUILD_ENV = "COMFYUI_FORCE_BUILD"
+COMFYUI_MANAGER_INSTALL_ENV = "COMFYUI_MANAGER_INSTALL"
 COMFYUI_FUNCTION_TIMEOUT_ENV = "COMFYUI_FUNCTION_TIMEOUT"
 COMFYUI_GPU_PROFILE_ENV = "COMFYUI_GPU_PROFILE"
 COMFYUI_REQUIRES_PROXY_AUTH_ENV = "COMFYUI_REQUIRES_PROXY_AUTH"
@@ -89,6 +91,76 @@ DOTENV_PATH = Path(__file__).with_name(".env")
 
 WEBSOCKET_COMPRESS_ORIGINAL = "web.WebSocketResponse()"
 WEBSOCKET_COMPRESS_PATCHED = "web.WebSocketResponse(compress=False)"
+
+# ComfyUI-Manager v4 は network_mode が personal_cloud のときだけノードパックの
+# インストールを許す。既定の public では security_level が何であっても拒否される。
+MANAGER_NETWORK_MODE_ALLOWED = "personal_cloud"
+MANAGER_NETWORK_MODE_DENIED = "public"
+MANAGER_SECURITY_LEVELS_ALLOWING_INSTALL = frozenset({"normal", "normal-", "weak"})
+
+
+def configure_manager_install(comfy_root: Path, enabled: bool) -> None:
+    """ComfyUI-Manager からのノードインストール可否を config.ini に反映する。
+
+    Manager は起動時に 1 回だけ config.ini を読む。`user/` は Volume なので
+    設定は永続する。off に戻したときに許可が残り続けないよう、無効化側も明示的に
+    public へ書き戻す。
+    """
+    config_path = comfy_root / "user" / "__manager" / "config.ini"
+    if not enabled and not config_path.exists():
+        return
+
+    parser = configparser.ConfigParser()
+    if config_path.exists():
+        try:
+            parser.read(config_path, encoding="utf-8")
+        except (OSError, configparser.Error) as exc:
+            print(f"警告: {config_path} の読み込みに失敗しました: {exc}")
+            return
+
+    if not parser.has_section("default"):
+        parser.add_section("default")
+
+    desired_mode = (
+        MANAGER_NETWORK_MODE_ALLOWED if enabled else MANAGER_NETWORK_MODE_DENIED
+    )
+    changed = parser.get("default", "network_mode", fallback=None) != desired_mode
+    parser.set("default", "network_mode", desired_mode)
+
+    if enabled:
+        # security_level は Manager の既定が normal。strong だけは
+        # personal_cloud でもインストールを拒むので、明示設定を尊重しつつ警告する。
+        level = parser.get("default", "security_level", fallback=None)
+        if level is None:
+            parser.set("default", "security_level", "normal")
+            changed = True
+        elif level not in MANAGER_SECURITY_LEVELS_ALLOWING_INSTALL:
+            print(
+                f"警告: {config_path} の security_level={level} ではノードを"
+                "インストールできません。normal 以下に変更してください。"
+            )
+
+    if not changed:
+        return
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_path.open("w", encoding="utf-8") as handle:
+            parser.write(handle)
+    except OSError as exc:
+        print(f"警告: {config_path} の書き込みに失敗しました: {exc}")
+        return
+
+    if enabled:
+        print(
+            f"{COMFYUI_MANAGER_INSTALL_ENV}=on: ComfyUI-Manager からの"
+            "ノードインストールを許可しました（network_mode=personal_cloud）"
+        )
+    else:
+        print(
+            f"{COMFYUI_MANAGER_INSTALL_ENV}=off: ComfyUI-Manager からの"
+            "ノードインストールを禁止しました（network_mode=public）"
+        )
 
 
 def patch_websocket_compression(comfy_root: Path) -> None:
@@ -163,6 +235,7 @@ GPU_PROFILE_NAME: str
 GPU_PROFILE: dict[str, str | bool]
 COMFYUI_FORCE_BUILD: bool
 FUNCTION_TIMEOUT: int
+MANAGER_INSTALL_ENABLED: bool
 REQUIRES_PROXY_AUTH: bool
 SAGE_ATTENTION_ENABLED: bool
 SCALEDOWN_WINDOW: int
@@ -244,6 +317,17 @@ def _resolve_comfyui_force_build() -> bool:
     )
 
 
+def _resolve_manager_install_enabled() -> bool:
+    raw = os.environ.get(COMFYUI_MANAGER_INSTALL_ENV, "off").strip().lower()
+    if raw == "on":
+        return True
+    if raw == "off":
+        return False
+    raise ValueError(
+        f"Invalid {COMFYUI_MANAGER_INSTALL_ENV}: {raw!r}. Allowed values: on, off"
+    )
+
+
 def _resolve_requires_proxy_auth() -> bool:
     raw = os.environ.get(COMFYUI_REQUIRES_PROXY_AUTH_ENV, "off").strip().lower()
     if raw == "on":
@@ -289,6 +373,7 @@ FUNCTION_TIMEOUT = _resolve_int_env(
     MIN_FUNCTION_TIMEOUT,
     MAX_FUNCTION_TIMEOUT,
 )
+MANAGER_INSTALL_ENABLED = _resolve_manager_install_enabled()
 REQUIRES_PROXY_AUTH = _resolve_requires_proxy_auth()
 SAGE_ATTENTION_ENABLED = _resolve_sage_attention_enabled()
 SCALEDOWN_WINDOW = _resolve_int_env(
@@ -583,6 +668,9 @@ def ui():
 
         if link_directory(comfy_root / "user", USER_DATA_VOLUME_MOUNT):
             print(f"{comfy_root} の user ディレクトリを永続化 Volume に接続しました")
+
+        # config.ini は user/ 配下なので、Volume へ繋いだ後に書く。
+        configure_manager_install(comfy_root, MANAGER_INSTALL_ENABLED)
 
     extra_cli_args = os.environ.get(COMFYUI_CLI_ARGS_ENV, "").strip()
     launch_command = _build_launch_command(extra_cli_args)
