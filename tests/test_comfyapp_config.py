@@ -133,5 +133,54 @@ class RejectDotenvModalProfileTests(unittest.TestCase):
         comfyapp._reject_dotenv_modal_profile(Path("/nonexistent/.env"), None)
 
 
+class PatchWebsocketCompressionTests(unittest.TestCase):
+    """Modal のプロキシは permessage-deflate 非対応。合意させてはいけない。"""
+
+    HANDLER = "            ws = web.WebSocketResponse()\n            await ws.prepare(request)\n"
+
+    def _comfy_root(self, server_source: str | None) -> Path:
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        root = Path(directory)
+        if server_source is not None:
+            (root / "server.py").write_text(server_source, encoding="utf-8")
+        return root
+
+    def test_disables_compression(self) -> None:
+        root = self._comfy_root(self.HANDLER)
+
+        comfyapp.patch_websocket_compression(root)
+
+        patched = (root / "server.py").read_text(encoding="utf-8")
+        self.assertIn("web.WebSocketResponse(compress=False)", patched)
+        self.assertIn("await ws.prepare(request)", patched)
+
+    def test_is_idempotent(self) -> None:
+        already = self.HANDLER.replace(
+            "web.WebSocketResponse()", "web.WebSocketResponse(compress=False)"
+        )
+        root = self._comfy_root(already)
+
+        comfyapp.patch_websocket_compression(root)
+
+        self.assertEqual((root / "server.py").read_text(encoding="utf-8"), already)
+
+    def test_warns_and_keeps_file_when_pattern_is_gone(self) -> None:
+        source = "            ws = SomeOtherSocket()\n"
+        root = self._comfy_root(source)
+
+        with patch("builtins.print") as printed:
+            comfyapp.patch_websocket_compression(root)
+
+        self.assertEqual((root / "server.py").read_text(encoding="utf-8"), source)
+        self.assertTrue(
+            any("見つからず" in str(call) for call in printed.call_args_list),
+            "パターン消失時は警告を出すこと",
+        )
+
+    def test_ignores_missing_server_file(self) -> None:
+        comfyapp.patch_websocket_compression(self._comfy_root(None))
+
+
 if __name__ == "__main__":
     unittest.main()

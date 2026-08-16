@@ -24,6 +24,34 @@ uv run modal deploy comfyapp.py
 - custom node を起動時イメージへ組み込み
 - ComfyUI の `models` / `custom_nodes` / `output` / `input` / `user` を Modal Volume に接続
 - ComfyUI の user data API を起動時に補正し、`user/workflows` 配下の workflow JSON を保存できるようにする
+- ComfyUI の WebSocket 圧縮を起動時に無効化する（下記）
+
+### WebSocket 圧縮（permessage-deflate）を切っている理由
+
+Modal のプロキシは [permessage-deflate（RFC 7692）に未対応](https://modal.com/docs/guide/webhooks)で、圧縮を合意した WebSocket をフレーム送出前に閉じます。ComfyUI は `web.WebSocketResponse()` を既定設定で生成し、ブラウザは既定で圧縮を提示するため、そのままだと**すべての WebSocket 接続が即座に切れます**。
+
+無効化する CLI フラグが無いので、`patch_websocket_compression()` が起動時に `server.py` の `web.WebSocketResponse()` を `web.WebSocketResponse(compress=False)` へ書き換えています。
+
+この処理が効いていないと、次の症状が出ます。
+
+- Modal のログに `CONNECT /ws -> 101` が 1 秒間隔で並び続ける（正常なら 1 本張ったきり完了イベントが出ない）
+- `GET /api/jobs` が毎秒何度も飛ぶ（リアルタイム通知が来ずポーリングに落ちるため）
+- ComfyUI Manager のノードインストールが無反応に見える（進捗と完了が WebSocket で push されるため）
+
+切り分けるときは、圧縮の有無を変えて接続すると一発で分かります。
+
+```bash
+uv run --with websockets python -c "
+import asyncio, websockets
+async def main():
+    url = 'wss://<workspace>--comfyui-ui.modal.run/ws?clientId=diag'
+    async with websockets.connect(url, open_timeout=30) as ws:   # 既定=圧縮あり
+        print(await asyncio.wait_for(ws.recv(), timeout=15))
+asyncio.run(main())
+"
+# 正常: {"type": "status", ...} が届く
+# 異常: フレーム無しで即クローズ（compression=None を渡すと届く）
+```
 
 ## 永続化に使う Volume
 
