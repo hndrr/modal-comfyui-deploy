@@ -1,6 +1,8 @@
 # Volume の操作補助スクリプト
 
-どちらも `.modal-profile` の固定先アカウントに接続します（[modal-profiles.md](modal-profiles.md)）。Volume はアカウントごとに別物で、**アカウントを跨いだコピーや移動はできません**。
+どちらも Modal CLI の既定アカウントに接続します。Volume はアカウントごとに別物なので、**アカウントを跨いだコピーや移動はできません**。
+
+複数アカウントを使い分けている場合のみ、`.modal-profile` の固定先が優先されます（[modal-profiles.md](modal-profiles.md)）。
 
 ## Volume を別名へコピーする
 
