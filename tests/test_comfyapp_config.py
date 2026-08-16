@@ -249,6 +249,26 @@ class ConfigureManagerInstallTests(unittest.TestCase):
         )
 
 
+class WarnOnDirectoryOverridesTests(unittest.TestCase):
+    """ディレクトリを差し替える引数は永続化と Manager 設定の前提を崩す。"""
+
+    def test_warns_for_each_form(self) -> None:
+        for args in (
+            ["--base-directory", "/tmp/comfy"],
+            ["--user-directory=/tmp/user"],
+            ["--use-sage-attention", "--models-directory", "/tmp/models"],
+        ):
+            with self.subTest(args=args):
+                with patch("builtins.print") as printed:
+                    comfyapp._warn_on_directory_overrides(args)
+                self.assertTrue(printed.called, "警告を出すこと")
+
+    def test_stays_quiet_for_unrelated_args(self) -> None:
+        with patch("builtins.print") as printed:
+            comfyapp._warn_on_directory_overrides(["--use-sage-attention", "--fast"])
+        self.assertFalse(printed.called)
+
+
 class ResolveManagerInstallEnabledTests(unittest.TestCase):
     def test_defaults_to_off(self) -> None:
         with patch.dict(os.environ, {}, clear=False):

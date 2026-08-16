@@ -17,7 +17,10 @@ ValueError: I/O operation on closed file       ← 終了後のログ書き込�
 
 **原因**: Manager はプロセスを `exit(0)` で落として再起動する作りですが、Modal では ComfyUI が死ぬとコンテナごと終了します。応答を返す相手がいなくなるため 500 になります。
 
-**影響**: 実害はありません。インストール自体は成功し、ノードは `custom_nodes` Volume に残ります。次のアクセスで新しいコンテナが起動し、ノードも読み込まれます（実測で 39 ノードの読み込みを確認）。
+**影響**: 保存と API 応答で結果が分かれます。
+
+- **ノードの保存は成功します**。`custom_nodes` Volume に残り、次のアクセスで起動する新しいコンテナでも読み込まれます（実測で 39 ノードの読み込みを確認）
+- **再起動 API は失敗を返します**。画面には再起動が失敗したように表示され、この API を叩く自動化クライアントはエラーとして扱います
 
 **回避**: 再起動後にページを再読み込みしてください。
 
@@ -52,7 +55,13 @@ curl -s https://<workspace>--comfyui-ui.modal.run/system_stats | grep -o '"argv"
 
 消えれば推測は誤り、残っていれば届いていません。修正すると**挙動が変わる**（`off` にしていた人は本当に無効になる）ため、確認してから直す方針です。
 
+### `COMFYUI_CLI_ARGS` でディレクトリを差し替えると永続化が壊れる
+
+`--base-directory` や `--user-directory` を指定すると ComfyUI の user ディレクトリが変わります。Volume の接続先と ComfyUI-Manager の `config.ini` の位置は既定の配置（`<comfy_root>/user`）を前提にしているため、workflow が永続化されなくなったり `COMFYUI_MANAGER_INSTALL` が効かなくなったりします。
+
+これらの引数を検出した場合は起動時に警告を出しますが、動作は止めません。`--models-directory` / `--output-directory` / `--input-directory` / `--temp-directory` も同様です。
+
 ## 運用上の注意
 
-- **`COMFYUI_REQUIRES_PROXY_AUTH=off` は認証なし**です。Modal の直 URL を知っている人は誰でも開けます。`COMFYUI_MANAGER_INSTALL=on` を併用すると、その人が任意のコードをインストールできる状態になります
+- **`COMFYUI_REQUIRES_PROXY_AUTH=off` は認証なし**です。Modal の直 URL を知っている人は誰でも開けます。ここに `COMFYUI_MANAGER_INSTALL=on` を併用し、かつ実効の `security_level` がインストールを許す値（`normal` / `normal-` / `weak`）だと、**その人が任意のコードをインストールできる状態**になります。`config.ini` で `security_level = strong` を明示している場合は `COMFYUI_MANAGER_INSTALL=on` でもインストールは拒否されます（起動時に警告が出ます）
 - Volume・Secret・Proxy Auth トークン・デプロイ URL はすべて**ワークスペース単位**です。アカウントを切り替えたときの影響は [modal-profiles.md](modal-profiles.md) を参照してください

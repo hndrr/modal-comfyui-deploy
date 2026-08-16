@@ -346,6 +346,36 @@ def _should_enable_sage_attention(cli_args: list[str]) -> bool:
     return SAGE_ATTENTION_FLAG not in cli_args
 
 
+# Volume の接続先と ComfyUI-Manager の config.ini の位置は、既定のディレクトリ構成
+# (<comfy_root>/user など) を前提にしている。これらの引数はその前提を崩す。
+COMFYUI_DIRECTORY_OVERRIDE_FLAGS: Final = (
+    "--base-directory",
+    "--user-directory",
+    "--models-directory",
+    "--output-directory",
+    "--input-directory",
+    "--temp-directory",
+)
+
+
+def _warn_on_directory_overrides(cli_args: list[str]) -> None:
+    """ディレクトリを差し替える引数が来たら警告する。"""
+    found = sorted(
+        {
+            arg.split("=", 1)[0]
+            for arg in cli_args
+            if arg.split("=", 1)[0] in COMFYUI_DIRECTORY_OVERRIDE_FLAGS
+        }
+    )
+    if not found:
+        return
+    print(
+        f"警告: {' '.join(found)} は ComfyUI のディレクトリ構成を変更します。"
+        "Volume への接続と ComfyUI-Manager の設定は既定の配置を前提にしているため、"
+        "永続化や COMFYUI_MANAGER_INSTALL が効かなくなる可能性があります。"
+    )
+
+
 def _build_launch_command(extra_cli_args: str) -> list[str]:
     launch_command = [
         "comfy",
@@ -359,6 +389,7 @@ def _build_launch_command(extra_cli_args: str) -> list[str]:
         "auto",
     ]
     cli_args = shlex.split(extra_cli_args) if extra_cli_args else []
+    _warn_on_directory_overrides(cli_args)
     if _should_enable_sage_attention(cli_args):
         launch_command.append(SAGE_ATTENTION_FLAG)
     launch_command.extend(cli_args)
