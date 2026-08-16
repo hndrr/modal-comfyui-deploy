@@ -87,7 +87,7 @@ uv run preserve_model_gui.py
 
 実行のたびに `modal.App.run()` で一時コンテナを起動するため、**事前のデプロイは不要**です。既定 URL は `http://127.0.0.1:7860`。
 
-GUI は `.modal-profile` の固定先アカウントに繋ぎます（[modal-profiles.md](modal-profiles.md)）。
+接続先は Modal CLI の既定アカウントです。複数アカウントを使い分けている場合は [modal-profiles.md](modal-profiles.md) を参照してください。
 
 ブラウザから使いたい場合は、同じ UI を Modal にデプロイできます（後述）。
 
