@@ -87,6 +87,49 @@ SAGE_ATTENTION_FLAG = "--use-sage-attention"
 DOTENV_PATH = Path(__file__).with_name(".env")
 
 
+WEBSOCKET_COMPRESS_ORIGINAL = "web.WebSocketResponse()"
+WEBSOCKET_COMPRESS_PATCHED = "web.WebSocketResponse(compress=False)"
+
+
+def patch_websocket_compression(comfy_root: Path) -> None:
+    """ComfyUI の WebSocket から permessage-deflate を外す。
+
+    Modal のプロキシは RFC 7692（permessage-deflate）に未対応で、圧縮を合意した
+    接続をフレーム送出前に閉じる。ブラウザは既定で圧縮を提示するため、素のままだと
+    `/ws` が 1 秒ごとに切れ続け、ComfyUI Manager のインストール進捗など push 通知が
+    一切届かなくなる。ComfyUI 側に無効化フラグが無いので server.py を書き換える。
+    """
+    server_path = comfy_root / "server.py"
+    if not server_path.exists():
+        return
+
+    try:
+        content = server_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"警告: {server_path} の読み込みに失敗しました: {exc}")
+        return
+
+    if WEBSOCKET_COMPRESS_PATCHED in content:
+        return
+
+    if WEBSOCKET_COMPRESS_ORIGINAL not in content:
+        print(
+            f"警告: {server_path} に {WEBSOCKET_COMPRESS_ORIGINAL} が見つからず "
+            "WebSocket 圧縮を無効化できませんでした。"
+            "ComfyUI の更新で実装が変わった可能性があります。"
+        )
+        return
+
+    updated = content.replace(
+        WEBSOCKET_COMPRESS_ORIGINAL, WEBSOCKET_COMPRESS_PATCHED, 1
+    )
+    try:
+        server_path.write_text(updated, encoding="utf-8")
+        print(f"{server_path} の WebSocket 圧縮（permessage-deflate）を無効化しました")
+    except OSError as exc:
+        print(f"警告: {server_path} の書き込みに失敗しました: {exc}")
+
+
 def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> None:
     """`.env` に書かれた MODAL_PROFILE を拒否する。
 
@@ -523,6 +566,7 @@ def ui():
 
     for comfy_root in comfy_roots:
         patch_user_manager_for_workflows(comfy_root)
+        patch_websocket_compression(comfy_root)
         models_dir = comfy_root / "models"
 
         if link_directory(models_dir, MODEL_VOLUME_DIR):
