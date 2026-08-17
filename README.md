@@ -105,6 +105,7 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 使い方（`docs/`）:
 
 - [comfyui-modal.md](docs/comfyui-modal.md): ComfyUI の GPU / 環境変数 / Volume / custom nodes
+- [known-issues.md](docs/known-issues.md): 既知の不具合と注意点
 - [preserve-model.md](docs/preserve-model.md): モデル保存の CLI・GUI・Modal デプロイ
 - [asset-manager.md](docs/asset-manager.md): 資産管理画面（`web/`）
 - [volume-tools.md](docs/volume-tools.md): Volume のコピーとファイル移動
