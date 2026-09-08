@@ -82,7 +82,8 @@ async def run_worker(spec, events, commands, volumes):
             result = {"status": "failed", "error": str(error)}
             try:
                 await process.stop()
-            except Exception as stop_error:
+            # クリーンアップ失敗で元のエラーを隠さないため、広く捕捉する。
+            except Exception as stop_error:  # noqa: BLE001
                 result["error"] = f"{result['error']} (cleanup error: {stop_error})"
         # Closing model/asset files before reload on the next invocation is the
         # subprocess's responsibility. Incompatible reloads fail, never run stale inputs.
