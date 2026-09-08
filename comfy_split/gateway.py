@@ -33,7 +33,7 @@ def manager_path(path):
 
 
 class Controller:
-    def __init__(self, worker, events, commands, volumes, root=Path("/state")):
+    def __init__(self, worker, events, commands, volumes, root=Path("/state"), *, ui_function=None):
         self.worker, self.events, self.commands, self.volumes = worker, events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
@@ -47,6 +47,43 @@ class Controller:
         self.gpu_stats_lock = asyncio.Lock()
         self.gpu_stats = None
         self.gpu_stats_expiry = 0
+        self.ui_function = ui_function
+        self.cpu_pinned = None
+        self.cpu_scaling_lock = asyncio.Lock()
+
+    def background_work(self):
+        data = self.journal.data
+        return bool(data["session"] or any(
+            job["status"] in {"queued", "dispatching", "running"}
+            for job in data["jobs"].values()) or
+            (data["candidate"] and data["candidate"]["status"] in {"creating", "validating"}))
+
+    async def pin_cpu(self, needed):
+        if self.ui_function is None:
+            return
+        async with self.cpu_scaling_lock:
+            if self.cpu_pinned == needed:
+                return
+            await self.ui_function.update_autoscaler.aio(min_containers=int(needed))
+            self.cpu_pinned = needed
+
+    async def reconcile_cpu_scaling(self):
+        if self.ui_function is None:
+            return
+        needed = self.background_work()
+        candidate = self.journal.data["candidate"]
+        if not needed and candidate and candidate["status"] == "editing":
+            # Manager installs continue after their HTTP request returns. Keep
+            # the CPU alive until its native queue finishes, then persist files.
+            if self.candidate.process and self.candidate.process.returncode is None:
+                async with self.client.get(self.candidate.url + "/v2/manager/queue/status",
+                                           timeout=ClientTimeout(total=5)) as response:
+                    response.raise_for_status()
+                    state = await response.json()
+                needed = bool(state["is_processing"] or state.get("pending_count", 0))
+                if not needed and self.cpu_pinned:
+                    await self.volumes["environment"].commit.aio()
+        await self.pin_cpu(needed)
 
     async def gpu_status(self):
         # Control-plane metadata only: never invoke the GPU to display its state.
@@ -80,6 +117,10 @@ class Controller:
         return dict(result, phase=phase)
 
     async def persist(self):
+        # Acquire before acknowledging durable work; a closed browser must not
+        # let the CPU disappear while dispatch/maintenance runs in the background.
+        if self.background_work():
+            await self.pin_cpu(True)
         self.journal.save()
         await self.volumes["state"].commit.aio()
 
@@ -211,6 +252,7 @@ class Controller:
         while True:
             try:
                 async with self.lock:
+                    await self.reconcile_cpu_scaling()
                     session = self.journal.data["session"]
                     if session:
                         await self.drain_events(session)
@@ -484,6 +526,7 @@ class Controller:
         async with self.lock:
             if not readonly:
                 await self.ensure_candidate()
+                await self.pin_cpu(True)
             candidate = self.journal.data["candidate"]
             if candidate and candidate["status"] == "editing":
                 await self.candidate.start(candidate["version"], cpu=True, manager=True)
@@ -703,5 +746,6 @@ if __name__ == "__main__":
     app_name = os.environ["SPLIT_APP"]
     controller = Controller(modal.Function.from_name(app_name, "gpu_worker"),
         modal.Queue.from_name(app_name + "-events", create_if_missing=True),
-        modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes)
+        modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
+        ui_function=modal.Function.from_name(app_name, "ui"))
     web.run_app(application(controller), host="0.0.0.0", port=8000)
