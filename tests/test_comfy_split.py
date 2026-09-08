@@ -12,6 +12,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from comfy_split.gateway import Controller, api_path
 from comfy_split.state import Journal
 from comfy_split import worker as worker_module
+from comfy_split.check_environment import check_pins
 
 
 def remote_mock(result=None):
@@ -19,6 +20,11 @@ def remote_mock(result=None):
 
 
 class JournalTests(unittest.TestCase):
+    def test_candidate_rejects_install_scripts_that_override_protected_packages(self):
+        check_pins("torch==2.10.0+cu130\n", lambda _: "2.10.0+cu130")
+        with self.assertRaisesRegex(RuntimeError, "固定依存の競合"):
+            check_pins("torch==2.10.0+cu130\n", lambda _: "2.11.0")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -130,6 +136,13 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.volumes["state"].commit.aio.await_count, 3)
         self.worker.spawn.aio.assert_not_awaited()
 
+    async def test_manager_import_diagnostics_do_not_stage_an_environment(self):
+        for path in ("/v2/customnode/import_fail_info", "/v2/customnode/import_fail_info_bulk"):
+            response = await self.client.post(path, json={"urls": []})
+            self.assertEqual(response.status, 200)
+        self.assertIsNone(self.control.journal.data["candidate"])
+        self.worker.spawn.aio.assert_not_awaited()
+
     async def test_cancel_pending_batch_does_not_wake_gpu(self):
         job = self.control.journal.enqueue({"prompt": {"1": {}}})
         response = await self.client.post("/api/jobs/cancel", json={"job_ids": [job["id"]]})
@@ -137,6 +150,22 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job["status"], "cancelled")
         self.worker.spawn.aio.assert_not_awaited()
         self.commands.put.aio.assert_not_awaited()
+
+    async def test_remote_python_failure_is_terminal_but_network_failure_is_not(self):
+        namespace = {}
+        exec(compile("def fail():\n raise RuntimeError('remote failure')", "<ta-test>:/root/worker.py", "exec"), namespace)
+        try:
+            namespace["fail"]()
+        except RuntimeError as error:
+            remote_error = error
+        call = SimpleNamespace(get=remote_mock())
+        with patch("comfy_split.gateway.modal.FunctionCall.from_id", return_value=call):
+            call.get.aio.side_effect = remote_error
+            result = await self.control.read_result({"id": "missing-test-result", "call_id": "fc-test"})
+            self.assertEqual(result["status"], "failed")
+            call.get.aio.side_effect = ConnectionError("network unavailable")
+            with self.assertRaises(ConnectionError):
+                await self.control.read_result({"id": "missing-test-result", "call_id": "fc-test"})
 
     async def test_spawn_failure_keeps_dispatch_intent_and_prevents_second_job(self):
         job = self.control.journal.enqueue({"prompt": {"1": {}}})
@@ -182,9 +211,38 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.control.candidate = SimpleNamespace(url=self.control.cpu.url, stop=AsyncMock())
         # Missing verified Manager queue status must fail before GPU validation.
         with patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("bad dependency")):
-            await self.control.apply_environment()
+            with self.assertLogs("comfy_split.gateway", level="ERROR"):
+                await self.control.apply_environment()
         self.assertEqual(self.control.journal.data["environment"], "base")
         self.assertEqual(self.control.journal.data["candidate"]["status"], "failed")
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_mode_is_not_ready_until_cpu_has_restarted(self):
+        self.control.journal.data.update(mode="legacy", session={"stopping": True})
+        ready = asyncio.Event()
+        self.control.cpu.start.side_effect = lambda *_args, **_kwargs: None
+        async def delayed_start(*_args, **_kwargs):
+            await ready.wait()
+        self.control.cpu.start.side_effect = delayed_start
+        task = asyncio.create_task(self.control.end_legacy({"status": "completed"}))
+        await asyncio.sleep(0)
+        self.assertEqual(self.control.journal.data["mode"], "legacy")
+        ready.set()
+        await task
+        self.assertEqual(self.control.journal.data["mode"], "split")
+
+    async def test_environment_recovery_reuses_existing_gpu_result(self):
+        self.control.journal.data["candidate"] = {"version": "env-test", "status": "validating"}
+        self.control.journal.data["session"] = {"id": "validation", "operation": "validate",
+            "call_id": "fc-existing", "result": {"status": "completed", "catalog": {"nodes": [], "objects": {}}}}
+        self.control.candidate = SimpleNamespace(stop=AsyncMock(), start=AsyncMock(),
+                                                catalog=AsyncMock(return_value={"nodes": []}))
+        checked = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(b"", None)))
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=checked)), \
+             patch("comfy_split.gateway.environment_path", return_value=Path(self.temp.name) / "candidate"):
+            await self.control.apply_environment(resume=True)
+        self.assertEqual(self.control.journal.data["environment"], "env-test")
+        self.assertIsNone(self.control.journal.data["session"])
         self.worker.spawn.aio.assert_not_awaited()
 
 
@@ -269,9 +327,41 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
                 result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
                     SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
-            self.assertEqual(sequence, ["output", "result"])
+            self.assertEqual(sequence, ["result", "output", "result"])
             self.assertEqual(json.loads((Path(root) / "job.json").read_text())["status"], "completed")
             self.assertEqual(result["status"], "completed")
+
+    async def test_preempted_input_with_start_receipt_is_not_reexecuted(self):
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "job.started.json").write_text("{}")
+            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
+                       for key in ("environment", "input", "models", "user", "results", "output")}
+            process = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), version=None)
+            generate = AsyncMock()
+            with patch.object(worker_module, "process", process), \
+                 patch.object(worker_module, "Path", lambda _: Path(root)), \
+                 patch.object(worker_module, "generate", generate):
+                result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
+                    SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
+            self.assertEqual(result["status"], "unknown")
+            generate.assert_not_awaited()
+            process.start.assert_not_awaited()
+
+    async def test_warm_worker_skips_immutable_environment_and_closes_mapped_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
+                       for key in ("environment", "input", "models", "user", "results", "output")}
+            volumes["models"].reload.aio.side_effect = [RuntimeError("there are open files preventing the operation"), None]
+            process = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), version="base")
+            with patch.object(worker_module, "process", process), \
+                 patch.object(worker_module, "Path", lambda _: Path(root)), \
+                 patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
+                result = await worker_module.run_worker({"id": "warm", "environment": "base", "operation": "generate"},
+                    SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
+            self.assertEqual(result["status"], "completed")
+            volumes["environment"].reload.aio.assert_not_awaited()
+            self.assertEqual(volumes["models"].reload.aio.await_count, 2)
+            process.stop.assert_awaited_once()
 
 
 if __name__ == "__main__":

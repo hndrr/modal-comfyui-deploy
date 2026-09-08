@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -55,10 +56,17 @@ class Controller:
         await self.volumes["environment"].commit.aio()
         await self.volumes["user"].commit.aio()
         self.journal.recover()
+        candidate = self.journal.data["candidate"]
+        session = self.journal.data["session"]
+        if candidate and candidate["status"] in {"creating", "validating"}:
+            if not (session and session.get("operation") == "validate"):
+                candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
         if self.journal.data["mode"] == "split":
             await self.cpu.start(self.journal.data["environment"], cpu=True)
         self.task = asyncio.create_task(self.dispatch())
+        if candidate and candidate["status"] == "validating" and session:
+            self.apply_task = asyncio.create_task(self.apply_environment(resume=True))
 
     async def close(self, app):
         await self.close_candidate_relays()
@@ -124,7 +132,8 @@ class Controller:
         except Exception as error:
             # FunctionCall failure is terminal; a network failure is not.
             if isinstance(error, (modal.exception.FunctionTimeoutError,
-                                  modal.exception.RemoteError)):
+                                  modal.exception.RemoteError)) or any(
+                    frame.filename.startswith("<ta-") for frame in traceback.extract_tb(error.__traceback__)):
                 return {"status": "failed", "error": str(error)}
             raise
 
@@ -172,7 +181,7 @@ class Controller:
                     session = self.journal.data["session"]
                     if session:
                         await self.drain_events(session)
-                        if session.get("call_id"):
+                        if session.get("call_id") or session.get("status") == "dispatching":
                             if session.get("operation") == "legacy" and not session.get("stopping"):
                                 await self.command(session["id"], "heartbeat")
                             result = await self.read_result(session)
@@ -188,7 +197,7 @@ class Controller:
                         if running:
                             await self.drain_events(running)
                             result = await self.read_result(running)
-                            if result:
+                            if result and not (result.get("status") == "unknown" and running["status"] == "unknown"):
                                 await self.finish(running, result)
                         else:
                             job = self.journal.next_job()
@@ -213,9 +222,9 @@ class Controller:
                     "id": job_id, "number": history["prompt"][0],
                     "body": {"prompt": history["prompt"][2]}, "status": "completed",
                     "history": history, "created_at": time.time(), "error": None}
+        await self.cpu.start(self.journal.data["environment"], cpu=True)
         self.journal.data.update(mode="split", session=None)
         await self.persist()
-        await self.cpu.start(self.journal.data["environment"], cpu=True)
         await self.broadcast({"type": "split_mode", "data": {"mode": "split"}})
 
     async def websocket(self, request):
@@ -333,23 +342,24 @@ class Controller:
                 await socket.close()
         self.candidate_relays[sid] = asyncio.create_task(relay())
 
-    async def apply_environment(self):
+    async def apply_environment(self, resume=False):
         candidate = self.journal.data["candidate"]
         try:
             # Manager may still have an installation queue executing.
-            async with self.client.get(self.candidate.url + "/v2/manager/queue/status") as response:
-                if response.status != 200:
-                    raise RuntimeError("Manager queue status could not be verified")
-                queue = await response.json()
-                if "is_processing" not in queue:
-                    raise RuntimeError("Unrecognized Manager queue status")
-                if queue["is_processing"] or queue.get("pending_count", 0):
-                    raise RuntimeError("Managerのインストール完了を待ってください。")
+            if not resume:
+                async with self.client.get(self.candidate.url + "/v2/manager/queue/status") as response:
+                    if response.status != 200:
+                        raise RuntimeError("Manager queue status could not be verified")
+                    queue = await response.json()
+                    if "is_processing" not in queue:
+                        raise RuntimeError("Unrecognized Manager queue status")
+                    if queue["is_processing"] or queue.get("pending_count", 0):
+                        raise RuntimeError("Managerのインストール完了を待ってください。")
             version = candidate["version"]
             await self.close_candidate_relays()
             await self.candidate.stop()
             python = str(environment_path(version) / "venv/bin/python")
-            check = await asyncio.create_subprocess_exec(python, "-m", "pip", "check",
+            check = await asyncio.create_subprocess_exec(python, "-m", "comfy_split.check_environment",
                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
             output, _ = await check.communicate()
             if check.returncode:
@@ -360,10 +370,13 @@ class Controller:
             await self.volumes["environment"].commit.aio()
             await self.volumes["models"].commit.aio()
             async with self.lock:
-                session = {"id": str(uuid.uuid4()), "operation": "validate",
-                           "environment": version, "call_id": None}
-                self.journal.data["session"] = session
-                await self.spawn(session, "validate")
+                if resume:
+                    session = self.journal.data["session"]
+                else:
+                    session = {"id": str(uuid.uuid4()), "operation": "validate",
+                               "environment": version, "call_id": None}
+                    self.journal.data["session"] = session
+                    await self.spawn(session, "validate")
             while "result" not in session:
                 await asyncio.sleep(0.5)
             result = session["result"]
@@ -415,11 +428,13 @@ class Controller:
                     await self.cpu.start(self.journal.data["environment"], cpu=True)
             return web.json_response({"status": "restarting"}, status=202)
         # Manager has some GET mutations too; default unknown routes to staging.
-        readonly = request.method == "GET" and any(path.endswith(suffix) for suffix in (
+        readonly = (request.method == "POST" and path.endswith((
+            "/import_fail_info", "/import_fail_info_bulk"))) or (
+            request.method == "GET" and any(path.endswith(suffix) for suffix in (
             "/getlist", "/getmappings", "/version", "/queue/status", "/notice",
             "/get_unresolved", "/get_installed", "/fetch_updates", "/installed",
             "/is_legacy_manager_ui", "/queue/history", "/queue/history_list",
-            "/channel_url_list", "/db_mode", "/policy/update", "/get_current"))
+            "/channel_url_list", "/db_mode", "/policy/update", "/get_current")))
         async with self.lock:
             if not readonly:
                 await self.ensure_candidate()
