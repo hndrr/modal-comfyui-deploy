@@ -100,7 +100,7 @@ async def gpu_worker(spec):
     return await run_worker(spec, events, commands, volumes)
 
 
-@app.function(image=image, min_containers=1, max_containers=1, cpu=2, memory=8192,
+@app.function(image=image, min_containers=0, max_containers=1, scaledown_window=30, cpu=2, memory=8192,
               timeout=86400, volumes={MOUNTS[key]: value for key, value in volumes.items()})
 @modal.concurrent(max_inputs=100)
 @modal.web_server(8000, startup_timeout=600, requires_proxy_auth=True)
