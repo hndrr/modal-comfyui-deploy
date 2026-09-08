@@ -130,3 +130,7 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 - [modal-idle-scale-to-zero.md](docs/design/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
 - [modal-power-control.md](docs/design/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
 - [pytorch-cu130-upgrade.md](docs/design/pytorch-cu130-upgrade.md): PyTorch / CUDA のアップグレード検討
+
+## Ambient Studio
+
+独立した生成job API、H3の最終フレーム継承、FastH3専用workerを追加しています。設定、明示的なモデル準備、検証手順は [docs/ambient.md](docs/ambient.md) を参照してください。

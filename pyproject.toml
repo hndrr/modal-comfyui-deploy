@@ -11,5 +11,8 @@ dependencies = [
     "python-dotenv>=1.0.1",
 ]
 
+[project.optional-dependencies]
+ambient-test = ["fastapi>=0.115.14", "httpx>=0.28.1", "aiohttp>=3.12.15", "python-multipart>=0.0.22"]
+
 [tool.flake8]
 max-line-length = 100
