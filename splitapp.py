@@ -1,10 +1,11 @@
 """Deploy the split architecture separately: scripts/modal.sh deploy splitapp.py."""
 
-import asyncio
 import json
 import os
 import subprocess
 import sys
+import threading
+import time
 
 import modal
 
@@ -105,13 +106,13 @@ async def gpu_worker(spec):
 def ui():
     gateway = subprocess.Popen(["python", "-m", "comfy_split.gateway"], env=dict(os.environ))
     
-    async def monitor():
-        await asyncio.sleep(10)
+    def monitor():
+        time.sleep(10)
         while True:
             if gateway.poll() is not None:
                 print(f"Gateway process exited with code {gateway.returncode}, terminating container",
                       file=sys.stderr, flush=True)
                 sys.exit(1)
-            await asyncio.sleep(5)
+            time.sleep(5)
     
-    asyncio.create_task(monitor())
+    threading.Thread(target=monitor, daemon=True).start()
