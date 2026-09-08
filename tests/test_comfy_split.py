@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
@@ -69,6 +69,37 @@ class JournalTests(unittest.TestCase):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_versioned_control_api_preserves_old_clients(self):
+        self.worker.get_current_stats = remote_mock(SimpleNamespace(num_total_runners=0))
+        for path in ("/modal-control/v1/status", "/split/status"):
+            response = await self.client.get(path)
+            self.assertEqual(response.status, 200)
+            state = await response.json()
+            self.assertEqual(state["api_version"], 1)
+            self.assertEqual(state["gpu"]["containers"], 0)
+        response = await self.client.get("/extensions")
+        self.assertNotIn("/split.js", await response.json())
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_gpu_display_reads_metadata_without_invoking_worker(self):
+        self.worker.get_current_stats = remote_mock(SimpleNamespace(num_total_runners=0))
+        states = await asyncio.gather(*[self.control.gpu_status() for _ in range(10)])
+        self.assertTrue(all(s["phase"] == "stopped" and s["containers"] == 0 for s in states))
+        self.worker.get_current_stats.aio.assert_awaited_once()
+        self.worker.spawn.aio.assert_not_awaited()
+        self.control.gpu_stats_expiry = 0
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=1)
+        self.assertEqual((await self.control.gpu_status())["phase"], "stopping")
+        self.control.journal.data["mode"] = "legacy"
+        self.assertEqual((await self.control.gpu_status())["phase"], "legacy")
+        self.control.gpu_stats_expiry = 0
+        self.worker.get_current_stats.aio.side_effect = RuntimeError("unavailable")
+        with self.assertLogs("comfy_split.gateway", level="WARNING"):
+            failed = await self.control.gpu_status()
+        self.assertEqual(failed["phase"], "unknown")
+        self.assertIsNone(failed["containers"])
+        self.assertIsNone(failed["checked_at"])
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -92,6 +123,9 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 return web.json_response({"Test": {"input": {}}})
             if request.path == "/extensions":
                 return web.json_response([])
+            if request.path == "/_split/jobs":
+                self.job_snapshot = await request.json()
+                return web.json_response({"jobs": [], "pagination": {"total": 0}})
             return web.json_response({"cpu": True})
 
         cpu_app = web.Application()
@@ -99,7 +133,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.cpu_server = TestServer(cpu_app)
         await self.cpu_server.start_server()
         self.control.cpu = SimpleNamespace(url=str(self.cpu_server.make_url("/"))[:-1],
-                                           stop=AsyncMock(), start=AsyncMock())
+                                           stop=AsyncMock(), start=AsyncMock(), archive_temp=Mock())
         self.control.client = ClientSession(auto_decompress=False)
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", self.control.handle)
@@ -110,6 +144,28 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         await self.control.client.close()
         await self.cpu_server.close()
+
+    async def test_jobs_use_extension_snapshot_without_modifying_comfy_queue(self):
+        job = self.control.journal.enqueue({"prompt": {"1": {"class_type": "Test"}}})
+        response = await self.client.get("/api/jobs?limit=5&status=pending")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.job_snapshot["queue"]["queue_pending"][0][1], job["id"])
+        self.assertEqual(self.job_snapshot["query"], {"limit": "5", "status": "pending"})
+        self.worker.spawn.aio.assert_not_awaited()
+        response = await self.client.post("/_split/jobs", json={})
+        self.assertEqual(response.status, 404)
+
+    async def test_image_browsing_repair_rejects_existing_candidate(self):
+        self.control.journal.data["candidate"] = {"version": "env-existing", "status": "editing"}
+        response = await self.client.post("/split/environment/repair-image-browsing")
+        self.assertEqual(response.status, 409)
+        self.assertEqual(self.control.journal.data["candidate"]["version"], "env-existing")
+
+    async def test_image_browsing_repair_rejects_queued_generation(self):
+        self.control.journal.enqueue({"prompt": {"1": {}}})
+        response = await self.client.post("/api/split/environment/repair-image-browsing")
+        self.assertEqual(response.status, 409)
+        self.assertIsNone(self.control.journal.data["candidate"])
 
     async def test_edit_upload_view_and_websocket_never_spawn_gpu(self):
         for path in ("/", "/api/object_info", "/models", "/view?filename=a.png", "/extensions"):
@@ -293,7 +349,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         server = TestServer(app)
         await server.start_server()
         try:
-            fake_process = SimpleNamespace(url=str(server.make_url("/"))[:-1],
+            fake_process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url=str(server.make_url("/"))[:-1],
                                            process=SimpleNamespace(returncode=None))
             emit = AsyncMock()
             with patch.object(worker_module, "process", fake_process):
@@ -321,7 +377,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                 sequence.append("result")
             volumes["output"].commit.aio.side_effect = output_commit
             volumes["results"].commit.aio.side_effect = result_commit
-            process = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), version=None)
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version=None)
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "Path", lambda _: Path(root)), \
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
@@ -336,7 +392,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             (Path(root) / "job.started.json").write_text("{}")
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
                        for key in ("environment", "input", "models", "user", "results", "output")}
-            process = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), version=None)
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version=None)
             generate = AsyncMock()
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "Path", lambda _: Path(root)), \
@@ -352,7 +408,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
                        for key in ("environment", "input", "models", "user", "results", "output")}
             volumes["models"].reload.aio.side_effect = [RuntimeError("there are open files preventing the operation"), None]
-            process = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), version="base")
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version="base")
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "Path", lambda _: Path(root)), \
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):

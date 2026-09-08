@@ -21,7 +21,6 @@ from comfy_split.runtime import (
 from comfy_split.state import ACTIVE, Journal, write_json
 
 log = logging.getLogger(__name__)
-EXTENSION = Path(__file__).with_name("web") / "split.js"
 
 
 def api_path(path):
@@ -45,6 +44,40 @@ class Controller:
         self.apply_task = None
         self.client = None
         self.candidate_relays = {}
+        self.gpu_stats_lock = asyncio.Lock()
+        self.gpu_stats = None
+        self.gpu_stats_expiry = 0
+
+    async def gpu_status(self):
+        # Control-plane metadata only: never invoke the GPU to display its state.
+        async with self.gpu_stats_lock:
+            if time.monotonic() >= self.gpu_stats_expiry:
+                try:
+                    stats = await asyncio.wait_for(self.worker.get_current_stats.aio(), timeout=3)
+                    self.gpu_stats = {"containers": stats.num_total_runners,
+                                      "checked_at": time.time()}
+                except Exception:
+                    log.warning("Could not read GPU container count", exc_info=True)
+                    self.gpu_stats = {"containers": None, "checked_at": None}
+                self.gpu_stats_expiry = time.monotonic() + 5
+            result = dict(self.gpu_stats)
+        data = self.journal.data
+        count = result["containers"]
+        if count is None:
+            phase = "unknown"
+        elif count == 0:
+            phase = "starting" if self.journal.busy() or data["session"] else "stopped"
+        elif data["session"] and data["session"].get("stopping"):
+            phase = "stopping"
+        elif data["mode"] == "legacy":
+            phase = "legacy"
+        elif data["session"]:
+            phase = "maintenance"
+        elif self.journal.busy():
+            phase = "active"
+        else:
+            phase = "stopping"
+        return dict(result, phase=phase)
 
     async def persist(self):
         self.journal.save()
@@ -302,13 +335,16 @@ class Controller:
                 raise ValueError("Invalid mode")
         return web.json_response({"mode": desired, "transitioning": True}, status=202)
 
-    async def ensure_candidate(self):
+    async def ensure_candidate(self, *, restore_image_browsing=False):
+        if restore_image_browsing and self.journal.data["candidate"]:
+            raise ValueError("既存の環境更新を完了または破棄してから修復してください。")
         if not self.journal.data["candidate"]:
             self.journal.assert_idle()
             # Reserve before any subprocess/network operation can yield.
             self.journal.data["candidate"] = {"status": "creating", "version": None}
             await self.persist()
-            version = await asyncio.to_thread(create_environment, self.journal.data["environment"])
+            options = {"restore_image_browsing": True} if restore_image_browsing else {}
+            version = await asyncio.to_thread(create_environment, self.journal.data["environment"], **options)
             self.journal.data["candidate"] = {"status": "editing", "version": version}
             await self.volumes["environment"].commit.aio()
             await self.persist()
@@ -449,9 +485,21 @@ class Controller:
     async def handle(self, request):
         path = api_path(request.path)
         try:
-            if path == "/split/status":
+            if path.startswith("/_split/"):
+                raise web.HTTPNotFound()
+            if path == "/view" and request.query.get("type") == "temp":
+                # Previously persisted temp references remain readable after the
+                # normal ComfyUI startup cleanup has been restored.
+                root = Path("/data/output/.split-temp/temp").resolve()
+                file = (root / request.query.get("subfolder", "") / request.query.get("filename", "")).resolve()
+                if not file.is_relative_to(root):
+                    raise web.HTTPForbidden()
+                if file.is_file():
+                    return web.FileResponse(file)
+            if path in {"/split/status", "/modal-control/v1/status"}:
                 data = self.journal.data
-                return web.json_response({"mode": data["mode"], "environment": data["environment"],
+                return web.json_response({"api_version": 1, "mode": data["mode"], "environment": data["environment"],
+                    "gpu": await self.gpu_status(),
                     "candidate": data["candidate"], "busy": self.journal.busy(),
                     "transitioning": bool(data["session"] and (
                         not data["session"].get("url") or data["session"].get("stopping"))),
@@ -471,8 +519,10 @@ class Controller:
                 async with self.lock:
                     await self.ensure_candidate()
                 return await self.manager(request, "/manager/reboot")
-            if path == "/split.js":
-                return web.FileResponse(EXTENSION)
+            if path == "/split/environment/repair-image-browsing" and request.method == "POST":
+                async with self.lock:
+                    await self.ensure_candidate(restore_image_browsing=True)
+                return await self.manager(request, "/manager/reboot")
             if self.journal.data["mode"] == "legacy":
                 session = self.journal.data["session"]
                 if not session or not session.get("url") or session.get("stopping"):
@@ -503,6 +553,14 @@ class Controller:
                     await self.persist()
                 await self.status()
                 return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
+            if (path == "/jobs" or path.startswith("/jobs/")) and request.method == "GET":
+                async with self.client.post(self.cpu.url + "/_split/jobs", json={
+                    "queue": self.journal.queue(), "history": self.journal.history(),
+                    "query": dict(request.query),
+                    "job_id": path.split("/")[2] if path.startswith("/jobs/") else None,
+                }) as response:
+                    return web.Response(body=await response.read(), status=response.status,
+                                        content_type="application/json")
             if path in ("/queue", "/prompt") and request.method == "GET":
                 queue = self.journal.queue()
                 return web.json_response(queue if path == "/queue" else {
@@ -549,6 +607,7 @@ class Controller:
             # CPU APIs cannot cause GPU activation. Unknown custom endpoints stay
             # local and can return unsupported, rather than triggering inference.
             async def commit_files():
+                await asyncio.to_thread(self.cpu.archive_temp, legacy_paths=True)
                 for name in ("input", "user", "output"):
                     await self.volumes[name].commit.aio()
             return await proxy(request, self.client, self.cpu.url,
@@ -591,7 +650,7 @@ class Controller:
                     from urllib.parse import quote
                     items.extend("/extensions/" + quote(name, safe="") + "/" + p.relative_to(directory).as_posix()
                                  for p in directory.rglob("*.js"))
-        return web.json_response(list(dict.fromkeys([*items, "/split.js"])))
+        return web.json_response(list(dict.fromkeys(items)))
 
     def extension_root(self, root):
         # Catalog GPU paths are resolved to the immutable environment, not trusted

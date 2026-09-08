@@ -19,7 +19,7 @@ MANAGER_VERSION = "4.2.2"
 NODE_REVISIONS = {
     "crystian/ComfyUI-Crystools": "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
     "Firetheft/ComfyUI_Local_Media_Manager": "5e74ce0cc708798ed25a77097d6059b6c796da87",
-    "hayden-fr/ComfyUI-Image-Browsing": "dd2e03e4815fa94c24e2820040cf75b9d4898805",
+    "hayden-cn/ComfyUI-Image-Browsing": "3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7",  # v2.3.0
     "rgthree/rgthree-comfy": "2c5342a8cb0eaecaabf61435a5f37dd594c510ba",
 }
 VOLUME_NAMES = {
@@ -52,6 +52,18 @@ image = (
         f"python -m pip install -r /opt/comfy-template/custom_nodes/{repo.split('/')[1]}/requirements.txt; fi"
         for repo, revision in NODE_REVISIONS.items()
     ])
+    # Bundle the matching published frontend on Modal, before containers start.
+    # main's 2.3.1 revision requests an unpublished release and fails with 404.
+    .run_commands(
+        "curl --fail --location --retry 3 "
+        "https://github.com/hayden-cn/ComfyUI-Image-Browsing/releases/download/v2.3.0/dist.tar.gz "
+        "--output /tmp/image-browsing-dist.tar.gz",
+        "echo 'c8b634911b8dbe69bc65b224eadf367b79e52841bd6825a94ef0dd1e40134a92  "
+        "/tmp/image-browsing-dist.tar.gz' | sha256sum --check",
+        "tar -xzf /tmp/image-browsing-dist.tar.gz "
+        "-C /opt/comfy-template/custom_nodes/ComfyUI-Image-Browsing web/",
+        "rm /tmp/image-browsing-dist.tar.gz",
+    )
     .run_commands(
         f'python -m pip install "{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" '
         f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}" "{FLASH_ATTN_WHEEL_URL}" {PREBUILT_WHEEL_DIR}/*.whl',
@@ -65,6 +77,10 @@ image = (
           "SPLIT_GENERATION_TIMEOUT": str(FUNCTION_TIMEOUT),
           "PYTHONPATH": "/opt/split"})
     .add_local_file("comfyapp.py", "/root/comfyapp.py", copy=True)
+    .add_local_dir("extensions/ComfyUI-Modal-Control", "/opt/comfy-extensions/ComfyUI-Modal-Control",
+                   copy=True, ignore=["**/__pycache__/**", "**/*.pyc"])
+    .add_local_dir("extensions/ComfyUI-Modal-Bridge", "/opt/comfy-extensions/ComfyUI-Modal-Bridge",
+                   copy=True, ignore=["**/__pycache__/**", "**/*.pyc"])
     .add_local_dir("comfy_split", "/opt/split/comfy_split", copy=True,
                    ignore=["**/__pycache__/**", "**/*.pyc"])
 )

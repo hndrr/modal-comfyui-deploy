@@ -27,6 +27,10 @@ export interface Env {
    * }
    */
   MODAL_ORIGINS: string;
+  /** Optional extra hosts, without replacing the encrypted production map. */
+  MODAL_ADDITIONAL_ORIGINS?: string;
+  /** Modal origin -> { key, secret }; keep credentials for other workspaces intact. */
+  MODAL_PROXY_CREDENTIALS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -171,6 +175,19 @@ function parseOrigins(raw: string): Map<string, string> {
   return map;
 }
 
+function configuredOrigins(env: Env): Map<string, string> {
+  const origins = new Map(parseOrigins(env.MODAL_ORIGINS.trim()));
+  if (env.MODAL_ADDITIONAL_ORIGINS?.trim()) {
+    for (const [host, origin] of parseOrigins(env.MODAL_ADDITIONAL_ORIGINS.trim())) {
+      if (origins.has(host)) {
+        throw new Error(`Additional origin cannot replace existing hostname: ${host}`);
+      }
+      origins.set(host, origin);
+    }
+  }
+  return origins;
+}
+
 function findConfigError(env: Env): string | null {
   const missing = REQUIRED_CONFIG_KEYS.filter((key) => !env[key]?.trim());
   if (missing.length > 0) {
@@ -178,7 +195,8 @@ function findConfigError(env: Env): string | null {
   }
 
   try {
-    parseOrigins(env.MODAL_ORIGINS.trim());
+    configuredOrigins(env);
+    credentialOverrides(env);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -190,8 +208,8 @@ function findConfigError(env: Env): string | null {
  * 受け取ったホスト名に対応する Modal のオリジンを返す。
  * マップに無いホスト名では転送しない（fail-closed）。
  */
-function resolveUpstreamOrigin(env: Env, hostname: string): string | null {
-  return parseOrigins(env.MODAL_ORIGINS.trim()).get(hostname.toLowerCase()) ?? null;
+export function resolveUpstreamOrigin(env: Env, hostname: string): string | null {
+  return configuredOrigins(env).get(hostname.toLowerCase()) ?? null;
 }
 
 function readCookie(cookieHeader: string | null, name: string): string | null {
@@ -270,7 +288,29 @@ function upstreamUrlFor(requestUrl: URL, modalOrigin: string): URL {
  * Host は Modal がルーティングに使うため、受け取った値を持ち越さず runtime に
  * 決めさせる。Access の JWT はここから先で使わないので落とす。
  */
-function buildUpstreamHeaders(request: Request, env: Env): Headers {
+function credentialOverrides(env: Env): Record<string, { key: string; secret: string }> {
+  if (!env.MODAL_PROXY_CREDENTIALS?.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(env.MODAL_PROXY_CREDENTIALS);
+  } catch {
+    throw new Error("Invalid MODAL_PROXY_CREDENTIALS JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid MODAL_PROXY_CREDENTIALS map");
+  }
+  for (const [origin, credentials] of Object.entries(parsed)) {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.origin !== origin || !credentials ||
+        typeof credentials.key !== "string" || !credentials.key.trim() ||
+        typeof credentials.secret !== "string" || !credentials.secret.trim()) {
+      throw new Error("Invalid MODAL_PROXY_CREDENTIALS entry");
+    }
+  }
+  return parsed as Record<string, { key: string; secret: string }>;
+}
+
+export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin: string): Headers {
   const headers = new Headers(request.headers);
   headers.delete("Host");
   headers.delete(ACCESS_JWT_HEADER);
@@ -286,8 +326,9 @@ function buildUpstreamHeaders(request: Request, env: Env): Headers {
   }
 
   // クライアントが偽装したヘッダーがあっても set で上書きされる。
-  headers.set("Modal-Key", env.MODAL_KEY);
-  headers.set("Modal-Secret", env.MODAL_SECRET);
+  const credentials = credentialOverrides(env)[upstreamOrigin];
+  headers.set("Modal-Key", credentials?.key ?? env.MODAL_KEY);
+  headers.set("Modal-Secret", credentials?.secret ?? env.MODAL_SECRET);
   return headers;
 }
 
@@ -331,7 +372,7 @@ async function proxyWebSocket(
   env: Env,
   upstreamUrl: URL
 ): Promise<Response> {
-  const headers = buildUpstreamHeaders(request, env);
+  const headers = buildUpstreamHeaders(request, env, upstreamUrl.origin);
 
   // ブラウザのハンドシェイク用ヘッダーは上流へ持ち越さない。
   //
@@ -451,7 +492,7 @@ export default {
     const upstream = await fetch(
       new Request(upstreamUrl, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, env),
+        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin),
         body: request.body,
         redirect: "manual",
       })
