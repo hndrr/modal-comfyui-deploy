@@ -290,6 +290,8 @@ class Controller:
                     await asyncio.gather(task, return_exceptions=True)
         finally:
             self.sockets[sid].discard(socket)
+            if not self.sockets[sid]:
+                self.sockets.pop(sid, None)
         return socket
 
     async def cancel(self, ids):
@@ -413,7 +415,12 @@ class Controller:
                                "environment": version, "call_id": None}
                     self.journal.data["session"] = session
                     await self.spawn(session, "validate")
+            timeout_seconds = int(os.environ.get("SPLIT_VALIDATION_TIMEOUT", "3600"))
+            deadline = time.time() + timeout_seconds
             while "result" not in session:
+                if time.time() >= deadline:
+                    await self.command(session["id"], "interrupt")
+                    raise RuntimeError(f"GPU validation timed out after {timeout_seconds} seconds")
                 await asyncio.sleep(0.5)
             result = session["result"]
             if result["status"] != "completed":
@@ -433,9 +440,12 @@ class Controller:
             async with self.lock:
                 candidate["status"] = "failed"
                 candidate["error"] = str(error)
-                # Keep unresolved GPU calls reserved; never free the slot blindly.
+                # Clear session to allow discard to proceed. Send interrupt command
+                # to stop any running GPU validation before clearing the session.
                 session = self.journal.data["session"]
-                if session and session.get("result"):
+                if session and session.get("operation") == "validate":
+                    if session.get("call_id"):
+                        await self.command(session["id"], "interrupt")
                     self.journal.data["session"] = None
                 await self.persist()
             await self.cpu.start(self.journal.data["environment"], cpu=True)

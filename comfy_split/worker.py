@@ -79,9 +79,11 @@ async def run_worker(spec, events, commands, volumes):
                 result = await asyncio.wait_for(generate(spec, client, control, emit),
                     timeout=int(os.environ.get("SPLIT_GENERATION_TIMEOUT", "1800")))
         except Exception as error:
-            # Do not reuse a server whose execution/queue state is uncertain.
-            await process.stop()
             result = {"status": "failed", "error": str(error)}
+            try:
+                await process.stop()
+            except Exception as stop_error:
+                result["error"] = f"{result['error']} (cleanup error: {stop_error})"
         # Closing model/asset files before reload on the next invocation is the
         # subprocess's responsibility. Incompatible reloads fail, never run stale inputs.
         await asyncio.to_thread(process.archive_temp)
