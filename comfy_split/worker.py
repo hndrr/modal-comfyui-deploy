@@ -84,6 +84,9 @@ async def run_worker(spec, events, commands, volumes):
             result = {"status": "failed", "error": str(error)}
         # Closing model/asset files before reload on the next invocation is the
         # subprocess's responsibility. Incompatible reloads fail, never run stale inputs.
+        await asyncio.to_thread(process.archive_temp)
+        if result.get("history"):
+            result["history"]["outputs"] = process.durable_outputs(result["history"].get("outputs", {}))
         await volumes["output"].commit.aio()
         if spec["operation"] == "legacy":
             await volumes["user"].commit.aio()
@@ -117,6 +120,8 @@ async def generate(spec, client, control, emit):
                         continue
                     if event.get("type") == "executing" and event.get("data", {}).get("node") is None:
                         continue
+                    if event.get("type") == "executed":
+                        event["data"]["output"] = process.durable_outputs(event["data"].get("output", {}))
                     await emit({"type": "event", "event": event})
                 elif message.type == WSMsgType.BINARY and len(message.data) < 512 * 1024:
                     await emit({"type": "preview", "data": message.data})
@@ -198,6 +203,8 @@ async def legacy(spec, client, control, emit):
                 await asyncio.sleep(1)
         async with client.get(process.url + "/history") as response:
             history = await response.json()
+        for item in history.values():
+            item["outputs"] = process.durable_outputs(item.get("outputs", {}))
         await process.stop()
         # CPU server is stopped throughout legacy mode, so there is one user writer.
         shutil.copytree(process.root / "user", "/data/user", dirs_exist_ok=True,

@@ -34,6 +34,39 @@ URL の `<workspace>` はワークスペース名なので、**別の Modal ア�
 
 Worker はリクエストの `Host` を見て転送先を決める。app を増やしたいときは、この JSON にエントリを足し、ホスト名を Custom Domain として割り当て、Access アプリの `destinations` に追加すればよい。**Worker のコード変更は不要。**
 
+既存の `MODAL_ORIGINS` が暗号化済みで元のJSONを再取得できない場合は、任意のsecret
+`MODAL_ADDITIONAL_ORIGINS` に追加分だけを同じ形式で登録できる。
+既存ホストと重複すると設定エラーとして拒否するため、本番の接続先を上書きしない。
+検証用ホストを公開する前に、同じAccessアプリの宛先へ追加して既存の許可ポリシーで保護する。
+その後、追加マップを登録し、Custom Domainを既存Workerへ割り当てる。
+
+```json
+{
+  "comfy-staging.example.com": "https://<workspace>--comfyui-split-ui.modal.run"
+}
+```
+
+切り戻す場合は検証ホストのCustom Domain割り当てを外す。
+Accessの保護は、公開経路を外してから削除する。既存の認証用secretは変更しない。
+
+接続先ごとに異なるProxy Authトークンを使う場合は、任意のsecret
+`MODAL_PROXY_CREDENTIALS` に次のJSONを登録する。キーは末尾のスラッシュを含まない
+HTTPS originとする。HTTPとWebSocketの両方に適用され、登録のない接続先は既存の
+`MODAL_KEY` / `MODAL_SECRET` を使う。実際のトークンはリポジトリへ保存しない。
+
+```json
+{
+  "https://<workspace>--comfyui-split-ui.modal.run": {
+    "key": "wk-REPLACE_ME",
+    "secret": "ws-REPLACE_ME"
+  }
+}
+```
+
+`modal-http: invalid credentials for proxy authorization` はModal側がこのトークンを
+拒否した状態である。接続先のワークスペースで発行したProxy Authトークンを使い、
+Cloudflare Accessのログイン情報やModal CLIのAPIトークンと混同しない。
+
 検証は起動時に行い、次のいずれかに当たると転送せず **500** を返す。
 
 - JSON として壊れている / オブジェクトでない / エントリが 0 件
@@ -59,6 +92,7 @@ cp .dev.vars.example .dev.vars
 | `npm run deploy` | Cloudflare へデプロイする（`wrangler deploy`） |
 | `npm run tail` | 本番の Worker のログを追う（`wrangler tail`） |
 | `npm run typecheck` | 型チェック（`tsc --noEmit`） |
+| `npm test` | 追加ホストの分離と認証必須の回帰テスト（Node.js 22以降） |
 
 ## セットアップ手順
 

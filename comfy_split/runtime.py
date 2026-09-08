@@ -18,7 +18,7 @@ from comfy_split.state import write_json
 
 ENVIRONMENTS = Path("/environments")
 TEMPLATE = Path("/opt/comfy-template")
-BOOT = Path(__file__).with_name("boot.py")
+TEMP_ARCHIVE = Path("/data/output/.split-temp")
 
 
 def identifier(value):
@@ -31,7 +31,7 @@ def environment_path(version):
     return ENVIRONMENTS / identifier(version)
 
 
-def create_environment(source="base"):
+def create_environment(source="base", *, restore_image_browsing=False):
     """Caller holds the maintenance lock. The active revision is never mutated."""
     version = "env-" + uuid.uuid4().hex
     target = environment_path(version)
@@ -39,6 +39,14 @@ def create_environment(source="base"):
     target.mkdir()
     shutil.copytree(origin / "comfy/custom_nodes", target / "comfy/custom_nodes", symlinks=True)
     shutil.copytree(origin / "venv", target / "venv", symlinks=True)
+    if restore_image_browsing:
+        node = "ComfyUI-Image-Browsing"
+        destination = target / "comfy/custom_nodes" / node
+        if destination.is_symlink():
+            destination.unlink()
+        elif destination.exists():
+            shutil.rmtree(destination)
+        shutil.copytree(TEMPLATE / "custom_nodes" / node, destination, symlinks=True)
     write_json(target / "ready.json", {"created_at": time.time(), "parent": source})
     # Virtualenv script shebangs are absolute. Keep the environment at this new
     # fixed path on both CPU and GPU instead of moving it again on activation.
@@ -109,6 +117,28 @@ class ComfyProcess:
         self.version = None
         self.root = Path("/tmp") / ("split-comfy-" + role)
         self.log = Path("/tmp") / ("split-comfy-" + role + ".log")
+        self.temp_root = self.root / "temporary"
+        self.temp_namespace = uuid.uuid4().hex
+
+    def archive_temp(self, *, legacy_paths=False):
+        source = self.temp_root / "temp"
+        if not source.exists():
+            return
+        destination = TEMP_ARCHIVE / ("temp" if legacy_paths else self.temp_namespace)
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+
+    def durable_outputs(self, value):
+        if isinstance(value, list):
+            return [self.durable_outputs(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {key: self.durable_outputs(item) for key, item in value.items()}
+        if result.get("type") == "temp" and isinstance(result.get("filename"), str):
+            subfolder = Path(result.get("subfolder", ""))
+            if subfolder.is_absolute() or ".." in subfolder.parts:
+                raise ValueError("Invalid temporary output subfolder")
+            result.update(type="output", subfolder=(Path(".split-temp") / self.temp_namespace / subfolder).as_posix())
+        return result
 
     @property
     def url(self):
@@ -116,6 +146,7 @@ class ComfyProcess:
 
     async def stop(self):
         if self.process and self.process.returncode is None:
+            await asyncio.to_thread(self.archive_temp, legacy_paths=self.role in {"cpu", "candidate"})
             os.killpg(self.process.pid, signal.SIGTERM)
             try:
                 await asyncio.wait_for(self.process.wait(), 15)
@@ -168,22 +199,24 @@ class ComfyProcess:
                 link.unlink()
             if not link.exists():
                 link.symlink_to(destination, target_is_directory=True)
-        temporary = Path("/data/output/.split-temp")
+        self.temp_namespace = uuid.uuid4().hex
+        temporary = self.temp_root
         temporary.mkdir(parents=True, exist_ok=True)
-        command = [str(source / "venv/bin/python"), str(BOOT),
+        command = [str(source / "venv/bin/python"), str(self.root / "main.py"),
                    "--listen", "127.0.0.1", "--port", str(self.port),
                    "--base-directory", str(self.root),
                    "--user-directory", str(user),
                    "--input-directory", "/data/input", "--output-directory", "/data/output",
                    "--temp-directory", str(temporary),
                    "--database-url", f"sqlite:////tmp/split-{self.role}.db",
-                   "--enable-manager", "--preview-method", "auto"]
+                   "--enable-manager", "--preview-method", "auto",
+                   "--extra-model-paths-config", str(Path(__file__).with_name("extension_paths.yaml"))]
         if cpu:
             command.append("--cpu")
         elif os.environ.get("COMFYUI_SAGE_ATTENTION", "on") == "on":
             command.append("--use-sage-attention")
         environment = dict(os.environ)
-        environment.update(SPLIT_CPU="1" if cpu else "0",
+        environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),
                            PATH=str(source / "venv/bin") + ":" + environment["PATH"])
@@ -202,6 +235,12 @@ class ComfyProcess:
                 try:
                     async with client.get(self.url + "/object_info") as response:
                         if response.status == 200:
+                            async with client.get(self.url + "/_split/catalog") as catalog_response:
+                                if catalog_response.status != 200:
+                                    raise RuntimeError("Modal bridge extension did not load")
+                                metadata = await catalog_response.json()
+                                if cpu and not metadata.get("cpu_guard"):
+                                    raise RuntimeError("CPU execution guard did not load")
                             self.version = version
                             print(json.dumps({"event": "comfy_ready", "role": self.role,
                                               "seconds": time.monotonic() - started}))
