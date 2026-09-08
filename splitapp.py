@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -112,7 +113,7 @@ def ui():
             if gateway.poll() is not None:
                 print(f"Gateway process exited with code {gateway.returncode}, terminating container",
                       file=sys.stderr, flush=True)
-                sys.exit(1)
+                os.kill(os.getpid(), signal.SIGTERM)
             time.sleep(5)
     
     threading.Thread(target=monitor, daemon=True).start()
