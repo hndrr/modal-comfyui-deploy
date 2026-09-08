@@ -22,13 +22,7 @@ process = ComfyProcess("gpu", 8188)
 async def run_worker(spec, events, commands, volumes):
     session_id = spec["id"]
     result_path = Path("/results") / (session_id + ".json")
-    if process.version is not None and process.version != spec["environment"]:
-        await process.stop()
-    for name in ("environment", "input", "models", "user", "results", "output"):
-        await volumes[name].reload.aio()
-    # A completed call may be recovered without running the workflow twice.
-    if result_path.exists():
-        return json.loads(result_path.read_text())
+    started_path = Path("/results") / (session_id + ".started.json")
     started = time.monotonic()
 
     async def emit(value):
@@ -44,6 +38,33 @@ async def run_worker(spec, events, commands, volumes):
     result = None
     async with ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False) as client:
         try:
+            if process.version is not None and process.version != spec["environment"]:
+                await process.stop()
+            for name in ("environment", "input", "models", "user", "results", "output"):
+                # Environments are immutable. Native libraries imported from a
+                # venv stay open for the process lifetime and prevent reload.
+                if name == "environment" and process.version == spec["environment"]:
+                    continue
+                try:
+                    await volumes[name].reload.aio()
+                except RuntimeError as error:
+                    if "open files" not in str(error):
+                        raise
+                    # Some nodes keep model/input files mapped after execution.
+                    # Close those handles before refreshing the Volume snapshot.
+                    await process.stop()
+                    await volumes[name].reload.aio()
+            if result_path.exists():
+                return json.loads(result_path.read_text())
+            if started_path.exists():
+                # Modal can replay inputs after preemption independently of the
+                # configured application retries. Never rerun ambiguous effects.
+                result = {"status": "unknown", "error": "GPUの実行開始記録がありますが結果がありません。自動再実行はしません。"}
+                write_json(result_path, result)
+                await volumes["results"].commit.aio()
+                return result
+            write_json(started_path, {"id": session_id, "at": time.time(), "operation": spec["operation"]})
+            await volumes["results"].commit.aio()
             await process.start(spec["environment"])
             print(json.dumps({"event": "gpu_ready", "id": session_id,
                               "seconds": time.monotonic() - started}))
@@ -153,8 +174,14 @@ async def legacy(spec, client, control, emit):
         async with modal.forward(8189) as tunnel:
             await emit({"type": "legacy_ready", "url": tunnel.url})
             last_heartbeat = time.monotonic()
+            last_ready = last_heartbeat
             stopping = False
             while True:
+                if time.monotonic() - last_ready >= 15:
+                    # CPU can restart between consuming the event and persisting
+                    # the URL. Reannounce without opening a second GPU session.
+                    await emit({"type": "legacy_ready", "url": tunnel.url})
+                    last_ready = time.monotonic()
                 for command in await control():
                     if command["type"] == "heartbeat":
                         last_heartbeat = time.monotonic()
