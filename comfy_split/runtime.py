@@ -12,7 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientSession
 
 from comfy_split.state import write_json
 
@@ -245,8 +245,10 @@ class ComfyProcess:
                             print(json.dumps({"event": "comfy_ready", "role": self.role,
                                               "seconds": time.monotonic() - started}))
                             return
-                except OSError:
+                except (OSError, ClientError, asyncio.TimeoutError):
                     pass
+                except RuntimeError:
+                    break
                 await asyncio.sleep(1)
         tail = self.log.read_text(errors="replace")[-6000:]
         await self.stop()

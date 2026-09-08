@@ -4,7 +4,8 @@ const restoreKey = "modal-split-workflow";
 const request = async (path, body) => {
   const url = path === "status" ? "/modal-control/v1/status" : `/split/${path}`;
   const response = await fetch(url, body === undefined ? { cache: "no-store", signal: AbortSignal.timeout(8000) } : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000)
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
