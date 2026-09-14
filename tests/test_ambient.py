@@ -1,6 +1,5 @@
 import asyncio
 import io
-import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,7 +14,16 @@ from ambient.service import JobService, Conflict
 
 
 def request(**patch):
-    return dict(requestId=str(uuid4()), mode='h3', prompt='A quiet room', sound='Soft breeze', seed=42, resolution='preview', **patch)
+    return {
+        "requestId": str(uuid4()),
+        "mode": "h3",
+        "prompt": "A quiet room",
+        "sound": "Soft breeze",
+        "seed": 42,
+        "resolution": "preview",
+        **patch,
+    }
+
 
 class Store(dict):
     def put(self, key, value, skip_if_exists=False):
@@ -24,121 +32,272 @@ class Store(dict):
         self[key] = value
         return True
 
+
 class Volume:
-    def __init__(self): self.files = {}
-    def batch_upload(self): return self
-    def __enter__(self): return self
-    def __exit__(self, *args): pass
-    def put_file(self, source, target): self.files[target] = source.read()
-    def read_file_into_fileobj(self, source, target): target.write(self.files[source])
+    def __init__(self):
+        self.files = {}
+
+    def batch_upload(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def put_file(self, source, target):
+        self.files[target] = source.read()
+
+    def read_file_into_fileobj(self, source, target):
+        target.write(self.files[source])
+
 
 class ContractsTest(unittest.TestCase):
     def test_idempotency_conflict_and_cancel_race(self):
-        store = Store(); calls = []
-        service = JobService(store, lambda key: calls.append(key) or 'fc-1')
+        store = Store()
+        calls = []
+        service = JobService(store, lambda key: calls.append(key) or "fc-1")
         req = request()
-        self.assertEqual(service.submit(req)['id'], service.submit(req)['id'])
+        self.assertEqual(service.submit(req)["id"], service.submit(req)["id"])
         self.assertEqual(len(calls), 1)
-        with self.assertRaises(Conflict): service.submit({**req, 'seed': 43})
-        service.cancel(req['requestId'])
-        store[req['requestId']]['status'] = 'completed'  # late worker write cannot undo cancellation
-        self.assertEqual(service.get(req['requestId'])['status'], 'cancelled')
+        with self.assertRaises(Conflict):
+            service.submit({**req, "seed": 43})
+        service.cancel(req["requestId"])
+        store[req["requestId"]]["status"] = (
+            "completed"  # late worker write cannot undo cancellation
+        )
+        self.assertEqual(service.get(req["requestId"])["status"], "cancelled")
 
     def test_abandoned_dispatch_and_worker_timeout(self):
-        store = Store(); service = JobService(store, lambda _: 'fc-1', now=lambda: 500)
-        req = request(); service.submit(req)
-        store[req['requestId']]['createdAt'] = 0; del store['call:'+req['requestId']]
-        self.assertEqual(service.get(req['requestId'])['status'], 'failed')
-        store['call:'+req['requestId']] = 'fc-2'; service.reconcile = lambda _: 'Worker timed out'
-        self.assertEqual(service.get(req['requestId'])['status'], 'failed')
+        store = Store()
+        service = JobService(store, lambda _: "fc-1", now=lambda: 500)
+        req = request()
+        service.submit(req)
+        store[req["requestId"]]["createdAt"] = 0
+        del store["call:" + req["requestId"]]
+        self.assertEqual(service.get(req["requestId"])["status"], "failed")
+        store["call:" + req["requestId"]] = "fc-2"
+        service.reconcile = lambda _: "Worker timed out"
+        self.assertEqual(service.get(req["requestId"])["status"], "failed")
 
     def test_fast_has_no_image_input(self):
-        with self.assertRaises(ValueError): validate_request({**request(), 'mode': 'fasth3', 'imageId': str(uuid4())})
+        with self.assertRaises(ValueError):
+            validate_request({**request(), "mode": "fasth3", "imageId": str(uuid4())})
         for bad in [True, -1, 2**32, 1.1]:
-            with self.assertRaises(ValueError): validate_request({**request(), 'seed': bad})
-        with self.assertRaises(ValueError): validate_request({**request(), 'requestId': '../escape'})
-        with self.assertRaises(ValueError): validate_request({**request(), 'resolution': []})
+            with self.assertRaises(ValueError):
+                validate_request({**request(), "seed": bad})
+        with self.assertRaises(ValueError):
+            validate_request({**request(), "requestId": "../escape"})
+        with self.assertRaises(ValueError):
+            validate_request({**request(), "resolution": []})
 
     def test_native_audio_turbo_and_anchor(self):
-        req = request(); graph = workflow(req, 'ambient/anchor.png')
-        self.assertEqual(graph['6']['inputs']['first_frame'], ['16', 0])
-        self.assertEqual(graph['10']['inputs']['steps'], 8)
-        self.assertEqual(graph['13']['class_type'], 'VAEDecodeAudio')
-        self.assertEqual(graph['14']['inputs']['audio'], ['13', 0])
-        self.assertTrue(graph['15']['inputs']['filename_prefix'].startswith('ambient/raw/'))
+        req = request()
+        graph = workflow(req, "ambient/anchor.png")
+        self.assertEqual(graph["6"]["inputs"]["first_frame"], ["16", 0])
+        self.assertEqual(graph["10"]["inputs"]["steps"], 8)
+        self.assertEqual(graph["13"]["class_type"], "VAEDecodeAudio")
+        self.assertEqual(graph["14"]["inputs"]["audio"], ["13", 0])
+        self.assertTrue(graph["15"]["inputs"]["filename_prefix"].startswith("ambient/raw/"))
+
 
 class ApiTest(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
         from ambient.api import create_api
-        self.store = Store(); self.inputs = Volume(); self.outputs = Volume()
-        self.service = JobService(self.store, lambda _: 'fc-1')
-        self.client = TestClient(create_api(self.service, lambda: {'h3': {'ready': True}, 'fasth3': {'ready': True}}, self.inputs, self.outputs))
+
+        self.store = Store()
+        self.inputs = Volume()
+        self.outputs = Volume()
+        self.service = JobService(self.store, lambda _: "fc-1")
+        self.client = TestClient(
+            create_api(
+                self.service,
+                lambda: {"h3": {"ready": True}, "fasth3": {"ready": True}},
+                self.inputs,
+                self.outputs,
+            )
+        )
+        self.addCleanup(self.client.close)
 
     def test_upload_and_clip_range(self):
         from PIL import Image
-        image = io.BytesIO(); Image.new('RGB', (40, 20)).save(image, format='PNG')
-        response = self.client.post('/images', files={'image': ('test.png', image.getvalue(), 'image/png')})
+
+        image = io.BytesIO()
+        Image.new("RGB", (40, 20)).save(image, format="PNG")
+        response = self.client.post(
+            "/images", files={"image": ("test.png", image.getvalue(), "image/png")}
+        )
         self.assertEqual(response.status_code, 201, response.text)
-        asset = response.json()['id']; self.assertIn(f'ambient/images/{asset}.png', self.inputs.files)
-        req = request(); req['imageId'] = asset
-        self.assertEqual(self.client.post('/jobs', json=req).status_code, 202)
-        self.assertEqual(self.client.post('/jobs', json=req).json()['id'], req['requestId'])
-        self.assertEqual(self.client.get('/clips/'+req['requestId']).status_code, 404)
-        self.store[req['requestId']]['status'] = 'completed'
-        self.outputs.files[f"ambient/clips/{req['requestId']}.mp4"] = b'0123456789'
-        response = self.client.get('/clips/'+req['requestId'], headers={'Range': 'bytes=2-5'})
-        self.assertEqual(response.status_code, 206); self.assertEqual(response.content, b'2345')
-        self.client.delete('/jobs/'+req['requestId'])
-        self.assertEqual(self.client.get('/clips/'+req['requestId']).status_code, 404)
+        asset = response.json()["id"]
+        self.assertIn(f"ambient/images/{asset}.png", self.inputs.files)
+        req = request()
+        req["imageId"] = asset
+        self.assertEqual(self.client.post("/jobs", json=req).status_code, 202)
+        self.assertEqual(self.client.post("/jobs", json=req).json()["id"], req["requestId"])
+        self.assertEqual(self.client.get("/clips/" + req["requestId"]).status_code, 404)
+        self.store[req["requestId"]]["status"] = "completed"
+        self.outputs.files[f"ambient/clips/{req['requestId']}.mp4"] = b"0123456789"
+        response = self.client.get("/clips/" + req["requestId"], headers={"Range": "bytes=2-5"})
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"2345")
+        self.client.delete("/jobs/" + req["requestId"])
+        self.assertEqual(self.client.get("/clips/" + req["requestId"]).status_code, 404)
 
     def test_bad_requests(self):
-        self.assertEqual(self.client.post('/jobs', json={}).status_code, 400)
-        self.assertEqual(self.client.get('/jobs/'+str(uuid4())).status_code, 404)
-        self.assertEqual(self.client.post('/images', files={'image': ('bad.png', b'bad', 'image/png')}).status_code, 400)
+        self.assertEqual(self.client.post("/jobs", json={}).status_code, 400)
+        self.assertEqual(self.client.get("/jobs/" + str(uuid4())).status_code, 404)
+        self.assertEqual(
+            self.client.post(
+                "/images", files={"image": ("bad.png", b"bad", "image/png")}
+            ).status_code,
+            400,
+        )
 
-@unittest.skipUnless(shutil.which('ffmpeg'), 'ffmpeg required')
+    def test_parent_validation_and_conflicting_retry(self):
+        parent = request()
+        self.service.submit(parent)
+        child = request(parentClipId=parent["requestId"])
+        self.assertEqual(self.client.post("/jobs", json=child).status_code, 400)
+        self.store[parent["requestId"]]["status"] = "completed"
+        self.assertEqual(self.client.post("/jobs", json=child).status_code, 202)
+        self.assertEqual(self.client.post("/jobs", json={**child, "seed": 43}).status_code, 409)
+
+    def test_mode_lookup_runs_outside_the_event_loop(self):
+        from fastapi.testclient import TestClient
+        from ambient.api import create_api
+
+        def modes():
+            with self.assertRaises(RuntimeError):
+                asyncio.get_running_loop()
+            return {"h3": {"ready": False, "reason": "Not prepared"}}
+
+        with TestClient(create_api(self.service, modes, self.inputs, self.outputs)) as client:
+            response = client.post("/jobs", json=request())
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), {"error": "Not prepared"})
+        self.assertEqual(self.store, {})
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg required")
 class MediaTest(unittest.TestCase):
     def test_native_audio_and_exact_last_frame(self):
         from PIL import Image
+
         with tempfile.TemporaryDirectory() as d:
-            root = Path(d); source = root/'source.mp4'; out = root/'out.mp4'; frame = root/'last.png'
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=128x96:rate=24:duration=1', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', '-c:v', 'libx264', '-c:a', 'aac', str(source)], check=True)
+            root = Path(d)
+            source = root / "source.mp4"
+            out = root / "out.mp4"
+            frame = root / "last.png"
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=128x96:rate=24:duration=1",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=220:duration=1",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    str(source),
+                ],
+                check=True,
+            )
             clip = finalize(source, out, frame, str(uuid4()))
-            self.assertTrue(clip['hasAudio']); self.assertEqual(clip['frames'], 24)
-            with Image.open(frame) as last: self.assertEqual(last.size, (128, 96))
+            self.assertTrue(clip["hasAudio"])
+            self.assertEqual(clip["frames"], 24)
+            with Image.open(frame) as last:
+                self.assertEqual(last.size, (128, 96))
             self.assertTrue(out.exists())
-            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-an', '-c:v', 'copy', str(root/'silent.mp4')], check=True)
-            with self.assertRaises(RuntimeError): finalize(root/'silent.mp4', root/'bad.mp4', root/'bad.png', str(uuid4()))
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-v",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(source),
+                    "-an",
+                    "-c:v",
+                    "copy",
+                    str(root / "silent.mp4"),
+                ],
+                check=True,
+            )
+            with self.assertRaises(RuntimeError):
+                finalize(root / "silent.mp4", root / "bad.mp4", root / "bad.png", str(uuid4()))
+
 
 class SharedComfyTest(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_never_interrupts_and_deletes_only_own_prompt(self):
         from aiohttp import web
-        calls = []; polls = 0
-        own = 'own-prompt'; other = 'other-prompt'
+
+        calls = []
+        polls = 0
+        own = "own-prompt"
+        other = "other-prompt"
+
         async def ws(request):
-            socket = web.WebSocketResponse(compress=False); await socket.prepare(request)
-            async for _ in socket: pass
+            socket = web.WebSocketResponse(compress=False)
+            await socket.prepare(request)
+            async for _ in socket:
+                pass
             return socket
+
         async def prompt(request):
-            return web.json_response({'prompt_id': own})
+            return web.json_response({"prompt_id": own})
+
         async def history(request):
             nonlocal polls
             polls += 1
             if polls > 1:
-                return web.json_response({own: {'status': {'completed': True}}})
+                return web.json_response({own: {"status": {"completed": True}}})
             return web.json_response({})
+
         async def queue(request):
-            if request.method == 'POST': calls.append(await request.json()); return web.json_response({})
-            return web.json_response({'queue_running': [[0, own]], 'queue_pending': [[1, other]]})
+            if request.method == "POST":
+                calls.append(await request.json())
+                return web.json_response({})
+            return web.json_response({"queue_running": [[0, own]], "queue_pending": [[1, other]]})
+
         async def interrupt(request):
-            self.fail('Shared ComfyUI must never be interrupted')
-        app = web.Application(); app.router.add_get('/ws', ws); app.router.add_post('/prompt', prompt); app.router.add_get('/history/{id}', history); app.router.add_route('*', '/queue', queue); app.router.add_post('/interrupt', interrupt)
-        runner = web.AppRunner(app); await runner.setup(); site = web.TCPSite(runner, '127.0.0.1', 0); await site.start()
+            self.fail("Shared ComfyUI must never be interrupted")
+
+        app = web.Application()
+        app.router.add_get("/ws", ws)
+        app.router.add_post("/prompt", prompt)
+        app.router.add_get("/history/{id}", history)
+        app.router.add_route("*", "/queue", queue)
+        app.router.add_post("/interrupt", interrupt)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
         port = site._server.sockets[0].getsockname()[1]
         try:
-            await generate(f'http://127.0.0.1:{port}', {}, request(), None, Path('/unused'), lambda: True, lambda _: None, timeout=3)
-            self.assertEqual(calls, [{'delete': [own]}])
-        finally: await runner.cleanup()
+            await generate(
+                f"http://127.0.0.1:{port}",
+                {},
+                request(),
+                None,
+                Path("/unused"),
+                lambda: True,
+                lambda _: None,
+                timeout=3,
+            )
+            self.assertEqual(calls, [{"delete": [own]}])
+        finally:
+            await runner.cleanup()
 
-if __name__ == '__main__': unittest.main()
+
+if __name__ == "__main__":
+    unittest.main()

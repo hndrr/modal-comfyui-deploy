@@ -1,8 +1,41 @@
 # H3 Ambient backend
 
-`ambient_app.py` adds a separate CPU job API and FastVideo GPU worker to this repository. The existing `comfyapp.py`, model tools and asset UI remain independent. Deploying or opening the frontend does not download models. The frontend lives in `comfy-stream` at `/ambient`.
+This repository provides the Modal backend for [Ambient Studio](https://github.com/hndrr/ambient-studio). The standalone frontend owns playback, FX, MIDI controls and the Next.js `/api/ambient` proxy. The former `comfy-stream` Ambient screen and proxy have been removed.
 
-**Current validation:** local contract, media and mocked ComfyUI tests only. No deployment or GPU generation was performed. ComfyUI/FastVideo/model references below are reproducible source references, not GPU-qualified releases. GPU generation, three-clip visual continuity and actual model performance remain to be checked when GPU use is explicitly resumed.
+`ambient_app.py` declares the CPU job API and the separate FastVideo GPU worker. It reuses the existing ComfyUI configuration, authentication and Volumes. Deploying or opening the frontend does not download models.
+
+**Current validation:** local and CI tests cover the API, job lifecycle, retention and media processing, with mocked ComfyUI/FastVideo generation. No deployment or GPU generation was performed. ComfyUI/FastVideo/model references below are reproducible source references, not GPU-qualified releases. GPU generation, three-clip visual continuity and actual model performance remain to be checked when GPU use is explicitly resumed.
+
+## Responsibilities and data flow
+
+```mermaid
+flowchart LR
+    Studio[Ambient Studio] --> Proxy[Next.js API proxy]
+    Proxy --> API[Ambient CPU API]
+    API --> Processor[Job processor]
+    Processor --> H3[Existing ComfyUI / H3]
+    Processor --> Fast[Dedicated FastVideo / FastH3]
+    H3 --> Storage[Encode and commit MP4 + final frame]
+    Fast --> Storage
+    Storage --> Volumes[Existing Modal Volumes]
+    API --> Dict[Modal Dict / job state]
+    Processor --> Dict
+```
+
+| File | Responsibility |
+| --- | --- |
+| `ambient_app.py` | Modal images, resource settings, remote function declarations and dependency wiring |
+| `ambient/api.py` | HTTP validation, multipart parsing, status codes and response lifetimes |
+| `ambient/service.py` | Job acceptance, deduplication, status reconciliation and cancellation |
+| `ambient/processing.py` | Generate, finalize, commit and publish a job; storage and generators are injected for local tests |
+| `ambient/storage.py` | Ambient file paths, image normalization, parent-frame loading and Volume access |
+| `ambient/comfy.py` | H3 workflow and ComfyUI control connection |
+| `ambient/fasth3.py` | FastVideo model loading, generation and shutdown inside its GPU image |
+| `ambient/media.py` | Audio-required MP4 encoding, metadata inspection and final-frame extraction |
+| `ambient/readiness.py` | Saved capability records and the explicit ComfyUI inventory check |
+| `ambient/maintenance.py` | Retention of terminal jobs and Ambient-owned files |
+
+The processor publishes `completed` only after storage has committed both Volumes and cancellation has been checked again. HTTP capability reads use saved records only. The FastVideo library is imported when its engine loads, so CPU-only tests can exercise the processing and storage code without installing GPU dependencies.
 
 ## Configuration
 
@@ -66,6 +99,6 @@ uv sync --extra ambient-test
 uv run python -m unittest discover -s tests
 ```
 
-Tests cover idempotency/conflicts, dispatch failure/worker timeout, cancellation vs late completion, input capability restrictions, multipart validation, range delivery, audio-required encoding/final-frame extraction, and a local aiohttp ComfyUI double proving that cancellation touches only the owned prompt.
+Tests cover idempotency/conflicts, dispatch failure/worker timeout, input capability restrictions, multipart validation, range delivery, audio-required encoding/final-frame extraction, and a local aiohttp ComfyUI double proving that cancellation touches only the owned prompt. Processor tests also cover cancellation before generation, after generation and during commits; failed generation/encoding/commits; both input anchor types; and cleanup boundaries. FastVideo lifecycle tests use a fake generator and do not establish model or GPU compatibility.
 
 References: [ComfyUI H3 native workflows](https://docs.comfy.org/tutorials/video/minimax/minimax-h3), [FastH3 VSA Preview v1](https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree), [FastVideo pinned recipe](https://github.com/hao-ai-lab/FastVideo/blob/556ac7088e7b4750806d277d31e0db6cd25a5238/examples/inference/basic/basic_fasth3.py).
