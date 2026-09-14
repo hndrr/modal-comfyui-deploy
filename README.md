@@ -133,4 +133,4 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 
 ## Ambient Studio
 
-独立した生成job API、H3の最終フレーム継承、FastH3専用workerを追加しています。設定、明示的なモデル準備、検証手順は [docs/ambient.md](docs/ambient.md) を参照してください。
+独立した [Ambient Studio](https://github.com/hndrr/ambient-studio) 向けに、生成job API、H3の最終フレーム継承、FastH3専用workerを提供します。画面・再生・FX・MIDIはフロント側が担当します。バックエンドの責務分担、設定、明示的なモデル準備、検証手順は [docs/ambient.md](docs/ambient.md) を参照してください。
