@@ -1,5 +1,6 @@
 """Explicit model preparation; never runs on app startup or deploy.
-Run: ./scripts/modal.sh run scripts/prepare_ambient_h3.py --mode h3|fasth3
+Run FastH3: ./scripts/modal.sh run scripts/prepare_ambient_h3.py --mode fasth3
+Use --mode h3 for H3.
 """
 from pathlib import Path
 import sys

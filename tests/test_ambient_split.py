@@ -60,6 +60,7 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.tasks = []
         self.queued = asyncio.Event()
         self.req = request()
+        self.generation_timeout = 5
 
         async def cpu_handler(req):
             self.cpu_requests.append(req.path)
@@ -130,7 +131,7 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.destination,
             lambda: self.cancelled,
             self.progress,
-            timeout=5,
+            timeout=self.generation_timeout,
         )
 
     async def start_generation(self, image=None):
@@ -268,6 +269,29 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(other["status"], "queued")
         self.assertNotIn("/interrupt", self.cpu_requests)
         self.assertFalse(self.destination.exists())
+
+    async def test_deadline_cancels_only_own_queued_job(self):
+        self.generation_timeout = 0
+        other = self.control.journal.enqueue({"prompt": {"1": {}}})
+        task, own = await self.start_generation()
+        with self.assertRaisesRegex(TimeoutError, "cancellation requested"):
+            await asyncio.wait_for(task, 3)
+        self.assertEqual(own["status"], "cancelled")
+        self.assertEqual(other["status"], "queued")
+        self.commands.put.aio.assert_not_awaited()
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_deadline_sends_interrupt_only_to_own_running_job(self):
+        self.generation_timeout = 0.05
+        task, own = await self.start_generation()
+        async with self.control.lock:
+            await self.control.spawn(own, "generate")
+            other = self.control.journal.enqueue({"prompt": {"1": {}}})
+        with self.assertRaisesRegex(TimeoutError, "cancellation requested"):
+            await asyncio.wait_for(task, 3)
+        self.commands.put.aio.assert_awaited_once_with({"type": "interrupt"}, partition=own["id"])
+        self.assertEqual(other["status"], "queued")
+        self.assertNotIn("/interrupt", self.cpu_requests)
 
     async def test_browser_cancellation_does_not_leave_ambient_polling_until_timeout(self):
         task, own = await self.start_generation()

@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
+from ambient.api import JOB_BODY_LIMIT
 from ambient.contracts import validate_request
 from ambient.comfy import workflow
 from ambient.media import finalize
@@ -72,16 +73,18 @@ class ContractsTest(unittest.TestCase):
         )
         self.assertEqual(service.get(req["requestId"])["status"], "cancelled")
 
-    def test_abandoned_dispatch_and_worker_timeout(self):
+    def test_unconfirmed_dispatch_is_pending_but_worker_timeout_is_failed(self):
         store = Store()
         service = JobService(store, lambda _: "fc-1", now=lambda: 500)
         req = request()
         service.submit(req)
         store[req["requestId"]]["createdAt"] = 0
         del store["call:" + req["requestId"]]
-        failed = service.get(req["requestId"])
-        self.assertEqual(failed["status"], "failed")
-        self.assertEqual(failed["stage"], "Dispatch failed")
+        pending = service.get(req["requestId"])
+        self.assertEqual(pending["status"], "queued")
+        self.assertIn("Dispatch unconfirmed", pending["stage"])
+        self.assertNotIn("error", pending)
+        self.assertEqual(store[req["requestId"]]["stage"], "Queued")
         store["call:" + req["requestId"]] = "fc-2"
         service.reconcile = lambda _: "Worker timed out"
         self.assertEqual(service.get(req["requestId"])["status"], "failed")
@@ -186,6 +189,46 @@ class ApiTest(unittest.TestCase):
             ).status_code,
             400,
         )
+
+    def test_job_body_size_boundary_and_maximum_text(self):
+        req = request(prompt="景" * 8000, sound="音" * 4000)
+        encoded = json.dumps(req).encode()
+        body = encoded + b" " * (JOB_BODY_LIMIT - len(encoded))
+        with patch.object(self.service, "submit", wraps=self.service.submit) as submit:
+            response = self.client.post(
+                "/jobs", content=body + b" ", headers={"Content-Type": "application/json"}
+            )
+            self.assertEqual(response.status_code, 413)
+            submit.assert_not_called()
+            self.assertEqual(self.store, {})
+            response = self.client.post(
+                "/jobs", content=body, headers={"Content-Type": "application/json"}
+            )
+            self.assertEqual(response.status_code, 202, response.text)
+            submit.assert_called_once()
+
+    def test_oversized_job_stream_stops_before_json_parsing_or_dispatch(self):
+        async def exercise():
+            from unittest.mock import AsyncMock
+
+            receive = AsyncMock(side_effect=[
+                {"type": "http.request", "body": b" " * JOB_BODY_LIMIT, "more_body": True},
+                {"type": "http.request", "body": b" ", "more_body": True},
+                AssertionError("Read past the body limit"),
+            ])
+            send = AsyncMock()
+            scope = {
+                "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                "method": "POST", "scheme": "http", "path": "/jobs",
+                "query_string": b"", "headers": [(b"content-type", b"application/json")],
+                "server": ("testserver", 80), "client": ("testclient", 123),
+            }
+            await self.client.app(scope, receive, send)
+            self.assertEqual(receive.await_count, 2)
+            self.assertEqual(send.await_args_list[0].args[0]["status"], 413)
+
+        asyncio.run(exercise())
+        self.assertEqual(self.store, {})
 
     def test_parent_validation_and_conflicting_retry(self):
         parent = request()

@@ -129,6 +129,22 @@ class RuntimeTest(unittest.TestCase):
         encode.assert_not_called()
         self.assertEqual(self.service.get(job_id)["status"], "cancelled")
 
+    def test_unconfirmed_dispatch_can_complete_without_resubmission(self):
+        job_id = self.submit()
+        self.jobs[job_id]["createdAt"] = time.time() - 301
+        self.jobs.pop("call:" + job_id)
+        pending = self.service.get(job_id)
+        self.assertEqual(pending["status"], "queued")
+        with patch.object(self.service, "spawn") as spawn:
+            self.assertEqual(self.service.submit(self.jobs[job_id]["request"]), pending)
+            spawn.assert_not_called()
+        with patch("ambient.storage.finalize", side_effect=self.encode):
+            self.run_job(job_id)
+        result = self.service.get(job_id)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["clip"]["id"], job_id)
+        self.assertNotIn("error", result)
+
     def test_retired_fastvideo_jobs_never_dispatch_to_comfyui(self):
         for explicit_backend in (False, True):
             with self.subTest(explicit_backend=explicit_backend):

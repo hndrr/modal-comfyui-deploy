@@ -68,6 +68,7 @@ async def generate(
                             progress("Sampling")
 
             drain_task = asyncio.create_task(drain())
+            prompt_id = None
             try:
                 objects = await call("GET", "/object_info")
                 # Resolve contracts before uploading or submitting any generation.
@@ -155,9 +156,24 @@ async def generate(
                             "ComfyUI control connection closed; job result is uncertain. Inspect ComfyUI history before retrying."
                         )
                     await asyncio.sleep(1)
+                raise TimeoutError("ComfyUI generation timed out")
+            except TimeoutError as error:
+                if prompt_id is None:
+                    raise
+                try:
+                    await call(
+                        "POST", f"/jobs/{prompt_id}/cancel",
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    )
+                except Exception as cancel_error:
+                    raise TimeoutError(
+                        "ComfyUI generation timed out; cancellation could not be confirmed. "
+                        "Inspect ComfyUI history before retrying."
+                    ) from cancel_error
                 raise TimeoutError(
-                    "ComfyUI generation timed out; upstream result may still be running"
-                )
+                    "ComfyUI generation timed out; cancellation requested. "
+                    "Inspect ComfyUI history before retrying."
+                ) from error
             finally:
                 drain_task.cancel()
                 await asyncio.gather(drain_task, return_exceptions=True)
