@@ -103,11 +103,16 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.worker = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-test")))
+        self.worker = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-test")),
+            get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0)))
         self.events = SimpleNamespace(get_many=remote_mock([]))
         self.commands = SimpleNamespace(put=remote_mock())
         self.volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                        for key in ("input", "output", "user", "models", "state", "results", "environment")}
+                        for key in ("input", "output", "data", "models", "environment")}
+        async def missing_file(_):
+            raise FileNotFoundError
+            yield b""
+        self.volumes["data"].read_file = SimpleNamespace(aio=missing_file)
         self.control = Controller(self.worker, self.events, self.commands, self.volumes,
                                   Path(self.temp.name))
 
@@ -189,7 +194,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(ids), 3)
         disk = Journal(Path(self.temp.name))
         self.assertEqual(set(disk.data["jobs"]), ids)
-        self.assertEqual(self.volumes["state"].commit.aio.await_count, 3)
+        self.assertEqual(self.volumes["data"].commit.aio.await_count, 3)
         self.worker.spawn.aio.assert_not_awaited()
 
     async def test_manager_import_diagnostics_do_not_stage_an_environment(self):
@@ -370,16 +375,16 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         sequence = []
         with tempfile.TemporaryDirectory() as root:
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "user", "results", "output")}
+                       for key in ("environment", "input", "models", "data", "output")}
             async def output_commit():
                 sequence.append("output")
             async def result_commit():
                 sequence.append("result")
             volumes["output"].commit.aio.side_effect = output_commit
-            volumes["results"].commit.aio.side_effect = result_commit
+            volumes["data"].commit.aio.side_effect = result_commit
             process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version=None)
             with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "Path", lambda _: Path(root)), \
+                 patch.object(worker_module, "JOBS", Path(root)), \
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
                 result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
                     SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
@@ -391,11 +396,11 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             (Path(root) / "job.started.json").write_text("{}")
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "user", "results", "output")}
+                       for key in ("environment", "input", "models", "data", "output")}
             process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version=None)
             generate = AsyncMock()
             with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "Path", lambda _: Path(root)), \
+                 patch.object(worker_module, "JOBS", Path(root)), \
                  patch.object(worker_module, "generate", generate):
                 result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
                     SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
@@ -403,14 +408,30 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             generate.assert_not_awaited()
             process.start.assert_not_awaited()
 
+    async def test_output_commit_failure_does_not_publish_completion(self):
+        with tempfile.TemporaryDirectory() as root:
+            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
+                       for key in ("environment", "input", "models", "data", "output")}
+            volumes["output"].commit.aio.side_effect = OSError("output commit failed")
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x,
+                                      start=AsyncMock(), stop=AsyncMock(), version=None)
+            with patch.object(worker_module, "process", process), \
+                 patch.object(worker_module, "JOBS", Path(root)), \
+                 patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
+                with self.assertRaisesRegex(OSError, "output commit failed"):
+                    await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
+                        SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
+            self.assertTrue((Path(root) / "job.started.json").exists())
+            self.assertFalse((Path(root) / "job.json").exists())
+
     async def test_warm_worker_skips_immutable_environment_and_closes_mapped_files(self):
         with tempfile.TemporaryDirectory() as root:
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "user", "results", "output")}
+                       for key in ("environment", "input", "models", "data", "output")}
             volumes["models"].reload.aio.side_effect = [RuntimeError("there are open files preventing the operation"), None]
             process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version="base")
             with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "Path", lambda _: Path(root)), \
+                 patch.object(worker_module, "JOBS", Path(root)), \
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
                 result = await worker_module.run_worker({"id": "warm", "environment": "base", "operation": "generate"},
                     SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)

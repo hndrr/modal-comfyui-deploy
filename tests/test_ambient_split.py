@@ -36,8 +36,12 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.commands = SimpleNamespace(put=remote())
         self.volumes = {
             name: SimpleNamespace(commit=remote(), reload=remote())
-            for name in ("input", "output", "user", "models", "state", "results", "environment")
+            for name in ("input", "output", "data", "models", "environment")
         }
+        async def missing_file(_):
+            raise FileNotFoundError
+            yield b""
+        self.volumes["data"].read_file = SimpleNamespace(aio=missing_file)
         self.ui = SimpleNamespace(update_autoscaler=remote())
         self.control = Controller(
             self.worker,
@@ -47,6 +51,7 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.root,
             ui_function=self.ui,
         )
+        self.control.cleanup_storage = AsyncMock()
         self.cancelled = False
         self.cancel_on_upload = False
         self.switch_on_catalog = False

@@ -16,7 +16,7 @@ class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.ui = SimpleNamespace(update_autoscaler=remote())
-        self.volumes = {key: SimpleNamespace(commit=remote()) for key in ('state', 'environment')}
+        self.volumes = {key: SimpleNamespace(commit=remote()) for key in ('data', 'environment')}
         self.control = Controller(None, None, None, self.volumes, Path(self.directory.name),
                                   ui_function=self.ui)
 
@@ -27,7 +27,7 @@ class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
         async def commit():
             order.append(('commit', None))
         self.ui.update_autoscaler.aio.side_effect = scale
-        self.volumes['state'].commit.aio.side_effect = commit
+        self.volumes['data'].commit.aio.side_effect = commit
         job = self.control.journal.enqueue({'prompt': {'1': {}}})
         await self.control.persist()
         self.assertEqual(order, [('scale', 1), ('commit', None)])
@@ -43,7 +43,7 @@ class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
         self.ui.update_autoscaler.aio.side_effect = RuntimeError('unavailable')
         with self.assertRaises(RuntimeError):
             await self.control.persist()
-        self.volumes['state'].commit.aio.assert_not_awaited()
+        self.volumes['data'].commit.aio.assert_not_awaited()
         self.assertFalse(self.control.journal.path.exists())
 
     async def test_recovered_running_job_keeps_cpu_without_resubmission(self):

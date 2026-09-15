@@ -22,12 +22,17 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ## 保存先
 
 - モデル・入力・出力は既存のVolumeを利用。
-- ユーザーデータは初回に `comfy-user-data` から `comfy-split-user-data` へ複製。
+- ユーザーデータは初回に `comfy-user-data` から `comfy-split-data/user/` へ複製。
   以後は独立して保存する。検証中の設定変更で従来環境を変更しない。
 - 既存custom nodeを初回に環境Volumeへコピーし、依存を復元する。
 - `comfy-split-environments`: ノード、仮想環境、検証したノード定義。
-- `comfy-split-state`: CPUが書くジョブ受付・状態・環境選択。
-- `comfy-split-results`: GPUが書くジョブごとの実行結果。
+- `comfy-split-data/state/`: CPUが書くジョブ受付・状態・環境選択。
+- `comfy-split-data/jobs/`: GPUが書くジョブごとの実行結果。
+
+Split専用Volumeは環境用とデータ用の2つ。過去の環境は保管せず、利用中・編集中・未完了処理が
+参照する環境と初期環境を残す。終了済みジョブの詳細は7日、一時ファイルは更新から24時間以上
+経過し、履歴や処理から参照されていなければ清掃する。通常の生成物・入力・保存済みワークフローは自動削除しない。
+清掃は起動中に行い、そのためにCPU/GPUを起動しない。[詳細と移行手順](../ambient/docs/split-storage.md)。
 
 GPUは入力のreload後に実行し、出力のcommit後に結果を保存する。
 CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを共有しない。
@@ -93,7 +98,7 @@ comfy-kitchenは上流ComfyUIの指定版を固定依存に含め、イメージ
 GPU呼び出し前にdispatch intentを保存し、呼び出しIDを取得後に保存する。
 CPUが間で停止してIDを記録できなかった場合は `unknown` とし、結果記録を待つ。
 結果不明のジョブは自動再実行せず、後続投入の実行も停止する。
-管理者はModalのGPU呼び出しとresults Volumeを確認してから復旧する。
+管理者はModalのGPU呼び出しと`comfy-split-data/jobs/`を確認してから復旧する。
 ネットワークエラーだけを根拠に再投入しない。
 GPU関数の実行タイムアウトは失敗として確定し、結果待ちのポーリングタイムアウトと区別する。
 

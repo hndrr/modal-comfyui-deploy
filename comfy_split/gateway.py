@@ -15,6 +15,7 @@ import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
+from comfy_split import storage
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
@@ -33,7 +34,7 @@ def manager_path(path):
 
 
 class Controller:
-    def __init__(self, worker, events, commands, volumes, root=Path("/state"), *, ui_function=None):
+    def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None):
         self.worker, self.events, self.commands, self.volumes = worker, events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
@@ -50,6 +51,63 @@ class Controller:
         self.ui_function = ui_function
         self.cpu_pinned = None
         self.cpu_scaling_lock = asyncio.Lock()
+        self.cleanup_due = 0.0
+
+    async def cleanup_storage(self):
+        """Caller holds the controller lock; metadata reads never start a GPU."""
+        if self.background_work() or self.journal.data["mode"] != "split":
+            return
+        if time.monotonic() < self.cleanup_due:
+            return
+        self.cleanup_due = time.monotonic() + 5
+        stats = await self.worker.get_current_stats.aio()
+        if stats.num_total_runners or stats.backlog:
+            return
+        data = self.journal.data
+        environment_volume = self.volumes["environment"]
+        environments = [Path(entry.path).name async for entry in
+                        environment_volume.iterdir.aio("/", recursive=False)]
+        receipts = await storage.remote_receipts(self.volumes["data"])
+        temporary = await storage.remote_files(self.volumes["output"], "/.split-temp")
+        live = ["temp"] if self.cpu.process and self.cpu.process.returncode is None else []
+        plan = storage.cleanup_plan(data, environments, receipts, temporary,
+                                    live_temp_namespaces=live)
+        # A durable tombstone precedes every receipt deletion, including old
+        # validation/legacy sessions that no longer appear in the main journal.
+        self.journal.retire(plan["expired_jobs"])
+        result_statuses = {entry["path"]: entry["result"].get("status") for entry in receipts}
+        for name in plan["receipts"]:
+            job_id = name.removesuffix(".started.json") if name.endswith(".started.json") else name[:-5]
+            data["retired_jobs"].setdefault(job_id, {"id": job_id,
+                "status": result_statuses.get(job_id + ".json") or "failed"})
+        await self.persist()
+        for name in plan["receipts"]:
+            with contextlib.suppress(FileNotFoundError):
+                await self.volumes["data"].remove_file.aio("/jobs/" + name)
+        for version in plan["environments"]:
+            with contextlib.suppress(FileNotFoundError):
+                await environment_volume.remove_file.aio("/" + version, recursive=True)
+        if not data.get("core_copy_pruned") and not plan["unresolved_receipts"]:
+            async for entry in environment_volume.iterdir.aio("/base/comfy", recursive=False):
+                if Path(entry.path).name != "custom_nodes":
+                    await environment_volume.remove_file.aio(entry.path, recursive=True)
+            data["core_copy_pruned"] = True
+            await self.persist()
+        for relative in plan["temporary_files"]:
+            with contextlib.suppress(FileNotFoundError):
+                await self.volumes["output"].remove_file.aio("/.split-temp/" + relative)
+        parents = {parent for relative in plan["temporary_files"] for parent in Path(relative).parents
+                   if parent != Path(".")}
+        for parent in sorted(parents, key=lambda path: len(path.parts), reverse=True):
+            path = "/.split-temp/" + parent.as_posix()
+            with contextlib.suppress(FileNotFoundError):
+                entries = [entry async for entry in self.volumes["output"].iterdir.aio(path, recursive=False)]
+                if not entries:
+                    await self.volumes["output"].remove_file.aio(path, recursive=True)
+        self.cleanup_due = time.monotonic() + 300
+        if any(plan[key] for key in ("expired_jobs", "receipts", "environments", "temporary_files")):
+            log.info("Storage cleanup: %s", {key: len(plan[key]) for key in (
+                "expired_jobs", "receipts", "environments", "temporary_files")})
 
     def background_work(self):
         data = self.journal.data
@@ -122,13 +180,13 @@ class Controller:
         if self.background_work():
             await self.pin_cpu(True)
         self.journal.save()
-        await self.volumes["state"].commit.aio()
+        await self.volumes["data"].commit.aio()
 
     async def start(self, app):
         self.client = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
         await asyncio.to_thread(initialize_environment)
         await self.volumes["environment"].commit.aio()
-        await self.volumes["user"].commit.aio()
+        await self.volumes["data"].commit.aio()
         self.journal.recover()
         candidate = self.journal.data["candidate"]
         session = self.journal.data["session"]
@@ -136,6 +194,11 @@ class Controller:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
+        try:
+            async with self.lock:
+                await self.cleanup_storage()
+        except Exception:
+            log.exception("Storage cleanup deferred; preserving files")
         if self.journal.data["mode"] == "split":
             await self.cpu.start(self.journal.data["environment"], cpu=True)
         self.task = asyncio.create_task(self.dispatch())
@@ -192,10 +255,10 @@ class Controller:
         await self.persist()
 
     async def read_result(self, record):
-        await self.volumes["results"].reload.aio()
-        path = Path("/results") / (record["id"] + ".json")
-        if path.exists():
-            return json.loads(path.read_text())
+        try:
+            return await storage.read_json(self.volumes["data"], "jobs/" + record["id"] + ".json")
+        except FileNotFoundError:
+            pass
         if not record.get("call_id"):
             return None
         call = modal.FunctionCall.from_id(record["call_id"])
@@ -239,6 +302,7 @@ class Controller:
                                "exception_message": str(record.get("error", "Execution failed"))}]]},
             }
         await self.persist()
+        self.cleanup_due = 0
         for event in record.pop("deferred_events", []):
             await self.broadcast(event, record.get("body", {}).get("client_id"))
         if record["status"] == "failed":
@@ -283,6 +347,7 @@ class Controller:
                                 await self.volumes["models"].reload.aio()
                                 await self.spawn(job, "generate")
                                 await self.status()
+                    await self.cleanup_storage()
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
                 raise
@@ -292,13 +357,13 @@ class Controller:
 
     async def end_legacy(self, result):
         await self.volumes["output"].reload.aio()
-        await self.volumes["user"].reload.aio()
+        await self.volumes["data"].reload.aio()
         for job_id, history in result.get("legacy_history", {}).items():
             if job_id not in self.journal.data["jobs"]:
                 self.journal.data["jobs"][job_id] = {
                     "id": job_id, "number": history["prompt"][0],
                     "body": {"prompt": history["prompt"][2]}, "status": "completed",
-                    "history": history, "created_at": time.time(), "error": None}
+                    "history": history, "created_at": time.time(), "finished_at": time.time(), "error": None}
         await self.cpu.start(self.journal.data["environment"], cpu=True)
         self.journal.data.update(mode="split", session=None)
         await self.persist()
@@ -345,6 +410,7 @@ class Controller:
                 continue
             if job["status"] == "queued":
                 job["status"] = "cancelled"
+                job["finished_at"] = time.time()
             elif job["status"] in {"dispatching", "running"}:
                 await self.command(job_id, "interrupt")
         await self.persist()
@@ -358,7 +424,7 @@ class Controller:
             if desired == "legacy":
                 self.journal.assert_idle()
                 await self.volumes["input"].commit.aio()
-                await self.volumes["user"].commit.aio()
+                await self.volumes["data"].commit.aio()
                 await self.cpu.stop()
                 session = {"id": str(uuid.uuid4()), "operation": "legacy",
                            "environment": self.journal.data["environment"],
@@ -478,6 +544,7 @@ class Controller:
             async with self.lock:
                 self.journal.data.update(environment=version, candidate=None, session=None)
                 await self.persist()
+                self.cleanup_due = 0
             await self.broadcast({"type": "split_environment", "data": {"status": "ready"}})
         except Exception as error:
             log.exception("Environment validation failed")
@@ -545,7 +612,7 @@ class Controller:
             if path == "/view" and request.query.get("type") == "temp":
                 # Previously persisted temp references remain readable after the
                 # normal ComfyUI startup cleanup has been restored.
-                root = Path("/data/output/.split-temp/temp").resolve()
+                root = (storage.TEMP_ARCHIVE / "temp").resolve()
                 file = (root / request.query.get("subfolder", "") / request.query.get("filename", "")).resolve()
                 if not file.is_relative_to(root):
                     raise web.HTTPForbidden()
@@ -570,6 +637,7 @@ class Controller:
                     await self.candidate.stop()
                     self.journal.data["candidate"] = None
                     await self.persist()
+                    self.cleanup_due = 0
                 return web.json_response({"status": "discarded"})
             if path == "/split/environment/apply" and request.method == "POST":
                 async with self.lock:
@@ -669,7 +737,7 @@ class Controller:
             # local and can return unsupported, rather than triggering inference.
             async def commit_files():
                 await asyncio.to_thread(self.cpu.archive_temp, legacy_paths=True)
-                for name in ("input", "user", "output"):
+                for name in ("input", "data", "output"):
                     await self.volumes[name].commit.aio()
             return await proxy(request, self.client, self.cpu.url,
                 before_response=commit_files if request.method in {"POST", "PUT", "DELETE"} else None)
