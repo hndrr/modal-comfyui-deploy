@@ -14,6 +14,7 @@ from ambient.processing import run_job
 from ambient.readiness import check_comfyui, describe_modes
 from ambient.service import JobService
 from ambient.storage import AmbientStorage
+from ambient.models import references
 
 app = modal.App("comfyui-ambient")
 BASE = Path(__file__).parent
@@ -109,7 +110,7 @@ class FastH3:
             self.engine.close()
 
 
-def generate_h3(request, image, source, cancelled, progress):
+def generate_comfy(request, image, source, cancelled, progress):
     from ambient import comfy
 
     headers = {}
@@ -160,7 +161,11 @@ def generate_fasth3(request, image, source, cancelled, progress):
     secrets=[configuration],
 )
 def process_job(job_id: str):
-    run_job(job_id, store(), storage(), {"h3": generate_h3, "fasth3": generate_fasth3})
+    run_job(job_id, store(), storage(), {
+        ("h3", "comfyui"): generate_comfy,
+        ("fasth3", "comfyui"): generate_comfy,
+        ("fasth3", "fastvideo"): generate_fasth3,
+    })
 
 
 @app.function(image=cpu_image, min_containers=0, max_containers=1, secrets=[configuration])
@@ -176,13 +181,16 @@ def api():
         try:
             modal.FunctionCall.from_id(call_id).get(timeout=0)
             return "Worker exited before publishing its result; inspect Modal logs."
+        except modal.exception.FunctionTimeoutError:
+            return "Worker execution timed out; inspect Modal logs."
         except modal.exception.TimeoutError:
             return None
         except Exception as error:
             return f"Worker terminated: {type(error).__name__}"
 
     service = JobService(
-        store(), lambda job_id: process_job.spawn(job_id).object_id, reconcile=reconcile
+        store(), lambda job_id: process_job.spawn(job_id).object_id, reconcile=reconcile,
+        reference=lambda req: references(req["mode"], req["backend"], MODEL_REVISION),
     )
     return create_api(service, modes, comfyapp.input_volume, comfyapp.output_volume)
 
@@ -207,8 +215,10 @@ def prepare_fasth3(revision: str = FAST_MODEL_REVISION):
         "revision": revision,
         "fastvideo": FASTVIDEO_REF,
         "gpuValidated": False,
+        "references": references("fasth3", "fastvideo", revision),
     }
     store().put("prepared:fasth3", record)
+    store().put("prepared:fasth3:fastvideo", record)
     return record
 
 
@@ -221,13 +231,25 @@ def cleanup():
     cleanup_jobs(store(), storage())
 
 
-@app.function(image=cpu_image, timeout=300, secrets=[configuration])
-def check_h3():
+def check_comfy_mode(mode):
     """Read splitapp's CPU node/model inventory without invoking its GPU worker."""
     headers = {
         "Modal-Key": os.environ.get("MODAL_PROXY_KEY", ""),
         "Modal-Secret": os.environ.get("MODAL_PROXY_SECRET", ""),
     }
-    record = asyncio.run(check_comfyui(os.environ["AMBIENT_COMFYUI_URL"], headers))
-    store().put("prepared:h3", record)
+    record = asyncio.run(check_comfyui(os.environ["AMBIENT_COMFYUI_URL"], headers, mode))
+    store().put(f"prepared:{mode}:comfyui", record)
+    if mode == "h3":
+        store().put("prepared:h3", record)
     return record
+
+
+@app.function(image=cpu_image, timeout=300, secrets=[configuration])
+def check_comfy(mode: str = "h3"):
+    return check_comfy_mode(mode)
+
+
+@app.function(image=cpu_image, timeout=300, secrets=[configuration])
+def check_h3():
+    """Compatibility entry point for the original CPU inventory check."""
+    return check_comfy_mode("h3")

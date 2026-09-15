@@ -2,81 +2,56 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
-import time
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ambient.urls import validate_endpoint
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError("Backend redirects are not allowed; configure the final HTTPS endpoint")
+from ambient.client import Client, save_request
+from ambient.cli import progress
+from ambient.contracts import DEFAULT_BACKENDS, validate_request
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["h3", "fasth3"], required=True)
+    parser.add_argument("--backend", choices=["comfyui", "fastvideo"])
     parser.add_argument("--clips", type=int, default=3)
     parser.add_argument("--output", default="ambient-smoke")
     args = parser.parse_args()
     if not 1 <= args.clips <= 10:
         parser.error("--clips must be between 1 and 10")
-    base = validate_endpoint(os.environ["AMBIENT_BACKEND_URL"])
-    headers = {
-        "Modal-Key": os.environ["MODAL_PROXY_KEY"],
-        "Modal-Secret": os.environ["MODAL_PROXY_SECRET"],
-    }
-    opener = build_opener(NoRedirect)
-
-    def call(path, data=None):
-        req = Request(
-            base + path,
-            data=json.dumps(data).encode() if data else None,
-            headers={**headers, "Content-Type": "application/json"},
-        )
-        with opener.open(req, timeout=120) as response:
-            return json.load(response)
-
+    template = validate_request(dict(
+        requestId=str(uuid4()), mode=args.mode,
+        backend=args.backend or DEFAULT_BACKENDS[args.mode],
+        prompt="A quiet sunlit room with curtains moving gently in a breeze. A still camera, continuous shot, no cuts.",
+        sound="Continuous room tone, soft breeze and distant leaves, sustained ambient tone, no speech, no percussion.",
+        seed=42, resolution="preview",
+    ))
+    client = Client.from_env()
     parent = None
     directory = Path(args.output)
     directory.mkdir(parents=True, exist_ok=True)
     for index in range(args.clips):
-        req = dict(
-            requestId=str(uuid4()),
-            mode=args.mode,
-            prompt="A quiet sunlit room with curtains moving gently in a breeze. A still camera, continuous shot, no cuts.",
-            sound="Continuous room tone, soft breeze and distant leaves, sustained ambient tone, no speech, no percussion.",
-            seed=42 + index,
-            resolution="preview",
-        )
+        req = {**template, "requestId": str(uuid4()), "seed": 42 + index}
         if parent and args.mode == "h3":
             req["parentClipId"] = parent
-        job = call("/jobs", req)
-        deadline = time.monotonic() + 3600
-        while job["status"] not in ("completed", "failed", "cancelled"):
-            if time.monotonic() > deadline:
-                raise TimeoutError(f"Inspect job {job['id']}; do not re-submit")
-            time.sleep(3)
-            job = call("/jobs/" + job["id"])
-            print(job["id"], job.get("stage", job["status"]))
-        if job["status"] != "completed" or not job["clip"]["hasAudio"]:
-            raise RuntimeError(job)
-        with opener.open(
-            Request(base + "/clips/" + job["id"], headers=headers), timeout=120
-        ) as response:
-            (directory / f"{index + 1:02}-{job['id']}.mp4").write_bytes(response.read())
-        (directory / f"{index + 1:02}.json").write_text(
-            json.dumps({"request": req, "result": job}, indent=2)
-        )
+        saved = save_request(req, directory)
+        print(f"Request {req['requestId']} saved to {saved}", flush=True)
+        try:
+            job = client.wait(client.submit(req), progress=progress)
+            if job["status"] != "completed" or not job["clip"]["hasAudio"]:
+                raise RuntimeError(job)
+            path = client.download(job["id"], directory, job)
+            path.replace(directory / f"{index + 1:02}-{job['id']}.mp4")
+            (directory / f"{index + 1:02}.json").write_text(
+                json.dumps({"request": req, "result": job}, indent=2) + "\n"
+            )
+        except KeyboardInterrupt:
+            print(f"Cancel response: {client.cancel(req['requestId'])}", file=sys.stderr)
+            raise
         parent = job["id"]
-    print(
-        f"Saved {args.clips} native audio/video clips to {directory}. Listen and inspect the joins."
-    )
+    print(f"Saved {args.clips} native audio/video clips to {directory}. Listen and inspect the joins.")
 
 
 if __name__ == "__main__":

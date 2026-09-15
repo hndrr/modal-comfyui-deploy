@@ -73,7 +73,7 @@ image = (
         f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}" "{FLASH_ATTN_WHEEL_URL}" {PREBUILT_WHEEL_DIR}/*.whl',
         "python -m pip freeze > /opt/split-base-requirements.txt",
         "python -c 'import importlib.metadata as m; from pathlib import Path; "
-        "names=[\"torch\",\"torchvision\",\"torchaudio\",\"xformers\",\"flash-attn\",\"sageattention\",\"comfyui-frontend-package\",\"comfyui-manager\"]; "
+        "names=[\"torch\",\"torchvision\",\"torchaudio\",\"xformers\",\"flash-attn\",\"sageattention\",\"comfyui-frontend-package\",\"comfyui-manager\",\"comfy-kitchen\"]; "
         "Path(\"/opt/split-constraints.txt\").write_text(\"\\n\".join(n+\"==\"+m.version(n) for n in names)+\"\\n\")'",
     )
     .env({"SPLIT_APP": APP_NAME, "SPLIT_VOLUMES": json.dumps(VOLUME_NAMES),
@@ -87,6 +87,7 @@ image = (
                    copy=True, ignore=["**/__pycache__/**", "**/*.pyc"])
     .add_local_dir("comfy_split", "/opt/split/comfy_split", copy=True,
                    ignore=["**/__pycache__/**", "**/*.pyc"])
+    .run_commands("python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt")
 )
 app = modal.App(APP_NAME)
 

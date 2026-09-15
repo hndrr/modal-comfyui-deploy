@@ -115,6 +115,7 @@ class ComfyProcess:
         self.role, self.port = role, port
         self.process = None
         self.version = None
+        self.dependencies = {}
         self.root = Path("/tmp") / ("split-comfy-" + role)
         self.log = Path("/tmp") / ("split-comfy-" + role + ".log")
         self.temp_root = self.root / "temporary"
@@ -155,6 +156,7 @@ class ComfyProcess:
                 await self.process.wait()
         self.process = None
         self.version = None
+        self.dependencies = {}
 
     async def start(self, version, *, cpu=False, manager=False):
         if self.version == version and self.process and self.process.returncode is None:
@@ -242,6 +244,7 @@ class ComfyProcess:
                                 if cpu and not metadata.get("cpu_guard"):
                                     raise RuntimeError("CPU execution guard did not load")
                             self.version = version
+                            self.dependencies = metadata.get("dependencies", {})
                             print(json.dumps({"event": "comfy_ready", "role": self.role,
                                               "seconds": time.monotonic() - started}))
                             return

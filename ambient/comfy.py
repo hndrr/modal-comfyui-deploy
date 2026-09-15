@@ -7,7 +7,7 @@ import time
 from uuid import uuid4
 
 from .h3 import workflow
-from .split import SPLIT_HEADERS, check_split
+from .split import SPLIT_HEADERS, check_dependencies, check_split
 from .urls import redirect_guard, validate_endpoint
 
 
@@ -43,7 +43,8 @@ async def generate(
         timeout=aiohttp.ClientTimeout(total=120),
         trace_configs=[redirect_guard()],
     ) as session:
-        await check_split(session, base)
+        state = await check_split(session, base)
+        check_dependencies(state, request.get("mode", "h3"))
 
         async def call(method, path, **kwargs):
             async with session.request(method, base.rstrip("/") + path, **kwargs) as response:
@@ -97,7 +98,7 @@ async def generate(
                     },
                 )
                 if submitted.get("node_errors"):
-                    raise RuntimeError(f"H3 workflow validation failed: {submitted['node_errors']}")
+                    raise RuntimeError(f"ComfyUI workflow validation failed: {submitted['node_errors']}")
                 prompt_id = submitted["prompt_id"]
                 progress("ComfyUI queued")
                 deadline = time.monotonic() + timeout

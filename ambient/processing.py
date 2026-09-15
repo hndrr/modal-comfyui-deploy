@@ -5,17 +5,18 @@ from pathlib import Path
 import tempfile
 
 from .storage import AmbientStorage
+from .contracts import backend_for
 
 
 Generator = Callable[[dict, Path | None, Path, Callable[[], bool], Callable[[str], None]], None]
 
 
 def run_job(
-    job_id: str, jobs, storage: AmbientStorage, generators: Mapping[str, Generator]
+    job_id: str, jobs, storage: AmbientStorage, generators: Mapping[tuple[str, str], Generator]
 ) -> None:
     """Generators write a source video; storage encodes and commits both artifacts."""
     job = jobs[job_id]
-    request = job["request"]
+    request = {**job["request"], "backend": backend_for(job["request"])}
 
     def cancelled():
         return bool(jobs.get("cancel:" + job_id))
@@ -32,7 +33,9 @@ def run_job(
             root = Path(directory)
             source = root / "generated.mp4"
             image = storage.prepare_anchor(request, root)
-            generators[request["mode"]](request, image, source, cancelled, progress)
+            generators[(request["mode"], request["backend"])](
+                request, image, source, cancelled, progress
+            )
             if cancelled():
                 return
             progress("Encoding video and audio")
