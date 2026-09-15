@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
-import time
 
 import modal
-import comfyapp  # Reuse this repo's dotenv resolution, GPU profile and Volume definitions.
-from ambient.config import FASTVIDEO_REF, FAST_MODEL, MODEL_ROOT, FAST_MODEL_REVISION
+import comfyapp  # Reuse this repo's dotenv resolution, timeout and Volume definitions.
 from ambient.maintenance import cleanup_jobs
 from ambient.processing import run_job
 from ambient.readiness import check_comfyui, describe_modes
@@ -21,12 +18,6 @@ from ambient.models import references
 app = modal.App("comfyui-ambient")
 BASE = Path(__file__).parent
 COMFY_URL = os.environ.get("AMBIENT_COMFYUI_URL", "").rstrip("/")
-MODEL_REVISION = os.environ.get("AMBIENT_FASTH3_MODEL_REVISION", "")
-if MODEL_REVISION and (
-    len(MODEL_REVISION) != 40 or any(c not in "0123456789abcdef" for c in MODEL_REVISION)
-):
-    raise ValueError("AMBIENT_FASTH3_MODEL_REVISION must be a full Hugging Face commit SHA")
-
 cpu_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg")
@@ -36,28 +27,7 @@ cpu_image = (
         "python-multipart==0.0.22",
         "aiohttp==3.12.15",
         "pillow==11.3.0",
-        "huggingface_hub==0.34.4",
         "python-dotenv==1.1.1",
-    )
-    .add_local_file(BASE / "comfyapp.py", remote_path="/root/comfyapp.py")
-    .add_local_dir(BASE / "ambient", remote_path="/root/ambient",
-                   ignore=["docs/**", "**/__pycache__/**", "**/*.pyc"])
-)
-
-# Separate dependencies: FastVideo cannot replace the shared ComfyUI's torch stack.
-fast_image = (
-    modal.Image.from_registry("nvidia/cuda:13.0.0-devel-ubuntu24.04", add_python="3.12")
-    .apt_install("git", "ffmpeg", "build-essential", "libgl1", "libglib2.0-0")
-    .pip_install("uv", "python-dotenv==1.1.1")
-    .run_commands(
-        f"git clone https://github.com/hao-ai-lab/FastVideo.git /opt/FastVideo && cd /opt/FastVideo && git checkout {FASTVIDEO_REF}",
-        'cd /opt/FastVideo && UV_TORCH_BACKEND=cu130 uv pip install --system --no-sources-package fastvideo-kernel -e ".[fasth3]"',
-    )
-    .env(
-        {
-            "PYTHONPATH": "/opt/FastVideo:/root",
-            "FASTVIDEO_ATTENTION_BACKEND": "VIDEO_SPARSE_ATTN_H3",
-        }
     )
     .add_local_file(BASE / "comfyapp.py", remote_path="/root/comfyapp.py")
     .add_local_dir(BASE / "ambient", remote_path="/root/ambient",
@@ -69,7 +39,6 @@ configuration = modal.Secret.from_dict(
         "AMBIENT_COMFYUI_URL": COMFY_URL,
         "MODAL_PROXY_KEY": os.environ.get("MODAL_PROXY_KEY", ""),
         "MODAL_PROXY_SECRET": os.environ.get("MODAL_PROXY_SECRET", ""),
-        "AMBIENT_FASTH3_MODEL_REVISION": MODEL_REVISION,
     }
 )
 
@@ -78,57 +47,8 @@ def store():
     return modal.Dict.from_name("comfyui-ambient-jobs", create_if_missing=True)
 
 
-def is_cancelled(job_id):
-    return bool(store().get("cancel:" + job_id))
-
-
 def storage():
     return AmbientStorage(comfyapp.input_volume, comfyapp.output_volume)
-
-
-@app.cls(
-    image=fast_image,
-    gpu=str(comfyapp.GPU_PROFILE["modal_gpu"]),
-    memory=196608,
-    timeout=comfyapp.FUNCTION_TIMEOUT,
-    scaledown_window=comfyapp.SCALEDOWN_WINDOW,
-    min_containers=0,
-    max_containers=1,
-    volumes={"/models": comfyapp.volume},
-    secrets=[configuration],
-)
-class FastH3:
-    @modal.enter()
-    def load(self):
-        started = time.monotonic()
-        print(json.dumps({"event": "fasth3_loading", "at": time.time()}), flush=True)
-        from ambient.fasth3 import FastH3Engine
-
-        self.engine = FastH3Engine(os.environ["AMBIENT_FASTH3_MODEL_REVISION"])
-        print(json.dumps({"event": "fasth3_ready", "at": time.time(),
-                          "seconds": time.monotonic() - started}), flush=True)
-
-    @modal.method()
-    def generate(self, request):
-        if is_cancelled(request["requestId"]):
-            return None
-        started = time.monotonic()
-        print(json.dumps({"event": "fasth3_started", "id": request["requestId"],
-                          "at": time.time()}), flush=True)
-        status = "failed"
-        try:
-            result = self.engine.generate(request)
-            status = "completed"
-            return result
-        finally:
-            print(json.dumps({"event": "fasth3_finished", "id": request["requestId"],
-                              "at": time.time(), "seconds": time.monotonic() - started,
-                              "status": status}), flush=True)
-
-    @modal.exit()
-    def unload(self):
-        if hasattr(self, "engine"):
-            self.engine.close()
 
 
 def generate_comfy(request, image, source, cancelled, progress):
@@ -154,26 +74,6 @@ def generate_comfy(request, image, source, cancelled, progress):
     )
 
 
-def generate_fasth3(request, image, source, cancelled, progress):
-    if cancelled():
-        return
-    progress("FastH3 sampling")
-    call = FastH3().generate.spawn(request)
-    store().put("fast-call:" + request["requestId"], call.object_id)
-    while not cancelled():
-        try:
-            result = call.get(timeout=5)
-        except modal.exception.FunctionTimeoutError:
-            # A worker timeout is terminal; it is not a poll with no result yet.
-            raise
-        except (TimeoutError, modal.exception.TimeoutError):
-            continue
-        if result is not None and not cancelled():
-            source.write_bytes(result)
-        return
-    call.cancel()
-
-
 @app.function(
     image=cpu_image,
     timeout=comfyapp.FUNCTION_TIMEOUT,
@@ -185,7 +85,6 @@ def process_job(job_id: str):
     run_job(job_id, store(), storage(), {
         ("h3", "comfyui"): generate_comfy,
         ("fasth3", "comfyui"): generate_comfy,
-        ("fasth3", "fastvideo"): generate_fasth3,
     })
 
 
@@ -196,7 +95,7 @@ def api():
     from ambient.api import create_api
 
     def modes():
-        return describe_modes(store(), COMFY_URL, MODEL_REVISION)
+        return describe_modes(store(), COMFY_URL)
 
     def reconcile(call_id):
         try:
@@ -211,36 +110,9 @@ def api():
 
     service = JobService(
         store(), lambda job_id: process_job.spawn(job_id).object_id, reconcile=reconcile,
-        reference=lambda req: references(req["mode"], req["backend"], MODEL_REVISION),
+        reference=lambda req: references(req["mode"], req["backend"]),
     )
     return create_api(service, modes, comfyapp.input_volume, comfyapp.output_volume)
-
-
-@app.function(
-    image=cpu_image,
-    timeout=86400,
-    max_containers=1,
-    volumes={"/models": comfyapp.volume},
-    secrets=[modal.Secret.from_name("huggingface-secret")],
-)
-def prepare_fasth3(revision: str = FAST_MODEL_REVISION):
-    from huggingface_hub import snapshot_download
-
-    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
-        raise ValueError("Pass a full Hugging Face commit SHA")
-    target = Path(MODEL_ROOT) / revision
-    snapshot_download(FAST_MODEL, revision=revision, local_dir=target)
-    comfyapp.volume.commit()
-    record = {
-        "model": FAST_MODEL,
-        "revision": revision,
-        "fastvideo": FASTVIDEO_REF,
-        "gpuValidated": False,
-        "references": references("fasth3", "fastvideo", revision),
-    }
-    store().put("prepared:fasth3", record)
-    store().put("prepared:fasth3:fastvideo", record)
-    return record
 
 
 @app.function(

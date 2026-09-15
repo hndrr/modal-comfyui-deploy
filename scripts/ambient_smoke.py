@@ -15,7 +15,7 @@ from ambient.contracts import DEFAULT_BACKENDS, validate_request
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["h3", "fasth3"], required=True)
-    parser.add_argument("--backend", choices=["comfyui", "fastvideo"])
+    parser.add_argument("--backend", choices=["comfyui"])
     parser.add_argument("--clips", type=int, default=3)
     parser.add_argument("--output", default="ambient-smoke")
     args = parser.parse_args()

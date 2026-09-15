@@ -21,7 +21,7 @@ from test_ambient import Store, request
 
 
 class BackendContractTest(unittest.TestCase):
-    def test_supported_matrix_and_legacy_defaults(self):
+    def test_supported_matrix_and_comfyui_defaults(self):
         for mode, backend in ROUTES:
             self.assertEqual(
                 validate_request(request(mode=mode, backend=backend))["backend"],
@@ -39,10 +39,11 @@ class BackendContractTest(unittest.TestCase):
                         )
         self.assertEqual(validate_request(request())["backend"], "comfyui")
         self.assertEqual(
-            validate_request(request(mode="fasth3"))["backend"], "fastvideo"
+            validate_request(request(mode="fasth3"))["backend"], "comfyui"
         )
         for mode, backend in (
             ("h3", "fastvideo"),
+            ("fasth3", "fastvideo"),
             ("fasth3", "unknown"),
             ("h3", None),
             ("h3", []),
@@ -67,11 +68,15 @@ class BackendContractTest(unittest.TestCase):
                 "fingerprint": fingerprint(old),
             }
             before = deepcopy(store[job_id])
-            self.assertEqual(service.submit(old)["backend"], default)
-            self.assertEqual(service.submit({**old, "backend": default})["id"], job_id)
+            self.assertEqual(service.get(job_id)["backend"], default)
             if mode == "fasth3":
                 with self.assertRaises(Conflict):
+                    service.submit(old)
+                with self.assertRaises(Conflict):
                     service.submit({**old, "backend": "comfyui"})
+            else:
+                self.assertEqual(service.submit(old)["backend"], default)
+                self.assertEqual(service.submit({**old, "backend": default})["id"], job_id)
             self.assertEqual(store[job_id], before)
             spawn.assert_not_called()
 
@@ -85,7 +90,7 @@ class BackendContractTest(unittest.TestCase):
         self.assertEqual(result["backend"], "comfyui")
         self.assertEqual(result["references"]["models"], comfy_assets("fasth3"))
         self.assertEqual(service.submit(req), result)
-        with self.assertRaises(Conflict):
+        with self.assertRaises(ValueError):
             service.submit({**req, "backend": "fastvideo"})
         spawn.assert_called_once()
 
@@ -182,9 +187,9 @@ class PreparationTest(unittest.TestCase):
             "prepared:h3": {"url": url, "backend": "split"},
             "prepared:fasth3": {"revision": revision},
         }
-        modes = describe_modes(jobs, url, revision)
-        self.assertTrue(modes["fasth3"]["ready"])
-        self.assertFalse(modes["fasth3"]["backends"]["comfyui"]["ready"])
+        modes = describe_modes(jobs, url)
+        self.assertFalse(modes["fasth3"]["ready"])
+        self.assertNotIn("fastvideo", modes["fasth3"]["backends"])
         record = {
             "url": url,
             "backend": "split",
@@ -192,15 +197,15 @@ class PreparationTest(unittest.TestCase):
             "gpuValidated": False,
         }
         jobs["prepared:fasth3:comfyui"] = record
-        modes = describe_modes(jobs, url, "")
-        self.assertFalse(modes["fasth3"]["ready"])
+        modes = describe_modes(jobs, url)
+        self.assertTrue(modes["fasth3"]["ready"])
         self.assertTrue(modes["fasth3"]["backends"]["comfyui"]["ready"])
         self.assertFalse(
             modes["fasth3"]["backends"]["comfyui"]["validation"]["gpuValidated"]
         )
         record["references"]["models"][0]["revision"] = "obsolete"
         self.assertFalse(
-            describe_modes(jobs, url, revision)["fasth3"]["backends"]["comfyui"][
+            describe_modes(jobs, url)["fasth3"]["backends"]["comfyui"][
                 "ready"
             ]
         )

@@ -10,8 +10,8 @@ from .split import SPLIT_HEADERS, check_dependencies, check_split
 from .urls import redirect_guard, validate_endpoint
 
 
-def describe_modes(jobs, comfy_url: str, model_revision: str) -> dict:
-    """Read saved preparation results without contacting either generation backend."""
+def describe_modes(jobs, comfy_url: str) -> dict:
+    """Read saved preparation results without contacting ComfyUI."""
     modes = {}
     for mode in DEFAULT_BACKENDS:
         record = jobs.get(f"prepared:{mode}:comfyui")
@@ -37,26 +37,6 @@ def describe_modes(jobs, comfy_url: str, model_revision: str) -> dict:
             "validation": record,
         }
         backends = {"comfyui": comfy}
-        if mode == "fasth3":
-            fast_record = jobs.get("prepared:fasth3:fastvideo")
-            legacy_fast = fast_record is None
-            if legacy_fast:
-                fast_record = jobs.get("prepared:fasth3")
-            fast_record = fast_record or {}
-            fast_ready = (
-                bool(model_revision) and fast_record.get("revision") == model_revision
-            )
-            if not legacy_fast:
-                fast_ready = fast_ready and fast_record.get("references") == references(
-                    mode, "fastvideo", model_revision
-                )
-            backends["fastvideo"] = {
-                "ready": fast_ready,
-                "reason": None
-                if fast_ready
-                else "Run prepare_fasth3 with the pinned revision and redeploy",
-                "validation": fast_record,
-            }
         default = DEFAULT_BACKENDS[mode]
         modes[mode] = {
             **backends[default],

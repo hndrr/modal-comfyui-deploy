@@ -8,12 +8,13 @@ RESOLUTIONS = {"preview": (832, 480), "quality": (1344, 768)}
 FRAMES = 124
 FPS = 24
 TERMINAL = {"completed", "failed", "cancelled"}
-DEFAULT_BACKENDS = {"h3": "comfyui", "fasth3": "fastvideo"}
-ROUTES = (("h3", "comfyui"), ("fasth3", "comfyui"), ("fasth3", "fastvideo"))
+DEFAULT_BACKENDS = {"h3": "comfyui", "fasth3": "comfyui"}
+ROUTES = (("h3", "comfyui"), ("fasth3", "comfyui"))
 
 
-def backend_for(request: dict) -> str:
-    return request.get("backend", DEFAULT_BACKENDS[request["mode"]])
+def stored_backend(request: dict) -> str:
+    """Backend-less saved FastH3 jobs predate ComfyUI support; never reinterpret them."""
+    return request.get("backend", "fastvideo" if request["mode"] == "fasth3" else "comfyui")
 
 
 def identifier(value: object) -> str:
@@ -39,7 +40,7 @@ def validate_request(data: object) -> dict:
         out[key] = value.strip()
     if data.get("mode") not in ("h3", "fasth3"):
         raise ValueError("Invalid generation mode")
-    backend = backend_for(data)
+    backend = data.get("backend", DEFAULT_BACKENDS[data["mode"]])
     if (data["mode"], backend) not in ROUTES:
         raise ValueError("Unsupported generation mode/backend combination")
     if not isinstance(data.get("resolution"), str) or data.get("resolution") not in RESOLUTIONS:
@@ -70,7 +71,7 @@ def prompt_text(request: dict) -> str:
 def public_job(job: dict, cancelled: bool = False) -> dict:
     result = {k: job[k] for k in ("id", "status", "stage", "error", "clip", "references") if k in job}
     if "request" in job:
-        result.update(mode=job["request"]["mode"], backend=backend_for(job["request"]))
+        result.update(mode=job["request"]["mode"], backend=stored_backend(job["request"]))
     if cancelled:
         result.update(status="cancelled", stage="Cancelled")
         result.pop("clip", None)

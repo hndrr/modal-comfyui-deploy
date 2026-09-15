@@ -33,7 +33,7 @@ def parser():
         "generate", help="Submit, wait, and save an audio/video clip"
     )
     generate.add_argument("--mode", choices=list(DEFAULT_BACKENDS), required=True)
-    generate.add_argument("--backend", choices=["comfyui", "fastvideo"], required=True)
+    generate.add_argument("--backend", choices=["comfyui"], default="comfyui")
     generate.add_argument("--prompt", required=True)
     generate.add_argument("--sound", required=True)
     generate.add_argument("--seed", type=int, default=42)

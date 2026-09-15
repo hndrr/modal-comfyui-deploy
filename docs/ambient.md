@@ -2,9 +2,11 @@
 
 This repository provides the Modal backend for [Ambient Studio](https://github.com/hndrr/ambient-studio). The standalone frontend owns playback, FX, MIDI controls and the Next.js `/api/ambient` proxy. The former `comfy-stream` Ambient screen and proxy have been removed.
 
-Use `splitapp.py` together with `ambient_app.py`. Splitapp serves the ComfyUI UI and API on CPU and dispatches H3 or FastH3 to its GPU worker only for generation. Ambient provides the CPU job API, clip processing and an optional separate FastVideo GPU worker for FastH3. Both apps reuse the existing authentication and model/input/output Volumes. Deploying or opening the frontend does not download models.
+Use `splitapp.py` together with `ambient_app.py`. Splitapp serves the ComfyUI UI and API on CPU and dispatches H3 or FastH3 to its GPU worker only for generation. Ambient provides the CPU job API and clip processing. Both modes use ComfyUI through Splitapp. Both apps reuse the existing authentication and model/input/output Volumes. Deploying or opening the frontend does not download models.
 
-**Current validation (2026-09-15):** Splitapp and Ambient have been deployed on a single RTX PRO 6000 per engine. H3 produced native audio/video at both resolutions, including three parent-linked preview clips. FastH3 through ComfyUI produced audio/video at both resolutions with the requested INT8 model/VAE and the native VSA sparse producer path. The separate FastVideo snapshot has been downloaded; its GPU qualification was stopped at the user’s request before a GPU was allocated; preparation readiness alone is not GPU qualification. Local tests also cover job lifecycle, retention and failure handling.
+**Current configuration (2026-09-16):** The abandoned FastVideo worker (`FastH3.*`), its GPU image and `prepare_fasth3` snapshot downloader have been removed. Its separate snapshot was already deleted. ComfyUI FastH3 and its INT8 model/VAE remain available through Splitapp.
+
+**GPU validation (2026-09-15):** H3 produced native audio/video at both resolutions on one RTX PRO 6000, including three parent-linked preview clips. FastH3 through ComfyUI produced audio/video at both resolutions with the requested INT8 model/VAE and the native VSA sparse producer path. Local tests also cover job lifecycle, retention and failure handling.
 
 ## Measured ComfyUI runs (2026-09-15)
 
@@ -34,9 +36,7 @@ flowchart LR
     ComfyUI[ComfyUI browser UI] --> Gateway[Splitapp CPU gateway]
     Processor --> Gateway
     Gateway --> H3[Splitapp GPU worker / H3 or FastH3]
-    Processor --> Fast[Ambient GPU worker / FastH3]
     H3 --> Storage[Encode and commit MP4 + final frame]
-    Fast --> Storage
     Storage --> Volumes[Existing Modal Volumes]
     API --> Dict[Modal Dict / job state]
     Processor --> Dict
@@ -54,15 +54,14 @@ flowchart LR
 | `ambient/h3.py` | Native H3 and FastH3 recipes bound to the running server’s node definitions |
 | `ambient/models.py` | Pinned model manifests, checksums and source references |
 | `ambient/client.py`, `ambient/cli.py` | Shared HTTP client and browser-free job commands |
-| `ambient/fasth3.py` | FastVideo model loading, generation and shutdown inside its GPU image |
 | `ambient/media.py` | Audio-required MP4 encoding, metadata inspection and final-frame extraction |
 | `ambient/readiness.py` | Saved capability records and the explicit ComfyUI inventory check |
 | `ambient/urls.py` | Backend URL validation and redirect protection for proxy credentials |
 | `ambient/maintenance.py` | Retention of terminal jobs and Ambient-owned files |
 
-The processor publishes `completed` only after storage has committed both Volumes and cancellation has been checked again. HTTP capability reads use saved records only. The FastVideo library is imported when its engine loads, so CPU-only tests can exercise the processing and storage code without installing GPU dependencies.
+The processor publishes `completed` only after storage has committed both Volumes and cancellation has been checked again. HTTP capability reads use saved records only. Ambient has no GPU image or GPU function; local processing and storage tests do not need GPU dependencies.
 
-In **split mode**, keeping the ComfyUI browser tab open keeps only the CPU UI active. H3 generation from either that UI or Ambient shares the splitapp job queue and GPU worker. After the queue finishes, the GPU can scale to zero even while the UI remains open; CPU and storage usage can continue. Splitapp currently uses `min_containers=0` and a 30-second idle scale-down window. FastH3 through ComfyUI shares that lifecycle; FastH3 through FastVideo has its own GPU lifecycle. Explicit legacy mode keeps a GPU session active, so both Ambient ComfyUI routes reject that mode. See [the split deployment guide](comfyui-split.md) for its other explicit GPU operations, such as environment validation.
+In **split mode**, keeping the ComfyUI browser tab open keeps only the CPU UI active. H3 and FastH3 generation from either that UI or Ambient share the splitapp job queue and GPU worker. After the queue finishes, the GPU can scale to zero even while the UI remains open; CPU and storage usage can continue. Splitapp currently uses `min_containers=0` and a 30-second idle scale-down window. Explicit legacy mode keeps a GPU session active, so both Ambient ComfyUI routes reject that mode. See [the split deployment guide](comfyui-split.md) for its other explicit GPU operations, such as environment validation.
 
 ## Configuration
 
@@ -72,7 +71,6 @@ Use the repository's `.env` and pinned `.modal-profile`. Do not put credentials 
 AMBIENT_COMFYUI_URL=https://YOUR-WORKSPACE--comfyui-split-ui.modal.run
 MODAL_PROXY_KEY=...
 MODAL_PROXY_SECRET=...
-AMBIENT_FASTH3_MODEL_REVISION=5ea076f35b84da4c3c82217112fa733d8eea2ae1
 ```
 
 Use the actual `ui` URL printed when deploying `splitapp.py`. The standard `comfyapp.py` endpoint is not the H3 backend for this configuration, and deploying it is unnecessary. `ambient_app.py` still imports `comfyapp.py` for shared configuration and Volume definitions; importing it does not deploy that app.
@@ -81,7 +79,7 @@ The frontend's `.env.local` needs `AMBIENT_BACKEND_URL` pointing to the **Ambien
 
 Configured backend URLs must use HTTPS and a valid host, without embedded credentials, query strings or fragments. Requests reject redirects so custom Modal auth headers cannot be forwarded to another endpoint. The H3 adapter and inventory check permit HTTP to localhost/loopback only for credential-free local tests.
 
-`GPU_PROFILE`, function timeout and scale-down behavior are reused from `comfyapp.py`. FastVideo has its own CUDA 13 image and uses one GPU, text encoder/VAE offloading, VSA-H3 with the Triton kernel and no FA4. FastVideo code is fixed at `556ac7088e7b4750806d277d31e0db6cd25a5238`. Dependencies follow that revision's `[fasth3]` installation recipe. GPU memory suitability and dependency/image build must still be validated on the chosen profile; the upstream speed claim uses four B200s and is not a promise for this single-GPU configuration.
+Ambient reuses the function timeout from `comfyapp.py`. GPU resources and lifecycle are configured in Splitapp; Ambient itself runs on CPU only.
 
 ## Explicit provisioning (incurs cloud usage; not automatic)
 
@@ -93,23 +91,20 @@ When ready to use Modal again:
 2. Deploy the split UI and GPU worker:
    `./scripts/modal.sh deploy splitapp.py`.
    Set `AMBIENT_COMFYUI_URL` to its CPU `ui` endpoint and keep it in split mode. Deploy the gateway from this branch to include the mode guard used by Ambient.
-3. If using FastVideo, prepare its separate snapshot:
-   `./scripts/modal.sh run ambient_app.py::prepare_fasth3`.
-   All component files, tokenizers and configs go to `/models/ambient-fasth3/<revision>` on `comfy-model`. The model uses `modular_model_index.json`. Downloads finish and commit before readiness is recorded.
-4. Deploy the new API/worker:
+3. Deploy the API/processor:
    `./scripts/modal.sh deploy ambient_app.py`.
-5. Check the split CPU gateway's native node/model inventory:
+4. Check the split CPU gateway's native node/model inventory:
    `./scripts/modal.sh run ambient_app.py::check_h3`.
-   This can wake the split CPU UI, but does not invoke its GPU worker. It first checks `/modal-control/v1/status` and rejects legacy mode, environment transitions and unresolved jobs. Capabilities report the inventory result, model snapshot readiness and separate `gpuValidated: false` status. API capability reads themselves use Dict only. Old preparation records for the standard ComfyUI endpoint must be replaced by this check.
-6. Run the explicit smoke script for native audio and three parent-linked clips:
+   This can wake the split CPU UI, but does not invoke its GPU worker. It first checks `/modal-control/v1/status` and rejects legacy mode, environment transitions and unresolved jobs. Capabilities report the inventory result and separate `gpuValidated: false` status. API capability reads themselves use Dict only. Old preparation records for the standard ComfyUI endpoint must be replaced by this check.
+5. Run the explicit smoke script for native audio and three parent-linked clips:
    `python scripts/ambient_smoke.py --mode h3 --clips 3`, then `--mode fasth3 --clips 1`.
    Environment: `AMBIENT_BACKEND_URL`, `MODAL_PROXY_KEY`, `MODAL_PROXY_SECRET`. Downloads are saved locally; listen and visually inspect continuity before qualifying these pins.
 
-Stopping the studio cancels its pending job and closes local resources. For either ComfyUI route, Ambient calls splitapp's `/jobs/<prompt_id>/cancel`: a queued job is removed, and a running job receives an interrupt scoped to its worker. Jobs from other UI clients are unaffected. The GPU is not guaranteed to disappear immediately: interruption must finish and idle scale-down must occur; other queued jobs can keep it busy. The FastVideo route polls its dedicated Modal call every five seconds and cancels that call when cancellation is observed. A worker execution timeout is terminal, not a reason to keep polling. Scale-to-zero remains enabled.
+Stopping the studio cancels its pending job and closes local resources. For either ComfyUI route, Ambient calls splitapp's `/jobs/<prompt_id>/cancel`: a queued job is removed, and a running job receives an interrupt scoped to its worker. Jobs from other UI clients are unaffected. The GPU is not guaranteed to disappear immediately: interruption must finish and idle scale-down must occur; other queued jobs can keep it busy. A processor execution timeout is terminal, not a reason to keep polling. Scale-to-zero remains enabled.
 
-## Select the model and engine from the CLI
+## Select the model from the CLI
 
-The CUI and backend changes are in this repository. Ambient Studio's UI is unchanged. The supported pairs are `h3/comfyui`, `fasth3/comfyui` and `fasth3/fastvideo`; both FastH3 routes are text-to-video-and-audio only. No automatic engine fallback or GPU-profile change occurs.
+The CLI and backend changes are in this repository. Ambient Studio's UI is unchanged. The supported pairs are `h3/comfyui` and `fasth3/comfyui`; FastH3 is text-to-video-and-audio only. Both modes default to ComfyUI. No automatic GPU-profile change occurs.
 
 Install the normal Python dependencies and export `AMBIENT_BACKEND_URL`, `MODAL_PROXY_KEY`, and `MODAL_PROXY_SECRET`. The URL points to the Ambient API. Reading preparation status, an existing job or a completed clip does not start a generation GPU:
 
@@ -120,7 +115,7 @@ python -m ambient.cli cancel JOB_UUID
 python -m ambient.cli download JOB_UUID --output ./ambient-output
 ```
 
-The following command submits a generation job and incurs configured cloud usage when pointed at a deployed backend. Select either engine explicitly:
+The following command submits a generation job and incurs configured cloud usage when pointed at a deployed backend. `--backend comfyui` is optional:
 
 ```sh
 python -m ambient.cli generate --mode fasth3 --backend comfyui \
@@ -128,7 +123,7 @@ python -m ambient.cli generate --mode fasth3 --backend comfyui \
   --seed 42 --resolution preview --output ./ambient-output
 ```
 
-Use `--mode fasth3 --backend fastvideo` for the original FastVideo worker, or `--mode h3 --backend comfyui` for eight-step H3. H3 accepts either `--image ./anchor.png` or `--parent-clip-id JOB_UUID`. Generation defaults to seed 42, preview resolution and a 3600-second wait; use `--timeout` to change the wait.
+Use `--mode h3` for eight-step H3. H3 accepts either `--image ./anchor.png` or `--parent-clip-id JOB_UUID`. Generation defaults to seed 42, preview resolution and a 3600-second wait; use `--timeout` to change the wait.
 
 The CLI prints and saves `JOB_UUID.request.json` **before** posting the job. A timeout or lost response is not permission to generate a fresh ID. Check the original job first. If a resend is needed, use the saved body:
 
@@ -152,31 +147,30 @@ Deploy the updated `splitapp.py` and `ambient_app.py` before using the new route
 - `/models/diffusion_models/minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors`
 - `/models/vae/minimax_h3_video_vae_int8_convrot.safetensors`
 
-Both downloads are SHA-256 checked before replacing shared model files. The Qwen text encoder and FP32 **audio** VAE come from the existing pinned `Comfy-Org/MiniMax-H3` source. The H3 recipe retains its FP16 video VAE and eight-step LoRA; the FastVideo route retains its separate model snapshot.
+Both downloads are SHA-256 checked before replacing shared model files. The Qwen text encoder and FP32 **audio** VAE come from the existing pinned `Comfy-Org/MiniMax-H3` source. The H3 recipe retains its FP16 video VAE and eight-step LoRA. The word `fastvideo` in the diffusion model filename is part of the publisher's name; this file is loaded by ComfyUI and does not require the removed FastVideo runtime.
 
 The FastH3 recipe uses native VSA at 10% keep across all four Euler steps, CFG=1, video/audio shifts 12/3, and the five-point shifted sigma schedule. The native DynamicCombo selection and its nested fields are bound using the running `/object_info`. No ComfyUI execution code is copied or patched.
 
 The INT8 video VAE requires ComfyUI 0.31.0 or later according to its publisher. The current Splitapp reference reports 0.34.0 and pins `comfy-kitchen==0.2.33`, which includes VSA and INT8 ConvRot. The image build checks the upstream kitchen pin after dependency installation; candidate venvs check protected dependencies before activation. The CPU gateway reports the actual interpreter's kitchen version and API presence. FastH3 checks this report during preparation **and before submission**. Existing venvs that shadow the image with an incompatible kitchen version are reported by the CPU gateway and rejected by the FastH3 preflight. Repair them through the split environment workflow; rebuilding the image alone does not prove they changed. These FastH3 checks do not add a global startup block to the CPU UI.
 
-A CPU check does not probe GPU kernel availability. At the later GPU qualification stage, record ComfyUI/kitchen/PyTorch/CUDA versions and GPU type, check `comfy_kitchen.sol_attn_is_available(device)`, and inspect native sparse-attention logs. A run that falls back to dense attention is not a validated VSA run. The two FastH3 routes use different quantization/VAE assets, so timing differences cannot be attributed solely to their engines.
+A CPU check does not probe GPU kernel availability. At GPU qualification, record ComfyUI/kitchen/PyTorch/CUDA versions and GPU type, check `comfy_kitchen.sol_attn_is_available(device)`, and inspect native sparse-attention logs. A run that falls back to dense attention is not a validated VSA run.
 
-`check_comfy --mode h3` checks the original route; `check_h3` remains its compatibility entry point. Existing H3/FastVideo preparation records apply only to their original routes. New records compare their saved source references; an updated recipe requires checking again. Capabilities remain cached and must be refreshed after environment changes at the same URL.
+`check_comfy --mode h3` checks the original route; `check_h3` remains its compatibility entry point. Preparation records compare their saved source references; an updated recipe requires checking again. Capabilities remain cached and must be refreshed after environment changes at the same URL. Old FastVideo preparation records are ignored.
 
 For later GPU smoke tests:
 
 ```sh
 python scripts/ambient_smoke.py --mode h3 --backend comfyui --clips 3
 python scripts/ambient_smoke.py --mode fasth3 --backend comfyui --clips 1
-python scripts/ambient_smoke.py --mode fasth3 --backend fastvideo --clips 1
 ```
 
 ## HTTP contract
 
 All deployed routes require Modal Proxy Auth. The Next.js proxy supplies it server-side.
 
-- `GET /capabilities`: modes, resolutions, 124 frames / 24fps, plus `modes[mode].backends[backend]` readiness/reason/validation. Mode-level readiness still describes its legacy `defaultBackend` for existing clients.
+- `GET /capabilities`: modes, resolutions, 124 frames / 24fps, plus `modes[mode].backends.comfyui` readiness/reason/validation. Mode-level readiness describes `defaultBackend: comfyui` for both modes.
 - `POST /images`: multipart field `image`, at most 12 MiB and 24 megapixels; returns `{id}`.
-- `POST /jobs`: `{requestId,mode,backend?,prompt,sound,seed,resolution,imageId?,parentClipId?}`. UUID request IDs are atomic claims. Same content returns the existing job; different content with the same ID returns 409. `mode` is `h3` or `fasth3`, resolution `preview` or `quality`. FastH3 rejects all image/parent inputs. Sound is mandatory. `backend` is `comfyui` or `fastvideo`; omission retains `h3→comfyui` and `fasth3→fastvideo`. Changing the engine with the same ID is a conflict; old saved jobs are normalized using these legacy defaults.
+- `POST /jobs`: `{requestId,mode,backend?,prompt,sound,seed,resolution,imageId?,parentClipId?}`. UUID request IDs are atomic claims. Same content returns the existing job; different content with the same ID returns 409. `mode` is `h3` or `fasth3`, resolution `preview` or `quality`. FastH3 rejects all image/parent inputs. Sound is mandatory. `backend` accepts only `comfyui` and defaults to it for both modes. Explicit `fastvideo` requests return 400. Old saved FastVideo jobs retain their original backend identity, including backend-less historical FastH3 jobs; reusing those IDs for ComfyUI returns 409 and never triggers another generation.
 - `GET /jobs/:id`: `queued/running/completed/failed/cancelled`, mode/backend, expected source references on new jobs, stage/error, completed clip metadata with actual dimensions/duration/frame count and `hasAudio`.
 - `DELETE /jobs/:id`: for queued/running jobs, marks an independent cancellation tombstone. Late writes cannot un-cancel the job. Completed, failed and already-cancelled jobs return their current state unchanged; completed clips remain downloadable and usable as parents. A cancellation accepted while a job is active wins over a concurrent completion. The H3 adapter cancels only its own splitapp job; it never sends a global `/interrupt`.
 - `GET /clips/:id`: durable H.264/AAC MP4, supports byte ranges. CPU-side Volume SDK materialization; no GPU wake-up.
@@ -199,7 +193,7 @@ Added inputs with explicit defaults and reordered output slots can therefore be 
 
 To adopt an upstream revision, update `COMFY_REVISION` and the corresponding dependency pins in `splitapp.py`, then rebuild/deploy splitapp following its upgrade guide. The standard app's `COMFYUI_REVISION` environment variable does not override splitapp's pin. Run `check_h3` again to bind the supported recipes against the current node catalog, then run the explicit H3 smoke test, including three parent-linked audio/video clips. The inventory check is partial and cannot establish generation compatibility. If node or API contracts changed, adjust the adapter and its regression tests, and update `COMFYUI_REFERENCE` only when the workflow has been checked against that source revision.
 
-`COMFYUI_REFERENCE` documents the adapter's source reference; it does not pin the deployed server by itself. Capabilities use a cached preparation record keyed by URL, so updating ComfyUI at the same URL does not automatically invalidate that cached status. Generation always reads fresh node definitions before submission; re-run preparation checks after each update to refresh capabilities as well. Current CI uses local doubles, not the latest upstream ComfyUI or a real GPU; The FastVideo route follows its separately pinned revision; FastH3 through ComfyUI follows the native node and kitchen contracts above.
+`COMFYUI_REFERENCE` documents the adapter's source reference; it does not pin the deployed server by itself. Capabilities use a cached preparation record keyed by URL, so updating ComfyUI at the same URL does not automatically invalidate that cached status. Generation always reads fresh node definitions before submission; re-run preparation checks after each update to refresh capabilities as well. Current CI uses local doubles, not the latest upstream ComfyUI or a real GPU. FastH3 follows the native node and kitchen contracts above.
 
 ## Local verification
 
@@ -210,6 +204,6 @@ uv sync --locked --extra ambient-test
 uv run --locked --extra ambient-test python -m unittest discover -s tests -v
 ```
 
-Tests cover idempotency/conflicts, dispatch failure/worker timeout, input capability restrictions, multipart validation, range delivery and audio-required encoding/final-frame extraction. Integration tests run Ambient against the real split gateway with local ComfyUI and Modal doubles: open UI plus inventory reads without GPU dispatch, anchor upload, queued generation, result download after Volume reload, queued/running job-scoped cancellation, UI-initiated cancellation, and legacy-mode rejection including a transition after preflight. Processor tests also cover cancellation before generation, after generation and during commits; failed generation/encoding/commits; both input anchor types; and cleanup boundaries. Regression tests cover terminal-job cancellation, FastH3 polling/cancellation, partial-file cleanup, HTTPS/redirect validation, and progressing/stalled/deadline-limited downloads. These tests do not establish actual GPU generation or scale-down behavior.
+Tests cover idempotency/conflicts, dispatch failure/worker timeout, input capability restrictions, multipart validation, range delivery and audio-required encoding/final-frame extraction. Integration tests run Ambient against the real split gateway with local ComfyUI and Modal doubles: open UI plus inventory reads without GPU dispatch, anchor upload, queued generation, result download after Volume reload, queued/running job-scoped cancellation, UI-initiated cancellation, and legacy-mode rejection including a transition after preflight. Processor tests also cover cancellation before generation, after generation and during commits; failed generation/encoding/commits; both input anchor types; and cleanup boundaries. Regression tests cover rejection of retired FastVideo requests and jobs, terminal-job cancellation, partial-file cleanup, HTTPS/redirect validation, and progressing/stalled/deadline-limited downloads. These tests do not establish actual GPU generation or scale-down behavior.
 
-References: [ComfyUI H3 native workflows](https://docs.comfy.org/tutorials/video/minimax/minimax-h3), [FastH3 VSA Preview v1](https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree), [FastVideo pinned recipe](https://github.com/hao-ai-lab/FastVideo/blob/556ac7088e7b4750806d277d31e0db6cd25a5238/examples/inference/basic/basic_fasth3.py).
+References: [ComfyUI H3 native workflows](https://docs.comfy.org/tutorials/video/minimax/minimax-h3), [Kijai's ComfyUI FastH3 model and INT8 video VAE](https://huggingface.co/Kijai/MiniMax-H3-experimental/tree/f4cac997f880e93cf6940af61ee8d58ef31ff7f3).
