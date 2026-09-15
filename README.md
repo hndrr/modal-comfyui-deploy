@@ -4,14 +4,26 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 ![ComfyUI](assets/2025-09-28-21-11-34.png)
 
-今の主要機能は次の 4 つです。
+主要機能は次のとおりです。
 
 - `comfyapp.py`: ComfyUI 本体を Modal にデプロイする
+- `splitapp.py` **（Experimental・実験的）**: UIをCPU、生成をオンデマンドGPUで動かす分離構成。現在開発・検証中です（[導入と検証](docs/comfyui-split.md)）。
 - `preserve_model.py`: Hugging Face の単一ファイル保存と、その Web GUI を Modal にデプロイする
 - `preserve_model_gui.py`: `preserve_model.py` を Gradio UI から呼び出す（ローカル実行）
 - `web/`: ComfyUI のモデル・入力・出力を React + Hono 管理画面から操作する（`modal volume` CLI 経由）
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
+
+## テスト
+
+GitHub Actionsで、push・pull request時に以下を並列実行します。Actions画面からの手動実行にも対応しています。
+
+- Python: `uv sync --locked` → `uv run --locked python -m unittest discover -s tests -v`
+- 管理画面（`web/`）: `npm ci` → `npm test` → `npm run build`
+- 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
+
+CIはPython 3.12・Node.js 22を使用し、認証情報なしで実行します。
+Modal上での実生成・GPU停止・ブラウザ操作の検証はCIの対象外です。
 
 ## セットアップ
 
