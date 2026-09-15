@@ -133,12 +133,23 @@ def generate_h3(request, image, source, cancelled, progress):
 
 
 def generate_fasth3(request, image, source, cancelled, progress):
+    if cancelled():
+        return
     progress("FastH3 sampling")
     call = FastH3().generate.spawn(request)
     store().put("fast-call:" + request["requestId"], call.object_id)
-    result = call.get()
-    if result is not None:
-        source.write_bytes(result)
+    while not cancelled():
+        try:
+            result = call.get(timeout=5)
+        except modal.exception.FunctionTimeoutError:
+            # A worker timeout is terminal; it is not a poll with no result yet.
+            raise
+        except modal.exception.TimeoutError:
+            continue
+        if result is not None and not cancelled():
+            source.write_bytes(result)
+        return
+    call.cancel()
 
 
 @app.function(

@@ -1,16 +1,19 @@
 import asyncio
 import io
+import json
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from ambient.contracts import validate_request
 from ambient.comfy import workflow, generate
 from ambient.media import finalize
 from ambient.service import JobService, Conflict
+from ambient_fixtures import object_info
 
 
 def request(**patch):
@@ -76,10 +79,26 @@ class ContractsTest(unittest.TestCase):
         service.submit(req)
         store[req["requestId"]]["createdAt"] = 0
         del store["call:" + req["requestId"]]
-        self.assertEqual(service.get(req["requestId"])["status"], "failed")
+        failed = service.get(req["requestId"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["stage"], "Dispatch failed")
         store["call:" + req["requestId"]] = "fc-2"
         service.reconcile = lambda _: "Worker timed out"
         self.assertEqual(service.get(req["requestId"])["status"], "failed")
+
+    def test_cancel_preserves_terminal_jobs_and_is_idempotent(self):
+        for status in ("completed", "failed", "cancelled"):
+            with self.subTest(status=status):
+                store = Store()
+                service = JobService(store, lambda _: "fc-1")
+                job_id = request()["requestId"]
+                store[job_id] = {"id": job_id, "status": status, "stage": status}
+                if status == "completed":
+                    store[job_id]["clip"] = {"id": job_id}
+                before = service.get(job_id)
+                self.assertEqual(service.cancel(job_id), before)
+                self.assertEqual(service.cancel(job_id), before)
+                self.assertNotIn("cancel:" + job_id, store)
 
     def test_fast_has_no_image_input(self):
         with self.assertRaises(ValueError):
@@ -94,7 +113,7 @@ class ContractsTest(unittest.TestCase):
 
     def test_native_audio_turbo_and_anchor(self):
         req = request()
-        graph = workflow(req, "ambient/anchor.png")
+        graph = workflow(req, "ambient/anchor.png", object_info=object_info())
         self.assertEqual(graph["6"]["inputs"]["first_frame"], ["16", 0])
         self.assertEqual(graph["10"]["inputs"]["steps"], 8)
         self.assertEqual(graph["13"]["class_type"], "VAEDecodeAudio")
@@ -142,8 +161,21 @@ class ApiTest(unittest.TestCase):
         response = self.client.get("/clips/" + req["requestId"], headers={"Range": "bytes=2-5"})
         self.assertEqual(response.status_code, 206)
         self.assertEqual(response.content, b"2345")
-        self.client.delete("/jobs/" + req["requestId"])
-        self.assertEqual(self.client.get("/clips/" + req["requestId"]).status_code, 404)
+        cancelled = self.client.delete("/jobs/" + req["requestId"])
+        self.assertEqual(cancelled.json()["status"], "completed")
+        self.assertEqual(self.client.get("/clips/" + req["requestId"]).content, b"0123456789")
+        child = request(parentClipId=req["requestId"])
+        self.assertEqual(self.client.post("/jobs", json=child).status_code, 202)
+
+    def test_cancel_pending_job_hides_a_late_clip(self):
+        req = request()
+        self.service.submit(req)
+        job_id = req["requestId"]
+        self.assertEqual(self.client.delete("/jobs/" + job_id).json()["status"], "cancelled")
+        self.store[job_id].update(status="completed", clip={"id": job_id})
+        self.outputs.files[f"ambient/clips/{job_id}.mp4"] = b"late video"
+        self.assertEqual(self.client.get("/jobs/" + job_id).json()["status"], "cancelled")
+        self.assertEqual(self.client.get("/clips/" + job_id).status_code, 404)
 
     def test_bad_requests(self):
         self.assertEqual(self.client.post("/jobs", json={}).status_code, 400)
@@ -218,6 +250,7 @@ class MediaTest(unittest.TestCase):
             with Image.open(frame) as last:
                 self.assertEqual(last.size, (128, 96))
             self.assertTrue(out.exists())
+            self.assertFalse(out.with_suffix(".part.mp4").exists())
             subprocess.run(
                 [
                     "ffmpeg",
@@ -235,6 +268,46 @@ class MediaTest(unittest.TestCase):
             )
             with self.assertRaises(RuntimeError):
                 finalize(root / "silent.mp4", root / "bad.mp4", root / "bad.png", str(uuid4()))
+            self.assertFalse((root / "bad.part.mp4").exists())
+
+
+class MediaFailureTest(unittest.TestCase):
+    def test_failed_finalize_removes_partial_output(self):
+        for failure in ("encode", "probe", "extract", "metadata"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                out, frame = root / "out.mp4", root / "last.png"
+
+                def run(args):
+                    Path(args[-1]).write_bytes(b"partial artifact")
+                    if failure == "encode" or (failure == "extract" and args[-1] == str(frame)):
+                        raise RuntimeError(failure)
+
+                info = {
+                    "streams": [
+                        {
+                            "codec_type": "video",
+                            "nb_read_frames": "2",
+                            "duration": "1",
+                            "avg_frame_rate": "24/1",
+                            "width": 128,
+                            "height": 96,
+                        },
+                        {"codec_type": "audio", "duration": "2" if failure == "metadata" else "1"},
+                    ]
+                }
+                with (
+                    patch("ambient.media.run", side_effect=run),
+                    patch(
+                        "ambient.media.subprocess.check_output",
+                        side_effect=RuntimeError("probe") if failure == "probe" else None,
+                        return_value=json.dumps(info),
+                    ),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        finalize(root / "source.mp4", out, frame, str(uuid4()))
+                self.assertFalse(out.with_suffix(".part.mp4").exists())
+                self.assertFalse(out.exists())
 
 
 class SharedComfyTest(unittest.IsolatedAsyncioTestCase):
@@ -256,6 +329,9 @@ class SharedComfyTest(unittest.IsolatedAsyncioTestCase):
         async def prompt(request):
             return web.json_response({"prompt_id": own})
 
+        async def objects(request):
+            return web.json_response(object_info())
+
         async def history(request):
             nonlocal polls
             polls += 1
@@ -275,6 +351,7 @@ class SharedComfyTest(unittest.IsolatedAsyncioTestCase):
         app = web.Application()
         app.router.add_get("/ws", ws)
         app.router.add_post("/prompt", prompt)
+        app.router.add_get("/object_info", objects)
         app.router.add_get("/history/{id}", history)
         app.router.add_route("*", "/queue", queue)
         app.router.add_post("/interrupt", interrupt)

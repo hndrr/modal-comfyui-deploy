@@ -2,8 +2,10 @@
 
 import time
 
-from .comfy import MODEL_FILES, workflow
+from .h3 import workflow
+from .contracts import RESOLUTIONS
 from .config import COMFYUI_REFERENCE
+from .urls import redirect_guard, validate_endpoint
 
 
 def describe_modes(jobs, comfy_url: str, model_revision: str) -> dict:
@@ -42,11 +44,11 @@ async def check_comfyui(url: str, headers: dict) -> dict:
     """Contact ComfyUI explicitly; this can wake it, but never submits a prompt."""
     import aiohttp
 
-    url = url.rstrip("/")
     if not url:
         raise ValueError("Set AMBIENT_COMFYUI_URL before deployment")
+    url = validate_endpoint(url)
     async with aiohttp.ClientSession(
-        headers=headers, timeout=aiohttp.ClientTimeout(total=240)
+        headers=headers, timeout=aiohttp.ClientTimeout(total=240), trace_configs=[redirect_guard()]
     ) as client:
         async with client.get(url + "/object_info") as response:
             response.raise_for_status()
@@ -65,45 +67,18 @@ async def check_comfyui(url: str, headers: dict) -> dict:
 
 
 def validate_object_info(info):
-    required = {
-        node["class_type"]
-        for node in workflow(
-            {
-                "requestId": "00000000-0000-4000-8000-000000000001",
-                "prompt": "test",
-                "sound": "test",
-                "seed": 1,
-                "resolution": "preview",
-            },
-            "anchor.png",
-        ).values()
-    }
-    missing = sorted(required - info.keys())
-    if missing:
-        raise ValueError("Update ComfyUI; missing native nodes: " + ", ".join(missing))
-
-    def choices(node, field):
-        fields = {
-            **info[node]["input"].get("required", {}),
-            **info[node]["input"].get("optional", {}),
-        }
-        spec = fields.get(field, [])
-        return spec[0] if spec and isinstance(spec[0], list) else []
-
-    for node, field, name in [
-        ("UNETLoader", "unet_name", "unet"),
-        ("CLIPLoader", "clip_name", "clip"),
-        ("VAELoader", "vae_name", "video_vae"),
-        ("VAELoader", "vae_name", "audio_vae"),
-        ("LoraLoaderModelOnly", "lora_name", "lora"),
-    ]:
-        if MODEL_FILES[name] not in choices(node, field):
-            raise ValueError("Missing model: " + MODEL_FILES[name])
-    if "minimax" not in choices("CLIPLoader", "type"):
-        raise ValueError("ComfyUI CLIPLoader has no minimax type")
-    if "res_multistep" not in choices("KSamplerSelect", "sampler_name"):
-        raise ValueError("ComfyUI has no res_multistep sampler")
-    fields = info["MiniMaxH3ImageToVideo"]["input"]
-    if "first_frame" not in {**fields.get("required", {}), **fields.get("optional", {})}:
-        raise ValueError("H3 native node has no first_frame input")
+    """Bind each supported recipe against the live catalog; execution stays upstream."""
+    for resolution in RESOLUTIONS:
+        for image in (None, "ambient/anchor.png"):
+            workflow(
+                {
+                    "requestId": "00000000-0000-4000-8000-000000000001",
+                    "prompt": "test",
+                    "sound": "test",
+                    "seed": 1,
+                    "resolution": resolution,
+                },
+                image,
+                object_info=info,
+            )
     return True
