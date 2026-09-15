@@ -195,13 +195,18 @@ def workflow(
     add("12", "VAEDecode", samples=Link("11", "output"), vae=Link("4"))
     add("13", "VAEDecodeAudio", samples=Link("11", "output"), vae=Link("5"))
     add("14", "CreateVideo", images=Link("12"), audio=Link("13"), fps=FPS)
+    format_spec = (
+        object_info.get("SaveVideo", {}).get("input", {}).get("required", {}).get("format", [])
+    )
+    # Current SaveVideo nests the codec under the container's DynamicCombo.
+    codec_field = "format.codec" if format_spec[:1] == ["COMFY_DYNAMICCOMBO_V3"] else "codec"
     add(
         "15",
         "SaveVideo",
         video=Link("14"),
         filename_prefix=f"ambient/raw/{request['requestId']}",
         format="mp4",
-        codec="h264",
+        **{codec_field: "h264"},
     )
     if not object_info["SaveVideo"].get("output_node"):
         raise ValueError(

@@ -326,13 +326,39 @@ class FastH3CallTest(unittest.TestCase):
         self.app.generate_fasth3(self.req, None, self.source, cancelled, Mock())
 
     def test_polls_until_result_and_preserves_video(self):
-        self.call.get.side_effect = [self.app.modal.exception.TimeoutError(), b"video"]
+        self.call.get.side_effect = [
+            TimeoutError(), self.app.modal.exception.TimeoutError(), b"video"
+        ]
         self.generate(lambda: False)
         self.assertEqual(self.source.read_bytes(), b"video")
         self.assertEqual(self.jobs["fast-call:" + self.req["requestId"]], "fc-fast")
-        self.assertEqual(self.call.get.call_count, 2)
+        self.assertEqual(self.call.get.call_count, 3)
         self.assertTrue(all(call.kwargs == {"timeout": 5} for call in self.call.get.call_args_list))
         self.call.cancel.assert_not_called()
+
+    def test_api_reconcile_distinguishes_poll_and_execution_timeouts(self):
+        from fastapi.testclient import TestClient
+
+        job_id = self.req["requestId"]
+        self.jobs.put(job_id, {
+            "id": job_id, "request": self.req, "createdAt": time.time() - 30,
+            "status": "running", "stage": "Sampling",
+        })
+        self.jobs.put("call:" + job_id, "fc-processor")
+        with (
+            patch.object(self.app.modal.FunctionCall, "from_id", return_value=self.call),
+            TestClient(self.app.api.get_raw_f()()) as client,
+        ):
+            for error in (TimeoutError(), self.app.modal.exception.TimeoutError()):
+                with self.subTest(error=type(error).__module__):
+                    self.call.get.side_effect = error
+                    response = client.get("/jobs/" + job_id)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json()["status"], "running")
+            self.call.get.side_effect = self.app.modal.exception.FunctionTimeoutError()
+            result = client.get("/jobs/" + job_id).json()
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("execution timed out", result["error"])
 
     def test_cancel_during_sampling_stops_the_remote_call(self):
         cancelled = False
