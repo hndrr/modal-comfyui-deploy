@@ -64,7 +64,8 @@ class JobService:
         job = self.store.get(job_id)
         if not job:
             raise KeyError(job_id)
-        # A crash between claim and spawn is not permission to generate twice.
+        # A missing acknowledgement cannot prove that dispatch failed. Keep polling
+        # for a delayed worker; never overwrite its state or dispatch a second call.
         if (
             job["status"] == "queued"
             and self.now() - job["createdAt"] > 300
@@ -72,9 +73,7 @@ class JobService:
         ):
             job = {
                 **job,
-                "status": "failed",
-                "stage": "Dispatch failed",
-                "error": "Dispatch acknowledgement missing. Inspect Modal before retrying.",
+                "stage": "Dispatch unconfirmed; inspect Modal before retrying",
             }
         if (
             job["status"] in ("queued", "running")

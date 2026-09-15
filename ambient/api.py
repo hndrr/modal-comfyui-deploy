@@ -1,9 +1,12 @@
+import json
 from pathlib import Path
 import tempfile
 
 from .contracts import DEFAULT_BACKENDS, FPS, FRAMES, RESOLUTIONS, identifier, validate_request
 from .service import Conflict
 from .storage import AmbientStorage
+
+JOB_BODY_LIMIT = 128 * 1024
 
 
 def create_api(service, modes, inputs, outputs):
@@ -49,7 +52,14 @@ def create_api(service, modes, inputs, outputs):
 
     @app.post("/jobs", status_code=202)
     async def submit(request: Request):
-        data = validate_request(await request.json())
+        size = 0
+        chunks = []
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > JOB_BODY_LIMIT:
+                return JSONResponse({"error": "Job request exceeds 128 KiB"}, status_code=413)
+            chunks.append(chunk)
+        data = validate_request(json.loads(b"".join(chunks)))
         # Include readiness and parent lookups: these also access the Modal Dict.
         return await run_in_threadpool(submit_job, data)
 
