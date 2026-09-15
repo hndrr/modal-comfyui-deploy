@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
+import time
 
 import modal
 import comfyapp  # Reuse this repo's dotenv resolution, GPU profile and Volume definitions.
@@ -37,7 +39,9 @@ cpu_image = (
         "huggingface_hub==0.34.4",
         "python-dotenv==1.1.1",
     )
-    .add_local_dir(BASE / "ambient", remote_path="/root/ambient")
+    .add_local_file(BASE / "comfyapp.py", remote_path="/root/comfyapp.py")
+    .add_local_dir(BASE / "ambient", remote_path="/root/ambient",
+                   ignore=["docs/**", "**/__pycache__/**", "**/*.pyc"])
 )
 
 # Separate dependencies: FastVideo cannot replace the shared ComfyUI's torch stack.
@@ -55,7 +59,9 @@ fast_image = (
             "FASTVIDEO_ATTENTION_BACKEND": "VIDEO_SPARSE_ATTN_H3",
         }
     )
-    .add_local_dir(BASE / "ambient", remote_path="/root/ambient")
+    .add_local_file(BASE / "comfyapp.py", remote_path="/root/comfyapp.py")
+    .add_local_dir(BASE / "ambient", remote_path="/root/ambient",
+                   ignore=["docs/**", "**/__pycache__/**", "**/*.pyc"])
 )
 
 configuration = modal.Secret.from_dict(
@@ -94,15 +100,30 @@ def storage():
 class FastH3:
     @modal.enter()
     def load(self):
+        started = time.monotonic()
+        print(json.dumps({"event": "fasth3_loading", "at": time.time()}), flush=True)
         from ambient.fasth3 import FastH3Engine
 
         self.engine = FastH3Engine(os.environ["AMBIENT_FASTH3_MODEL_REVISION"])
+        print(json.dumps({"event": "fasth3_ready", "at": time.time(),
+                          "seconds": time.monotonic() - started}), flush=True)
 
     @modal.method()
     def generate(self, request):
         if is_cancelled(request["requestId"]):
             return None
-        return self.engine.generate(request)
+        started = time.monotonic()
+        print(json.dumps({"event": "fasth3_started", "id": request["requestId"],
+                          "at": time.time()}), flush=True)
+        status = "failed"
+        try:
+            result = self.engine.generate(request)
+            status = "completed"
+            return result
+        finally:
+            print(json.dumps({"event": "fasth3_finished", "id": request["requestId"],
+                              "at": time.time(), "seconds": time.monotonic() - started,
+                              "status": status}), flush=True)
 
     @modal.exit()
     def unload(self):
@@ -145,7 +166,7 @@ def generate_fasth3(request, image, source, cancelled, progress):
         except modal.exception.FunctionTimeoutError:
             # A worker timeout is terminal; it is not a poll with no result yet.
             raise
-        except modal.exception.TimeoutError:
+        except (TimeoutError, modal.exception.TimeoutError):
             continue
         if result is not None and not cancelled():
             source.write_bytes(result)
@@ -183,7 +204,7 @@ def api():
             return "Worker exited before publishing its result; inspect Modal logs."
         except modal.exception.FunctionTimeoutError:
             return "Worker execution timed out; inspect Modal logs."
-        except modal.exception.TimeoutError:
+        except (TimeoutError, modal.exception.TimeoutError):
             return None
         except Exception as error:
             return f"Worker terminated: {type(error).__name__}"

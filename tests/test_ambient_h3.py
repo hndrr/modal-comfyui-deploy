@@ -7,6 +7,32 @@ from test_ambient import request
 
 
 class UpstreamContractTest(unittest.TestCase):
+    def test_save_video_nested_codec_follows_live_container_schema(self):
+        info = object_info()
+        codec = ["COMFY_DYNAMICCOMBO_V3", {"options": [
+            {"key": "h264", "inputs": {"required": {}, "optional": {
+                "encoding": ["COMFY_DYNAMICCOMBO_V3", {"options": [
+                    {"key": "auto", "inputs": {"required": {}}},
+                ]}],
+            }}},
+        ]}]
+        inputs = info["SaveVideo"]["input"]
+        del inputs["required"]["codec"]
+        inputs["required"]["format"] = ["COMFY_DYNAMICCOMBO_V3", {"options": [
+            {"key": "mp4", "inputs": {"required": {"codec": codec}}},
+        ]}]
+        # Upstream also exposes a hidden, optional legacy codec at the root.
+        inputs["optional"] = {"codec": codec}
+        for mode in ("h3", "fasth3"):
+            with self.subTest(mode=mode):
+                graph = workflow({**request(), "mode": mode}, object_info=info)
+                saved = graph["15"]["inputs"]
+                self.assertEqual(saved["format"], "mp4")
+                self.assertEqual(saved["format.codec"], "h264")
+                self.assertNotIn("codec", saved)
+                self.assertNotIn("format.codec.encoding", saved)
+                self.assertTrue(validate_object_info(info, mode))
+
     def test_input_defaults_and_reordered_outputs_follow_the_server(self):
         info = object_info()
         info["MiniMaxH3ImageToVideo"]["output"] = ["LATENT", "CONDITIONING"]
