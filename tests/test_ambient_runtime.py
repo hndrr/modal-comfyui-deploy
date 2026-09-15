@@ -237,6 +237,7 @@ class RuntimeTest(unittest.TestCase):
             paths = [
                 self.storage.input_root / frame_path(job_id),
                 self.storage.output_root / clip_path(job_id),
+                (self.storage.output_root / clip_path(job_id)).with_suffix(".part.mp4"),
             ]
             for path in paths:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -297,6 +298,70 @@ class ReadinessTest(unittest.TestCase):
         self.assertTrue(
             all(not mode["ready"] for mode in describe_modes({}, url, revision).values())
         )
+
+
+class FastH3CallTest(unittest.TestCase):
+    def setUp(self):
+        import ambient_app
+
+        self.app = ambient_app
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.source = Path(self.directory.name) / "source.mp4"
+        self.req = request(mode="fasth3")
+        self.call = Mock(object_id="fc-fast")
+        self.fast = self.enterContext(patch.object(ambient_app, "FastH3"))
+        self.fast.return_value.generate.spawn.return_value = self.call
+        self.jobs = Store([])
+        self.enterContext(patch.object(ambient_app, "store", return_value=self.jobs))
+
+    def generate(self, cancelled):
+        self.app.generate_fasth3(self.req, None, self.source, cancelled, Mock())
+
+    def test_polls_until_result_and_preserves_video(self):
+        self.call.get.side_effect = [self.app.modal.exception.TimeoutError(), b"video"]
+        self.generate(lambda: False)
+        self.assertEqual(self.source.read_bytes(), b"video")
+        self.assertEqual(self.jobs["fast-call:" + self.req["requestId"]], "fc-fast")
+        self.assertEqual(self.call.get.call_count, 2)
+        self.assertTrue(all(call.kwargs == {"timeout": 5} for call in self.call.get.call_args_list))
+        self.call.cancel.assert_not_called()
+
+    def test_cancel_during_sampling_stops_the_remote_call(self):
+        cancelled = False
+
+        def poll(**kwargs):
+            nonlocal cancelled
+            cancelled = True
+            raise self.app.modal.exception.TimeoutError()
+
+        self.call.get.side_effect = poll
+        self.generate(lambda: cancelled)
+        self.call.cancel.assert_called_once_with()
+        self.assertFalse(self.source.exists())
+
+    def test_cancel_before_dispatch_does_not_start_a_gpu_call(self):
+        self.generate(lambda: True)
+        self.fast.assert_not_called()
+        self.assertEqual(self.jobs, {})
+
+    def test_result_arriving_after_cancel_is_discarded(self):
+        self.call.get.return_value = b"late video"
+        self.generate(Mock(side_effect=[False, False, True]))
+        self.assertFalse(self.source.exists())
+
+    def test_terminal_worker_errors_are_not_retried_as_poll_timeouts(self):
+        for error in (
+            self.app.modal.exception.FunctionTimeoutError("worker timed out"),
+            RuntimeError("worker failed"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.call.reset_mock()
+                self.call.get.side_effect = error
+                with self.assertRaises(type(error)):
+                    self.generate(lambda: False)
+                self.call.get.assert_called_once()
+                self.assertFalse(self.source.exists())
 
 
 class FastH3EngineTest(unittest.TestCase):

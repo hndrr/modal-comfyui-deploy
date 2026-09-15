@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from preserve_model import app, preserve_model
-from ambient.comfy import MODEL_FILES
+from ambient.h3 import MODEL_FILES
 from ambient.config import H3_MODEL_REVISION
 
 @app.local_entrypoint()

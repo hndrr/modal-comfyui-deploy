@@ -80,7 +80,9 @@ class AmbientStorage:
             self.outputs.read_file_into_fileobj(clip_path(clip_id), handle)
 
     def remove_clip(self, job_id: str) -> None:
-        (self.output_root / clip_path(job_id)).unlink(missing_ok=True)
+        clip = self.output_root / clip_path(job_id)
+        clip.unlink(missing_ok=True)
+        clip.with_suffix(".part.mp4").unlink(missing_ok=True)
         (self.input_root / frame_path(job_id)).unlink(missing_ok=True)
 
     def expire_temporary_files(self, cutoff: float) -> None:
