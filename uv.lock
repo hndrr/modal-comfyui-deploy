@@ -708,13 +708,26 @@ dependencies = [
     { name = "python-dotenv" },
 ]
 
+[package.optional-dependencies]
+ambient-test = [
+    { name = "aiohttp" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "python-multipart" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "extra == 'ambient-test'", specifier = ">=3.12.15" },
+    { name = "fastapi", marker = "extra == 'ambient-test'", specifier = ">=0.115.14" },
     { name = "gradio", specifier = ">=5.47.2" },
+    { name = "httpx", marker = "extra == 'ambient-test'", specifier = ">=0.28.1" },
     { name = "modal", specifier = ">=1.1.4" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "python-multipart", marker = "extra == 'ambient-test'", specifier = ">=0.0.22" },
 ]
+provides-extras = ["ambient-test"]
 
 [[package]]
 name = "multidict"
