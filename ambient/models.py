@@ -4,9 +4,6 @@ from .config import (
     COMFYUI_REFERENCE,
     COMFY_FAST_MODEL,
     COMFY_FAST_MODEL_REVISION,
-    FAST_MODEL,
-    FAST_MODEL_REVISION,
-    FASTVIDEO_REF,
     H3_MODEL_REVISION,
 )
 
@@ -56,18 +53,12 @@ def comfy_assets(mode: str) -> list[dict]:
     return result
 
 
-def references(
-    mode: str, backend: str, fast_revision: str = FAST_MODEL_REVISION
-) -> dict:
+def references(mode: str, backend: str) -> dict:
     """Expected source references, not a claim that a GPU has validated these assets."""
-    if backend == "comfyui":
-        return {
-            "implementation": COMFYUI_REFERENCE,
-            "recipe": "h3-turbo-8step" if mode == "h3" else "fasth3-vsa-4step",
-            "models": comfy_assets(mode),
-        }
+    if backend != "comfyui":
+        raise ValueError("Unsupported generation backend")
     return {
-        "implementation": FASTVIDEO_REF,
-        "recipe": "fasth3-vsa-4step",
-        "models": [{"repo_id": FAST_MODEL, "revision": fast_revision}],
+        "implementation": COMFYUI_REFERENCE,
+        "recipe": "h3-turbo-8step" if mode == "h3" else "fasth3-vsa-4step",
+        "models": comfy_assets(mode),
     }

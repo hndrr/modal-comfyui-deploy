@@ -62,7 +62,6 @@ class CliTest(unittest.TestCase):
                 "ready": True,
                 "backends": {
                     "comfyui": {"ready": True},
-                    "fastvideo": {"ready": True},
                 },
             },
         }
@@ -121,7 +120,7 @@ class CliTest(unittest.TestCase):
             *extra,
         )
 
-    def test_three_routes_generate_save_retrieve_and_report_references(self):
+    def test_comfyui_routes_generate_save_retrieve_and_report_references(self):
         self.assertEqual(self.invoke("capabilities")[0], 0)
         self.assertEqual(self.invocations, [])
         for mode, backend in ROUTES:
@@ -174,7 +173,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(posts[0], posts[1])
         changed = self.root / "changed.json"
         changed.write_text(
-            json.dumps({**json.loads(saved.read_text()), "backend": "fastvideo"})
+            json.dumps({**json.loads(saved.read_text()), "prompt": "Different prompt"})
         )
         code, _, err = self.invoke(
             "submit", str(changed), "--output", str(self.root / "other")
@@ -184,12 +183,9 @@ class CliTest(unittest.TestCase):
 
     def test_route_readiness_does_not_use_legacy_default_ready_flag(self):
         self.modes["fasth3"]["ready"] = False
-        self.modes["fasth3"]["backends"]["fastvideo"] = {
-            "ready": False,
-            "reason": "No FastVideo snapshot",
-        }
         self.assertEqual(self.generate()[0], 0)
-        code, _, err = self.generate("fasth3", "fastvideo")
+        self.modes["fasth3"]["backends"]["comfyui"] = {"ready": False, "reason": "Not prepared"}
+        code, _, err = self.generate()
         self.assertEqual(code, 1)
         self.assertIn("503", err)
         self.assertEqual(self.invocations, [("fasth3", "comfyui")])
@@ -208,7 +204,8 @@ class CliTest(unittest.TestCase):
         )
         before = len(self.opener.requests)
         self.assertEqual(self.generate("fasth3", "comfyui", "--image", str(path))[0], 1)
-        self.assertEqual(self.generate("h3", "fastvideo")[0], 1)
+        with self.assertRaises(SystemExit):
+            self.generate("h3", "fastvideo")
         self.assertEqual(len(self.opener.requests), before)
 
     def test_ctrl_c_requests_scoped_cancel_and_timeout_does_not_resubmit(self):

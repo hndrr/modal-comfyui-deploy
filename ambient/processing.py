@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 
 from .storage import AmbientStorage
-from .contracts import backend_for
+from .contracts import stored_backend, validate_request
 
 
 Generator = Callable[[dict, Path | None, Path, Callable[[], bool], Callable[[str], None]], None]
@@ -16,7 +16,7 @@ def run_job(
 ) -> None:
     """Generators write a source video; storage encodes and commits both artifacts."""
     job = jobs[job_id]
-    request = {**job["request"], "backend": backend_for(job["request"])}
+    request = {**job["request"], "backend": stored_backend(job["request"])}
 
     def cancelled():
         return bool(jobs.get("cancel:" + job_id))
@@ -28,6 +28,7 @@ def run_job(
     try:
         if cancelled():
             return
+        request = validate_request(request)
         progress("Preparing generation")
         with tempfile.TemporaryDirectory(prefix="ambient-job-") as directory:
             root = Path(directory)

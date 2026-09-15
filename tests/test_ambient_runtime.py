@@ -2,10 +2,8 @@ import copy
 import io
 import os
 from pathlib import Path
-import sys
 import tempfile
 import time
-from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -13,12 +11,11 @@ from uuid import uuid4
 from PIL import Image
 
 from ambient.config import RETENTION_SECONDS
-from ambient.contracts import RESOLUTIONS, prompt_text
-from ambient.fasth3 import FastH3Engine
 from ambient.maintenance import cleanup_jobs
 from ambient.processing import run_job
-from ambient.contracts import ROUTES
+from ambient.contracts import RESOLUTIONS, ROUTES
 from ambient.readiness import describe_modes
+from ambient.models import references
 from ambient.service import JobService
 from ambient.storage import AmbientStorage, clip_path, frame_path, image_path
 
@@ -131,6 +128,27 @@ class RuntimeTest(unittest.TestCase):
         generator.assert_not_called()
         encode.assert_not_called()
         self.assertEqual(self.service.get(job_id)["status"], "cancelled")
+
+    def test_retired_fastvideo_jobs_never_dispatch_to_comfyui(self):
+        for explicit_backend in (False, True):
+            with self.subTest(explicit_backend=explicit_backend):
+                req = request(mode="fasth3")
+                if explicit_backend:
+                    req["backend"] = "fastvideo"
+                job_id = req["requestId"]
+                self.jobs.put(job_id, {
+                    "id": job_id, "status": "queued", "request": req,
+                    "createdAt": time.time(),
+                })
+                generator = Mock()
+                with patch.object(self.storage, "prepare_anchor") as prepare, patch("builtins.print"):
+                    self.run_job(job_id, generator)
+                generator.assert_not_called()
+                prepare.assert_not_called()
+                result = self.service.get(job_id)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["backend"], "fastvideo")
+                self.assertIn("Unsupported", result["error"])
 
     def test_cancel_during_generation_discards_result(self):
         job_id = self.submit()
@@ -280,61 +298,42 @@ class RuntimeTest(unittest.TestCase):
 
 class ReadinessTest(unittest.TestCase):
     def test_capabilities_use_matching_preparation_records(self):
-        url, revision = "https://comfy.example", "a" * 40
+        url = "https://comfy.example"
         jobs = {
             "prepared:h3": {"url": url, "backend": "split", "gpuValidated": False},
-            "prepared:fasth3": {"revision": revision, "gpuValidated": False},
+            "prepared:fasth3:comfyui": {"url": url, "backend": "split",
+                "references": references("fasth3", "comfyui"), "gpuValidated": False},
         }
-        modes = describe_modes(jobs, url, revision)
+        modes = describe_modes(jobs, url)
         for mode in modes.values():
             self.assertTrue(mode["ready"])
             self.assertIsNone(mode["reason"])
             self.assertFalse(mode["validation"]["gpuValidated"])
         self.assertTrue(modes["h3"]["continuity"])
         self.assertFalse(modes["fasth3"]["imageInput"])
-        for settings in (("", ""), (url + "/changed", "b" * 40)):
+        for setting in ("", url + "/changed"):
             self.assertTrue(
-                all(not mode["ready"] for mode in describe_modes(jobs, *settings).values())
+                all(not mode["ready"] for mode in describe_modes(jobs, setting).values())
             )
         self.assertTrue(
-            all(not mode["ready"] for mode in describe_modes({}, url, revision).values())
+            all(not mode["ready"] for mode in describe_modes({}, url).values())
         )
 
     def test_old_standard_comfyui_preparation_requires_a_split_check(self):
         url = "https://comfy.example"
-        modes = describe_modes({"prepared:h3": {"url": url}}, url, "")
+        modes = describe_modes({"prepared:h3": {"url": url}}, url)
         self.assertFalse(modes["h3"]["ready"])
         self.assertIn("splitapp", modes["h3"]["reason"])
 
 
-class FastH3CallTest(unittest.TestCase):
+class ApiReconcileTest(unittest.TestCase):
     def setUp(self):
         import ambient_app
-
         self.app = ambient_app
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.source = Path(self.directory.name) / "source.mp4"
-        self.req = request(mode="fasth3")
-        self.call = Mock(object_id="fc-fast")
-        self.fast = self.enterContext(patch.object(ambient_app, "FastH3"))
-        self.fast.return_value.generate.spawn.return_value = self.call
+        self.req = request()
+        self.call = Mock(object_id="fc-processor")
         self.jobs = Store([])
         self.enterContext(patch.object(ambient_app, "store", return_value=self.jobs))
-
-    def generate(self, cancelled):
-        self.app.generate_fasth3(self.req, None, self.source, cancelled, Mock())
-
-    def test_polls_until_result_and_preserves_video(self):
-        self.call.get.side_effect = [
-            TimeoutError(), self.app.modal.exception.TimeoutError(), b"video"
-        ]
-        self.generate(lambda: False)
-        self.assertEqual(self.source.read_bytes(), b"video")
-        self.assertEqual(self.jobs["fast-call:" + self.req["requestId"]], "fc-fast")
-        self.assertEqual(self.call.get.call_count, 3)
-        self.assertTrue(all(call.kwargs == {"timeout": 5} for call in self.call.get.call_args_list))
-        self.call.cancel.assert_not_called()
 
     def test_api_reconcile_distinguishes_poll_and_execution_timeouts(self):
         from fastapi.testclient import TestClient
@@ -360,105 +359,6 @@ class FastH3CallTest(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertIn("execution timed out", result["error"])
 
-    def test_cancel_during_sampling_stops_the_remote_call(self):
-        cancelled = False
-
-        def poll(**kwargs):
-            nonlocal cancelled
-            cancelled = True
-            raise self.app.modal.exception.TimeoutError()
-
-        self.call.get.side_effect = poll
-        self.generate(lambda: cancelled)
-        self.call.cancel.assert_called_once_with()
-        self.assertFalse(self.source.exists())
-
-    def test_cancel_before_dispatch_does_not_start_a_gpu_call(self):
-        self.generate(lambda: True)
-        self.fast.assert_not_called()
-        self.assertEqual(self.jobs, {})
-
-    def test_result_arriving_after_cancel_is_discarded(self):
-        self.call.get.return_value = b"late video"
-        self.generate(Mock(side_effect=[False, False, True]))
-        self.assertFalse(self.source.exists())
-
-    def test_terminal_worker_errors_are_not_retried_as_poll_timeouts(self):
-        for error in (
-            self.app.modal.exception.FunctionTimeoutError("worker timed out"),
-            RuntimeError("worker failed"),
-        ):
-            with self.subTest(error=type(error).__name__):
-                self.call.reset_mock()
-                self.call.get.side_effect = error
-                with self.assertRaises(type(error)):
-                    self.generate(lambda: False)
-                self.call.get.assert_called_once()
-                self.assertFalse(self.source.exists())
-
-
-class FastH3EngineTest(unittest.TestCase):
-    def test_reused_engine_updates_request_and_reads_actual_output(self):
-        requests = []
-        generator = Mock()
-
-        def build_request(args, target, seed):
-            value = {
-                "prompt": args.prompt,
-                "width": args.width,
-                "height": args.height,
-                "seed": seed,
-                "target": target,
-            }
-            requests.append(value)
-            return value
-
-        def generate(value):
-            actual = value["target"].with_name("native-output.mp4")
-            actual.write_bytes(b"native audio and video")
-            return actual
-
-        generator.generate.side_effect = generate
-        recipe = SimpleNamespace(
-            parse_args=Mock(return_value=SimpleNamespace()),
-            configure_environment=Mock(),
-            build_generator_config=Mock(return_value={}),
-            build_request=build_request,
-            _actual_output_path=lambda result, target: result,
-        )
-        video_generator = Mock()
-        video_generator.from_config.return_value = generator
-        with tempfile.TemporaryDirectory() as directory:
-            revision = "a" * 40
-            model = Path(directory) / revision
-            model.mkdir()
-            (model / "modular_model_index.json").write_text("{}")
-            with (
-                patch("ambient.fasth3.MODEL_ROOT", directory),
-                patch.object(sys, "path", list(sys.path)),
-                patch.dict(
-                    sys.modules,
-                    {
-                        "basic_fasth3": recipe,
-                        "fastvideo": SimpleNamespace(VideoGenerator=video_generator),
-                    },
-                ),
-            ):
-                engine = FastH3Engine(revision)
-                for resolution, seed in (("preview", 42), ("quality", 43)):
-                    req = request(
-                        mode="fasth3", resolution=resolution, seed=seed, sound=f"Breeze {seed}"
-                    )
-                    self.assertEqual(engine.generate(req), b"native audio and video")
-                    self.assertEqual(requests[-1]["prompt"], prompt_text(req))
-                    self.assertEqual(
-                        (requests[-1]["width"], requests[-1]["height"]), RESOLUTIONS[resolution]
-                    )
-                    self.assertEqual(requests[-1]["seed"], seed)
-                    self.assertFalse(requests[-1]["target"].parent.exists())
-                engine.close()
-        video_generator.from_config.assert_called_once()
-        generator.shutdown.assert_called_once()
 
 
 if __name__ == "__main__":

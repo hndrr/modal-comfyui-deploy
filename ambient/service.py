@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from .contracts import fingerprint, public_job, validate_request
+from .contracts import fingerprint, public_job, stored_backend, validate_request
 
 
 class Conflict(ValueError):
@@ -23,7 +23,8 @@ class JobService:
         if existing is None:
             return None
         # Normalize legacy requests too: their stored hash predates backend selection.
-        if fingerprint(validate_request(existing["request"])) != fingerprint(request):
+        previous = {**existing["request"], "backend": stored_backend(existing["request"])}
+        if previous["backend"] != request["backend"] or fingerprint(validate_request(previous)) != fingerprint(request):
             raise Conflict("requestId already belongs to a different request")
         return self.get(request["requestId"])
 
