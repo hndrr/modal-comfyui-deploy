@@ -4,7 +4,24 @@ This repository provides the Modal backend for [Ambient Studio](https://github.c
 
 Use `splitapp.py` together with `ambient_app.py`. Splitapp serves the ComfyUI UI and API on CPU and dispatches H3 or FastH3 to its GPU worker only for generation. Ambient provides the CPU job API, clip processing and an optional separate FastVideo GPU worker for FastH3. Both apps reuse the existing authentication and model/input/output Volumes. Deploying or opening the frontend does not download models.
 
-**Current validation:** local and CI tests cover the API, job lifecycle, retention and media processing, with mocked ComfyUI/FastVideo generation. No deployment or GPU generation was performed. ComfyUI/FastVideo/model references below are reproducible source references, not GPU-qualified releases. GPU generation, three-clip visual continuity and actual model performance remain to be checked when GPU use is explicitly resumed.
+**Current validation (2026-09-15):** Splitapp and Ambient have been deployed on a single RTX PRO 6000 per engine. H3 produced native audio/video at both resolutions, including three parent-linked preview clips. FastH3 through ComfyUI produced audio/video at both resolutions with the requested INT8 model/VAE and the native VSA sparse producer path. The separate FastVideo snapshot has been downloaded; its GPU qualification was stopped at the user’s request before a GPU was allocated; preparation readiness alone is not GPU qualification. Local tests also cover job lifecycle, retention and failure handling.
+
+## Measured ComfyUI runs (2026-09-15)
+
+The following runs used one RTX PRO 6000 Blackwell Server Edition, ComfyUI 0.34.0, comfy-kitchen 0.2.33, PyTorch 2.10.0+cu130 and CUDA 13.0 in the active Split environment. Each video has 124 frames at 24 fps, with H.264 video and AAC stereo audio. Both FastH3 resolutions used the native VSA sparse producer path and the requested INT8 video VAE; representative frames were visually checked for black output.
+
+| Route / input | Resolution | Native execution | GPU worker including startup | CLI through local save | Observed VRAM / container RAM |
+| --- | --- | ---: | ---: | ---: | ---: |
+| H3 / text, first clip | 832×480 | 40.0 s | 63.3 s | unavailable | unavailable |
+| H3 / previous final frame, clip 2 | 832×480 | 55.8 s | 94.4 s | 401.6 s | 40.7 / 90.2 GiB |
+| H3 / previous final frame, clip 3 | 832×480 | 52.8 s | 75.9 s | 113.3 s | 40.8 / 90.2 GiB |
+| H3 / text | 1344×768 | 75.8 s | 96.2 s | 184.8 s | 39.9 / 89.7 GiB |
+| FastH3 / text | 832×480 | 47.3 s | 74.4 s | 125.7 s | 39.0 / 86.4 GiB |
+| FastH3 / text | 1344×768 | 51.4 s | 69.9 s | 387.6 s | 40.2 / 87.5 GiB |
+
+Native execution is ComfyUI history start-to-success, including node-level loading and media processing. The CLI duration includes allocation waits, startup, processing, polling and download. For example, the FastH3 quality run spent 290.4 seconds between Split queue acceptance and the worker start marker. These single runs are not an engine speed benchmark. Memory is the maximum observed at roughly two-second intervals; container RAM includes file cache. H3 clips 2 and 3 shared a GPU container but restarted the ComfyUI process, so this is not fully warm model reuse. The first run exposed a polling-timeout handling bug; its existing result was recovered without resubmission, leaving CLI duration and peak memory unmeasured.
+
+H3's three parent-linked clips preserved the boundary image. After the ComfyUI runs, the GPU reached zero containers while the Split CPU control connection remained open. Local measurement records, native logs, request bodies, MP4s and the detailed report are saved under the ignored `ambient/docs/validation/2026-09-15/` directory. Cached `ready` records still describe provisioning only. FastVideo validation was cancelled before GPU allocation at the user’s request. After stopping the CLI monitors and control connection, both deployed apps reached zero CPU/GPU containers and all temporary validation apps were stopped.
 
 ## Responsibilities and data flow
 
@@ -176,7 +193,7 @@ ComfyUI control requests have a 120-second total timeout. Video downloads instea
 
 Ambient uses splitapp's ComfyUI deployment and does not patch upstream source. Updating ComfyUI does not require reapplying these job, transport or storage fixes. Compatibility still depends on the split control API, the ComfyUI HTTP APIs used by `ambient/comfy.py` and H3/FastH3 node/input contracts bound by `ambient/h3.py`.
 
-Like the split deployment, the integration leaves upstream execution in place and confines compatibility handling to an external adapter. Before each generation, Ambient reads the running server’s `/object_info`, binds connections by the advertised input/output types (and names where outputs share a type), and takes explicit defaults for newly required inputs from that catalog. It does not retain fixed output slot numbers. The same binding is used by `check_comfy` (and the legacy `check_h3`) for both resolutions and with/without an anchor. Model choices, the eight-step Turbo and four-step VSA recipes and the Ambient output contract remain application settings.
+Like the split deployment, the integration leaves upstream execution in place and confines compatibility handling to an external adapter. Before each generation, Ambient reads the running server’s `/object_info`, binds connections by the advertised input/output types (and names where outputs share a type), and takes explicit defaults for newly required inputs from that catalog. It does not retain fixed output slot numbers. SaveVideo uses the live container/codec contract, including the nested `format.codec` DynamicCombo input in current ComfyUI. The same binding is used by `check_comfy` (and the legacy `check_h3`) for both resolutions and with/without an anchor. Model choices, the eight-step Turbo and four-step VSA recipes and the Ambient output contract remain application settings.
 
 Added inputs with explicit defaults and reordered output slots can therefore be adopted without changing the adapter. Removed/renamed required nodes or inputs, missing models and ambiguous connections fail before prompt submission. This is a binding check, not a replacement for ComfyUI’s validator: splitapp queues the request, then its GPU worker calls the standard ComfyUI `/prompt` endpoint for final validation and native execution. No node execution, sampler, loader or ComfyUI validation code is copied into Ambient.
 
