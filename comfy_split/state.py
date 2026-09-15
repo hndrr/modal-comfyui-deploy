@@ -1,12 +1,18 @@
 """Single-writer journal. Never share a live database between containers."""
 
 import json
+import hashlib
 import os
 import time
 import uuid
 from pathlib import Path
 
 ACTIVE = {"queued", "dispatching", "running", "unknown"}
+
+
+def body_digest(body):
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"),
+                                    ensure_ascii=False).encode()).hexdigest()
 
 
 def write_json(path: Path, value) -> None:
@@ -26,6 +32,7 @@ class Journal:
             "mode": "split", "environment": "base", "candidate": None,
             "jobs": {}, "next_number": 0, "session": None,
         }
+        self.data.setdefault("retired_jobs", {})
 
     def save(self):
         write_json(self.path, self.data)
@@ -41,6 +48,11 @@ class Journal:
         if not isinstance(body.get("prompt"), dict) or not body["prompt"]:
             raise ValueError("prompt must be a non-empty object")
         if request_id:
+            for job in self.data["retired_jobs"].values():
+                if job.get("request_id") == request_id:
+                    if job["body_digest"] != body_digest(body):
+                        raise ValueError("Idempotency key was reused with a different prompt")
+                    return job
             for job in self.data["jobs"].values():
                 if job.get("request_id") == request_id:
                     if job["body"] != body:
@@ -56,6 +68,19 @@ class Journal:
         }
         self.data["jobs"][job["id"]] = job
         return job
+
+    def retire(self, ids):
+        for key in ids:
+            job = self.data["jobs"][key]
+            if job["status"] in ACTIVE:
+                raise ValueError("Cannot retire an unfinished job")
+            # This compact map also lets a replayed worker reject an old input
+            # after the per-job receipts have been removed.
+            record = {"id": key, "number": job["number"], "status": job["status"]}
+            if job.get("request_id"):
+                record.update(request_id=job["request_id"], body_digest=body_digest(job["body"]))
+            self.data["retired_jobs"][key] = record
+            del self.data["jobs"][key]
 
     def queue(self):
         def item(job):
