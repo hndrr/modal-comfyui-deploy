@@ -97,6 +97,9 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
         async def objects(req):
             return web.json_response(self.objects)
 
+        async def status(req):
+            return web.json_response({"api_version": 1, "mode": "split"})
+
         async def ws(req):
             if self.redirect and self.redirect_phase == "ws":
                 raise web.HTTPFound("/redirected")
@@ -141,6 +144,7 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
             return web.Response(body=b"unexpected redirect")
 
         app = web.Application()
+        app.router.add_get("/modal-control/v1/status", status)
         app.router.add_get("/ws", ws)
         app.router.add_post("/prompt", prompt)
         app.router.add_get("/object_info", objects)

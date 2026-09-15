@@ -1,4 +1,4 @@
-"""Deploy with ./scripts/modal.sh deploy ambient_app.py (same pinned profile as ComfyUI)."""
+"""Deploy alongside splitapp.py: ./scripts/modal.sh deploy ambient_app.py."""
 
 from __future__ import annotations
 
@@ -223,7 +223,7 @@ def cleanup():
 
 @app.function(image=cpu_image, timeout=300, secrets=[configuration])
 def check_h3():
-    """Read native node/model inventory; does not enqueue a GPU generation."""
+    """Read splitapp's CPU node/model inventory without invoking its GPU worker."""
     headers = {
         "Modal-Key": os.environ.get("MODAL_PROXY_KEY", ""),
         "Modal-Secret": os.environ.get("MODAL_PROXY_SECRET", ""),

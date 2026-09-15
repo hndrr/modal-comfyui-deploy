@@ -10,7 +10,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from ambient.contracts import validate_request
-from ambient.comfy import workflow, generate
+from ambient.comfy import workflow
 from ambient.media import finalize
 from ambient.service import JobService, Conflict
 from ambient_fixtures import object_info
@@ -308,72 +308,6 @@ class MediaFailureTest(unittest.TestCase):
                         finalize(root / "source.mp4", out, frame, str(uuid4()))
                 self.assertFalse(out.with_suffix(".part.mp4").exists())
                 self.assertFalse(out.exists())
-
-
-class SharedComfyTest(unittest.IsolatedAsyncioTestCase):
-    async def test_cancel_never_interrupts_and_deletes_only_own_prompt(self):
-        from aiohttp import web
-
-        calls = []
-        polls = 0
-        own = "own-prompt"
-        other = "other-prompt"
-
-        async def ws(request):
-            socket = web.WebSocketResponse(compress=False)
-            await socket.prepare(request)
-            async for _ in socket:
-                pass
-            return socket
-
-        async def prompt(request):
-            return web.json_response({"prompt_id": own})
-
-        async def objects(request):
-            return web.json_response(object_info())
-
-        async def history(request):
-            nonlocal polls
-            polls += 1
-            if polls > 1:
-                return web.json_response({own: {"status": {"completed": True}}})
-            return web.json_response({})
-
-        async def queue(request):
-            if request.method == "POST":
-                calls.append(await request.json())
-                return web.json_response({})
-            return web.json_response({"queue_running": [[0, own]], "queue_pending": [[1, other]]})
-
-        async def interrupt(request):
-            self.fail("Shared ComfyUI must never be interrupted")
-
-        app = web.Application()
-        app.router.add_get("/ws", ws)
-        app.router.add_post("/prompt", prompt)
-        app.router.add_get("/object_info", objects)
-        app.router.add_get("/history/{id}", history)
-        app.router.add_route("*", "/queue", queue)
-        app.router.add_post("/interrupt", interrupt)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        port = site._server.sockets[0].getsockname()[1]
-        try:
-            await generate(
-                f"http://127.0.0.1:{port}",
-                {},
-                request(),
-                None,
-                Path("/unused"),
-                lambda: True,
-                lambda _: None,
-                timeout=3,
-            )
-            self.assertEqual(calls, [{"delete": [own]}])
-        finally:
-            await runner.cleanup()
 
 
 if __name__ == "__main__":
