@@ -5,6 +5,7 @@ import time
 from .h3 import workflow
 from .contracts import RESOLUTIONS
 from .config import COMFYUI_REFERENCE
+from .split import SPLIT_HEADERS, check_split
 from .urls import redirect_guard, validate_endpoint
 
 
@@ -12,7 +13,11 @@ def describe_modes(jobs, comfy_url: str, model_revision: str) -> dict:
     """Read saved preparation results without contacting either generation backend."""
     h3_record = jobs.get("prepared:h3") or {}
     fast_record = jobs.get("prepared:fasth3") or {}
-    h3 = bool(comfy_url) and h3_record.get("url") == comfy_url
+    h3 = (
+        bool(comfy_url)
+        and h3_record.get("url") == comfy_url
+        and h3_record.get("backend") == "split"
+    )
     fast = bool(model_revision) and fast_record.get("revision") == model_revision
     return {
         "h3": {
@@ -24,7 +29,7 @@ def describe_modes(jobs, comfy_url: str, model_revision: str) -> dict:
             "steps": 8,
             "reason": None
             if h3
-            else "Set AMBIENT_COMFYUI_URL, prepare H3 models, then run check_h3",
+            else "Set AMBIENT_COMFYUI_URL to splitapp, prepare H3 models, then run check_h3",
             "validation": h3_record,
         },
         "fasth3": {
@@ -41,15 +46,18 @@ def describe_modes(jobs, comfy_url: str, model_revision: str) -> dict:
 
 
 async def check_comfyui(url: str, headers: dict) -> dict:
-    """Contact ComfyUI explicitly; this can wake it, but never submits a prompt."""
+    """Read the split CPU gateway's inventory without starting a GPU worker."""
     import aiohttp
 
     if not url:
         raise ValueError("Set AMBIENT_COMFYUI_URL before deployment")
-    url = validate_endpoint(url)
+    url = validate_endpoint(url, allow_http_loopback=not headers)
     async with aiohttp.ClientSession(
-        headers=headers, timeout=aiohttp.ClientTimeout(total=240), trace_configs=[redirect_guard()]
+        headers={**headers, **SPLIT_HEADERS},
+        timeout=aiohttp.ClientTimeout(total=240),
+        trace_configs=[redirect_guard()],
     ) as client:
+        state = await check_split(client, url)
         async with client.get(url + "/object_info") as response:
             response.raise_for_status()
             info = await response.json()
@@ -59,6 +67,8 @@ async def check_comfyui(url: str, headers: dict) -> dict:
             stats = await response.json()
     return {
         "url": url,
+        "backend": "split",
+        "environment": state.get("environment"),
         "comfyVersion": stats.get("system", {}).get("comfyui_version"),
         "workflowReference": COMFYUI_REFERENCE,
         "checkedAt": time.time(),

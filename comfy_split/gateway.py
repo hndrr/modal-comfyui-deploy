@@ -201,12 +201,14 @@ class Controller:
         call = modal.FunctionCall.from_id(record["call_id"])
         try:
             return await call.get.aio(timeout=0)
+        except modal.exception.FunctionTimeoutError as error:
+            # This is a terminal worker failure, unlike a poll with no result yet.
+            return {"status": "failed", "error": str(error)}
         except (TimeoutError, modal.exception.TimeoutError):
             return None
         except Exception as error:
             # FunctionCall failure is terminal; a network failure is not.
-            if isinstance(error, (modal.exception.FunctionTimeoutError,
-                                  modal.exception.RemoteError)) or any(
+            if isinstance(error, modal.exception.RemoteError) or any(
                     frame.filename.startswith("<ta-") for frame in traceback.extract_tb(error.__traceback__)):
                 return {"status": "failed", "error": str(error)}
             raise
@@ -577,6 +579,8 @@ class Controller:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
             if self.journal.data["mode"] == "legacy":
+                if request.headers.get("X-Modal-Execution-Mode") == "split":
+                    return web.json_response({"error": "This client requires split mode."}, status=409)
                 session = self.journal.data["session"]
                 if not session or not session.get("url") or session.get("stopping"):
                     return web.json_response({"error": "GPUの起動・モード切替中です。"}, status=503,
@@ -601,6 +605,9 @@ class Controller:
             if path == "/prompt" and request.method == "POST":
                 body = await request.json()
                 async with self.lock:
+                    # Mode may have changed while the request body was being read.
+                    if self.journal.data["mode"] != "split":
+                        raise ValueError("This client requires split mode.")
                     job = self.journal.enqueue(body, request.headers.get("Idempotency-Key"))
                     await self.volumes["input"].commit.aio()
                     await self.persist()

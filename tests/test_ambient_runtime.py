@@ -281,7 +281,7 @@ class ReadinessTest(unittest.TestCase):
     def test_capabilities_use_matching_preparation_records(self):
         url, revision = "https://comfy.example", "a" * 40
         jobs = {
-            "prepared:h3": {"url": url, "gpuValidated": False},
+            "prepared:h3": {"url": url, "backend": "split", "gpuValidated": False},
             "prepared:fasth3": {"revision": revision, "gpuValidated": False},
         }
         modes = describe_modes(jobs, url, revision)
@@ -298,6 +298,12 @@ class ReadinessTest(unittest.TestCase):
         self.assertTrue(
             all(not mode["ready"] for mode in describe_modes({}, url, revision).values())
         )
+
+    def test_old_standard_comfyui_preparation_requires_a_split_check(self):
+        url = "https://comfy.example"
+        modes = describe_modes({"prepared:h3": {"url": url}}, url, "")
+        self.assertFalse(modes["h3"]["ready"])
+        self.assertIn("splitapp", modes["h3"]["reason"])
 
 
 class FastH3CallTest(unittest.TestCase):

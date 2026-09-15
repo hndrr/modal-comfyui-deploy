@@ -7,6 +7,7 @@ import time
 from uuid import uuid4
 
 from .h3 import workflow
+from .split import SPLIT_HEADERS, check_split
 from .urls import redirect_guard, validate_endpoint
 
 
@@ -34,10 +35,15 @@ async def generate(
     import aiohttp
 
     base = validate_endpoint(base, allow_http_loopback=not headers)
+    if cancelled():
+        return
     client_id = str(uuid4())
     async with aiohttp.ClientSession(
-        headers=headers, timeout=aiohttp.ClientTimeout(total=120), trace_configs=[redirect_guard()]
+        headers={**headers, **SPLIT_HEADERS},
+        timeout=aiohttp.ClientTimeout(total=120),
+        trace_configs=[redirect_guard()],
     ) as session:
+        await check_split(session, base)
 
         async def call(method, path, **kwargs):
             async with session.request(method, base.rstrip("/") + path, **kwargs) as response:
@@ -47,7 +53,7 @@ async def generate(
                     )
                 return await response.json()
 
-        # This control-only backend connection keeps the existing web_server input active.
+        # This control-only connection stays on splitapp's CPU gateway.
         # Never forward preview bytes, and disable compression for Modal's proxy.
         async with session.ws_connect(
             base.rstrip("/") + "/ws?clientId=" + client_id, compress=0, heartbeat=15
@@ -80,6 +86,8 @@ async def generate(
                     image_name = "/".join(
                         filter(None, [uploaded.get("subfolder"), uploaded["name"]])
                     )
+                if cancelled():
+                    return
                 submitted = await call(
                     "POST",
                     "/prompt",
@@ -94,7 +102,26 @@ async def generate(
                 progress("ComfyUI queued")
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
+                    if cancelled():
+                        # The gateway scopes interrupts to this worker's job ID.
+                        await call("POST", f"/jobs/{prompt_id}/cancel")
+                        return
                     history = (await call("GET", f"/history/{prompt_id}")).get(prompt_id)
+                    if not history:
+                        queue = await call("GET", "/queue")
+                        if not any(
+                            row[1] == prompt_id
+                            for name in ("queue_pending", "queue_running")
+                            for row in queue.get(name, [])
+                        ):
+                            # Completion may have raced the first history read. A queued
+                            # job cancelled from ComfyUI has neither a queue entry nor history.
+                            history = (await call("GET", f"/history/{prompt_id}")).get(prompt_id)
+                            if not history:
+                                raise RuntimeError(
+                                    "ComfyUI job left the queue without a result; it may have "
+                                    "been cancelled from ComfyUI. Inspect history before retrying."
+                                )
                     if history:
                         if cancelled():
                             return
@@ -122,14 +149,6 @@ async def generate(
                                 async for chunk in response.content.iter_chunked(1024 * 1024):
                                     handle.write(chunk)
                         return
-                    if cancelled():
-                        queue = await call("GET", "/queue")
-                        # Deleting this ID from pending is safe even if it just began running.
-                        await call("POST", "/queue", json={"delete": [prompt_id]})
-                        running = any(row[1] == prompt_id for row in queue.get("queue_running", []))
-                        if not running:
-                            return
-                        # Logical cancellation: drain only our running job. Never /interrupt.
                     if socket.closed:
                         raise RuntimeError(
                             "ComfyUI control connection closed; job result is uncertain. Inspect ComfyUI history before retrying."

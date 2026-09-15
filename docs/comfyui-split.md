@@ -71,16 +71,25 @@ ComfyUI内部のキュー・履歴メソッドは差し替えない。
 追加API:
 
 - `GET /split/status`: モード、環境更新、結果不明ジョブ。
+- `GET /modal-control/v1/status`: 同じ状態を返すバージョン付きAPI。`api_version: 1`。
 - `POST /split/mode`: `{"mode":"split"}` または `{"mode":"legacy"}`。
 - `POST /split/environment/apply`: 候補環境を作成・検証して反映。
 - `POST /split/environment/discard`: 未反映の候補を破棄。
 - `/prompt` の `Idempotency-Key` ヘッダー: 同一キー・同一内容の再送を重複受付しない。
+- `POST /jobs/<id>/cancel`: 指定ジョブの待機キャンセル、またはそのGPU workerへの中断指示。
+
+[Ambient](ambient.md)はCPUの `ui` URLを接続先にする。モデル確認、WebSocket接続、
+結果取得はCPU側で処理し、H3の生成をこのキューへ投入する。
+`X-Modal-Execution-Mode: split` を付けたリクエストは、従来モードでは409を返す。
+事前の状態確認後にモードが変わっても、Ambientのリクエストを従来モードのGPUへ転送しない。
+通常のComfyUI画面はこのヘッダーを送らず、従来どおりモードを切り替えて使える。
 
 GPU呼び出し前にdispatch intentを保存し、呼び出しIDを取得後に保存する。
 CPUが間で停止してIDを記録できなかった場合は `unknown` とし、結果記録を待つ。
 結果不明のジョブは自動再実行せず、後続投入の実行も停止する。
 管理者はModalのGPU呼び出しとresults Volumeを確認してから復旧する。
 ネットワークエラーだけを根拠に再投入しない。
+GPU関数の実行タイムアウトは失敗として確定し、結果待ちのポーリングタイムアウトと区別する。
 
 GPU側も実行前に開始記録をcommitする。[Modalのプリエンプション](https://modal.com/docs/guide/preemption)
 では同じ入力が再開されるため、開始記録のみ残っている場合は `unknown` とし、再実行しない。

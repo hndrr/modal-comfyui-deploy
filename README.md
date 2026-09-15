@@ -135,3 +135,5 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 ## Ambient Studio
 
 独立した [Ambient Studio](https://github.com/hndrr/ambient-studio) 向けに、生成job API、H3の最終フレーム継承、FastH3専用workerを提供します。画面・再生・FX・MIDIはフロント側が担当します。バックエンドの責務分担、設定、明示的なモデル準備、検証手順は [docs/ambient.md](docs/ambient.md) を参照してください。
+
+`splitapp.py` と `ambient_app.py` を組み合わせ、H3の接続先にはsplitappのCPU UIエンドポイントを指定します。splitモードではComfyUI画面を開いたままでも、生成終了後にGPUを自動停止できます。FastH3はAmbientの専用GPU workerで動作します。
