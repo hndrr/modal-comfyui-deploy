@@ -94,9 +94,11 @@ A backend control-only WebSocket keeps ComfyUI alive and drains progress without
 
 ## Local verification
 
+Install `ffmpeg` (including `ffprobe`) to run the audio and final-frame regression test. CI installs it explicitly so this test is not skipped.
+
 ```sh
-uv sync --extra ambient-test
-uv run python -m unittest discover -s tests
+uv sync --locked --extra ambient-test
+uv run --locked --extra ambient-test python -m unittest discover -s tests -v
 ```
 
 Tests cover idempotency/conflicts, dispatch failure/worker timeout, input capability restrictions, multipart validation, range delivery, audio-required encoding/final-frame extraction, and a local aiohttp ComfyUI double proving that cancellation touches only the owned prompt. Processor tests also cover cancellation before generation, after generation and during commits; failed generation/encoding/commits; both input anchor types; and cleanup boundaries. FastVideo lifecycle tests use a fake generator and do not establish model or GPU compatibility.

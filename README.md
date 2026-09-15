@@ -18,11 +18,12 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 GitHub Actionsで、push・pull request時に以下を並列実行します。Actions画面からの手動実行にも対応しています。
 
-- Python: `uv sync --locked` → `uv run --locked python -m unittest discover -s tests -v`
+- Python: `uv sync --locked --extra ambient-test` → `uv run --locked --extra ambient-test python -m unittest discover -s tests -v`
 - 管理画面（`web/`）: `npm ci` → `npm test` → `npm run build`
 - 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
 
 CIはPython 3.12・Node.js 22を使用し、認証情報なしで実行します。
+Ambientの音声・最終フレーム検証に必要な`ffmpeg`（`ffprobe`を含む）もCIでインストールします。ローカルで同じ検証を行う場合も必要です。
 Modal上での実生成・GPU停止・ブラウザ操作の検証はCIの対象外です。
 
 ## セットアップ
