@@ -93,6 +93,9 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             stop=AsyncMock(),
             start=AsyncMock(),
             archive_temp=Mock(),
+            dependencies={"comfy-kitchen": {
+                "version": "0.2.33", "expected": "0.2.33", "missingApis": [],
+            }},
         )
         self.control.client = ClientSession(auto_decompress=False)
         app = web.Application()
@@ -143,6 +146,48 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(record["gpuValidated"])
             self.worker.spawn.aio.assert_not_awaited()
             self.assertFalse(socket.closed)
+
+    async def test_fast_comfy_inventory_and_generation_use_the_existing_gateway(self):
+        self.req = request(mode="fasth3", backend="comfyui")
+        record = await check_comfyui(self.base, {}, "fasth3")
+        self.assertEqual(record["dependencies"]["comfy-kitchen"]["version"], "0.2.33")
+        self.assertFalse(record["gpuValidated"])
+        self.worker.spawn.aio.assert_not_awaited()
+        task, job = await self.start_generation()
+        graph = job["body"]["prompt"]
+        self.assertEqual(graph["2"]["class_type"], "BlockSparseAttention")
+        self.assertEqual(graph["2"]["inputs"]["selection.keep_percent"], 10)
+        self.assertIsNone(self.upload)
+        call = SimpleNamespace(get=remote({"status": "completed", "history": {
+            "status": {"completed": True},
+            "outputs": {"15": {"images": [{"filename": "video.mp4", "type": "output"}]}},
+        }}))
+        with patch("comfy_split.gateway.modal.FunctionCall.from_id", return_value=call):
+            dispatcher = asyncio.create_task(self.control.dispatch())
+            self.tasks.append(dispatcher)
+            await asyncio.wait_for(task, 3)
+            dispatcher.cancel()
+            await asyncio.gather(dispatcher, return_exceptions=True)
+        self.assertEqual(self.destination.read_bytes(), b"generated video")
+        self.worker.spawn.aio.assert_awaited_once()
+
+    async def test_fast_comfy_dependency_failure_never_submits_a_gpu_job(self):
+        self.req = request(mode="fasth3", backend="comfyui")
+        self.control.cpu.dependencies["comfy-kitchen"]["version"] = "0.2.1"
+        with self.assertRaisesRegex(ValueError, "comfy-kitchen"):
+            await check_comfyui(self.base, {}, "fasth3")
+        with self.assertRaisesRegex(ValueError, "comfy-kitchen"):
+            await self.generate()
+        self.worker.spawn.aio.assert_not_awaited()
+        self.assertEqual(self.cpu_requests, [])
+
+    async def test_fast_comfy_queued_cancellation_is_scoped(self):
+        self.req = request(mode="fasth3", backend="comfyui")
+        await self.test_cancel_queued_job_preserves_other_browser_job()
+
+    async def test_fast_comfy_running_cancellation_is_scoped(self):
+        self.req = request(mode="fasth3", backend="comfyui")
+        await self.test_cancel_running_job_sends_only_its_scoped_interrupt()
 
     async def test_anchor_generation_dispatches_once_and_downloads_while_ui_stays_open(self):
         anchor = self.root / "anchor.png"

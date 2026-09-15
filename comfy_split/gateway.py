@@ -554,6 +554,7 @@ class Controller:
             if path in {"/split/status", "/modal-control/v1/status"}:
                 data = self.journal.data
                 return web.json_response({"api_version": 1, "mode": data["mode"], "environment": data["environment"],
+                    "dependencies": getattr(self.cpu, "dependencies", {}),
                     "gpu": await self.gpu_status(),
                     "candidate": data["candidate"], "busy": self.journal.busy(),
                     "transitioning": bool(data["session"] and (

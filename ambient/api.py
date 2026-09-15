@@ -1,7 +1,7 @@
 from pathlib import Path
 import tempfile
 
-from .contracts import FPS, FRAMES, RESOLUTIONS, identifier, validate_request
+from .contracts import DEFAULT_BACKENDS, FPS, FRAMES, RESOLUTIONS, identifier, validate_request
 from .service import Conflict
 from .storage import AmbientStorage
 
@@ -30,9 +30,17 @@ def create_api(service, modes, inputs, outputs):
         return {"modes": modes(), "resolutions": RESOLUTIONS, "frames": FRAMES, "fps": FPS}
 
     def submit_job(data):
+        existing = service.existing(data)
+        if existing is not None:
+            return existing
         mode = modes()[data["mode"]]
-        if not mode["ready"]:
-            return JSONResponse({"error": mode["reason"]}, status_code=503)
+        # Legacy capability providers describe only the legacy default route.
+        route = mode.get("backends", {}).get(data["backend"])
+        if route is None and data["backend"] == DEFAULT_BACKENDS[data["mode"]]:
+            route = mode
+        if route is None or not route["ready"]:
+            reason = route.get("reason") if route else "Generation backend is not prepared"
+            return JSONResponse({"error": reason}, status_code=503)
         if data.get("parentClipId"):
             parent = service.get(data["parentClipId"])
             if parent["status"] != "completed":

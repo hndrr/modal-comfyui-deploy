@@ -8,6 +8,12 @@ RESOLUTIONS = {"preview": (832, 480), "quality": (1344, 768)}
 FRAMES = 124
 FPS = 24
 TERMINAL = {"completed", "failed", "cancelled"}
+DEFAULT_BACKENDS = {"h3": "comfyui", "fasth3": "fastvideo"}
+ROUTES = (("h3", "comfyui"), ("fasth3", "comfyui"), ("fasth3", "fastvideo"))
+
+
+def backend_for(request: dict) -> str:
+    return request.get("backend", DEFAULT_BACKENDS[request["mode"]])
 
 
 def identifier(value: object) -> str:
@@ -22,7 +28,7 @@ def identifier(value: object) -> str:
 def validate_request(data: object) -> dict:
     if not isinstance(data, dict):
         raise ValueError("Expected a JSON object")
-    allowed = {"requestId", "mode", "prompt", "sound", "seed", "resolution", "imageId", "parentClipId"}
+    allowed = {"requestId", "mode", "backend", "prompt", "sound", "seed", "resolution", "imageId", "parentClipId"}
     if set(data) - allowed:
         raise ValueError("Unknown request fields")
     out = {"requestId": identifier(data.get("requestId"))}
@@ -33,12 +39,15 @@ def validate_request(data: object) -> dict:
         out[key] = value.strip()
     if data.get("mode") not in ("h3", "fasth3"):
         raise ValueError("Invalid generation mode")
+    backend = backend_for(data)
+    if (data["mode"], backend) not in ROUTES:
+        raise ValueError("Unsupported generation mode/backend combination")
     if not isinstance(data.get("resolution"), str) or data.get("resolution") not in RESOLUTIONS:
         raise ValueError("Invalid resolution")
     seed = data.get("seed")
     if type(seed) is not int or not 0 <= seed <= 2147483647:
         raise ValueError("Seed must be an integer from 0 to 2147483647")
-    out.update(mode=data["mode"], resolution=data["resolution"], seed=seed)
+    out.update(mode=data["mode"], backend=backend, resolution=data["resolution"], seed=seed)
     for key in ("imageId", "parentClipId"):
         if data.get(key) is not None:
             out[key] = identifier(data[key])
@@ -59,7 +68,9 @@ def prompt_text(request: dict) -> str:
 
 
 def public_job(job: dict, cancelled: bool = False) -> dict:
-    result = {k: job[k] for k in ("id", "status", "stage", "error", "clip") if k in job}
+    result = {k: job[k] for k in ("id", "status", "stage", "error", "clip", "references") if k in job}
+    if "request" in job:
+        result.update(mode=job["request"]["mode"], backend=backend_for(job["request"]))
     if cancelled:
         result.update(status="cancelled", stage="Cancelled")
         result.pop("clip", None)

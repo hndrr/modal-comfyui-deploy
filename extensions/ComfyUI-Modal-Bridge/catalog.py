@@ -7,6 +7,7 @@ from .cpu_guard import cpu_guard_enabled
 async def catalog(_request):
     import nodes
     import folder_paths
+    from comfy_split.check_environment import kitchen_report
     model_lists = {name: folder_paths.get_filename_list(name)
                    for name in folder_paths.folder_names_and_paths}
     choice_sources = {}
@@ -25,6 +26,7 @@ async def catalog(_request):
                     choice_sources.setdefault(name, {}).setdefault(section, {})[field] = matches[0]
     return web.json_response({
         "cpu_guard": cpu_guard_enabled(),
+        "dependencies": kitchen_report(Path("/opt/split-constraints.txt").read_text()),
         "extensions": {name: str(path) for name, path in nodes.EXTENSION_WEB_DIRS.items()},
         "nodes": sorted(nodes.NODE_CLASS_MAPPINGS),
         "choice_sources": choice_sources,
@@ -32,4 +34,3 @@ async def catalog(_request):
                             for p in Path(folder).iterdir()
                             if getattr(sys, "__comfyui_manager_is_import_failed_extension", lambda _: False)(str(p))],
     })
-

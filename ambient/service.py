@@ -11,12 +11,27 @@ class Conflict(ValueError):
 class JobService:
     """Injectable store/dispatcher. Modal Dict.put(skip_if_exists) is the atomic claim."""
 
-    def __init__(self, store, spawn, now=time.time, reconcile=None):
+    def __init__(self, store, spawn, now=time.time, reconcile=None, reference=None):
         self.store, self.spawn, self.now = store, spawn, now
         self.reconcile = reconcile
+        self.reference = reference
+
+    def existing(self, raw):
+        """Check retries before readiness or parent checks can reject an accepted job."""
+        request = validate_request(raw)
+        existing = self.store.get(request["requestId"])
+        if existing is None:
+            return None
+        # Normalize legacy requests too: their stored hash predates backend selection.
+        if fingerprint(validate_request(existing["request"])) != fingerprint(request):
+            raise Conflict("requestId already belongs to a different request")
+        return self.get(request["requestId"])
 
     def submit(self, raw):
         request = validate_request(raw)
+        existing = self.existing(request)
+        if existing is not None:
+            return existing
         job_id = request["requestId"]
         job = {
             "id": job_id,
@@ -26,11 +41,10 @@ class JobService:
             "fingerprint": fingerprint(request),
             "createdAt": self.now(),
         }
+        if self.reference:
+            job["references"] = self.reference(request)
         if not self.store.put(job_id, job, skip_if_exists=True):
-            existing = self.store[job_id]
-            if existing["fingerprint"] != job["fingerprint"]:
-                raise Conflict("requestId already belongs to a different request")
-            return self.get(job_id)
+            return self.existing(request)
         try:
             call = self.spawn(job_id)
             # Separate keys prevent dispatch and worker status writes overwriting each other.

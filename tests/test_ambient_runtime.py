@@ -17,6 +17,7 @@ from ambient.contracts import RESOLUTIONS, prompt_text
 from ambient.fasth3 import FastH3Engine
 from ambient.maintenance import cleanup_jobs
 from ambient.processing import run_job
+from ambient.contracts import ROUTES
 from ambient.readiness import describe_modes
 from ambient.service import JobService
 from ambient.storage import AmbientStorage, clip_path, frame_path, image_path
@@ -99,18 +100,18 @@ class RuntimeTest(unittest.TestCase):
 
     def run_job(self, job_id, generator=None):
         generator = generator or self.generate
-        run_job(job_id, self.jobs, self.storage, {"h3": generator, "fasth3": generator})
+        run_job(job_id, self.jobs, self.storage, {route: generator for route in ROUTES})
 
     def test_both_modes_publish_only_after_both_volumes_commit(self):
-        for mode in ("h3", "fasth3"):
+        for mode, backend in ROUTES:
             with (
                 self.subTest(mode=mode),
                 patch("ambient.storage.finalize", side_effect=self.encode),
             ):
-                job_id = self.submit(mode=mode)
+                job_id = self.submit(mode=mode, backend=backend)
                 selected = Mock(side_effect=self.generate)
                 unused = Mock(side_effect=AssertionError("Wrong generation backend"))
-                generators = {"h3": unused, "fasth3": unused, mode: selected}
+                generators = {**{route: unused for route in ROUTES}, (mode, backend): selected}
                 run_job(job_id, self.jobs, self.storage, generators)
                 selected.assert_called_once()
                 unused.assert_not_called()

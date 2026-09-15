@@ -10,6 +10,7 @@ import aiohttp
 from aiohttp import web
 
 from ambient.comfy import generate
+from ambient import client as ambient_client
 from ambient.readiness import check_comfyui
 from ambient.urls import validate_endpoint
 from scripts import ambient_smoke
@@ -67,7 +68,7 @@ class EndpointTest(unittest.IsolatedAsyncioTestCase):
                 patch.object(
                     sys, "argv", ["ambient_smoke.py", "--mode", "h3", "--output", str(output)]
                 ),
-                patch.object(ambient_smoke, "build_opener") as opener,
+                patch.object(ambient_client, "build_opener") as opener,
             ):
                 with self.assertRaises(ValueError):
                     ambient_smoke.main()
@@ -76,7 +77,7 @@ class EndpointTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_smoke_does_not_forward_credentials_on_redirect(self):
         with self.assertRaises(ValueError):
-            ambient_smoke.NoRedirect().redirect_request(
+            ambient_client.NoRedirect().redirect_request(
                 None, None, 302, "", {}, "http://example.com"
             )
 

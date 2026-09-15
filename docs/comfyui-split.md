@@ -79,10 +79,16 @@ ComfyUI内部のキュー・履歴メソッドは差し替えない。
 - `POST /jobs/<id>/cancel`: 指定ジョブの待機キャンセル、またはそのGPU workerへの中断指示。
 
 [Ambient](ambient.md)はCPUの `ui` URLを接続先にする。モデル確認、WebSocket接続、
-結果取得はCPU側で処理し、H3の生成をこのキューへ投入する。
+結果取得はCPU側で処理し、H3とComfyUI版FastH3の生成をこのキューへ投入する。
 `X-Modal-Execution-Mode: split` を付けたリクエストは、従来モードでは409を返す。
 事前の状態確認後にモードが変わっても、Ambientのリクエストを従来モードのGPUへ転送しない。
 通常のComfyUI画面はこのヘッダーを送らず、従来どおりモードを切り替えて使える。
+
+`/modal-control/v1/status` の `dependencies` は実行中のCPU ComfyUI環境の
+comfy-kitchen版、固定版、必要APIの不足を返す。GPUカーネルの動作検証とは区別する。
+comfy-kitchenは上流ComfyUIの指定版を固定依存に含め、イメージ構築時と仮想環境の
+適用時に検査する。古いVolume上の仮想環境が別版を優先している場合はCPU側の
+レポートに反映し、AmbientのFastH3生成前に検出する。修復は既存の環境更新手順で行う。
 
 GPU呼び出し前にdispatch intentを保存し、呼び出しIDを取得後に保存する。
 CPUが間で停止してIDを記録できなかった場合は `unknown` とし、結果記録を待つ。
