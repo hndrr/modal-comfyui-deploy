@@ -22,12 +22,17 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ## 保存先
 
 - モデル・入力・出力は既存のVolumeを利用。
-- ユーザーデータは初回に `comfy-user-data` から `comfy-split-user-data` へ複製。
+- ユーザーデータは初回に `comfy-user-data` から `comfy-split-data/user/` へ複製。
   以後は独立して保存する。検証中の設定変更で従来環境を変更しない。
 - 既存custom nodeを初回に環境Volumeへコピーし、依存を復元する。
 - `comfy-split-environments`: ノード、仮想環境、検証したノード定義。
-- `comfy-split-state`: CPUが書くジョブ受付・状態・環境選択。
-- `comfy-split-results`: GPUが書くジョブごとの実行結果。
+- `comfy-split-data/state/`: CPUが書くジョブ受付・状態・環境選択。
+- `comfy-split-data/jobs/`: GPUが書くジョブごとの実行結果。
+
+Split専用Volumeは環境用とデータ用の2つ。過去の環境は保管せず、利用中・編集中・未完了処理が
+参照する環境と初期環境を残す。終了済みジョブの詳細は7日、一時ファイルは更新から24時間以上
+経過し、履歴や処理から参照されていなければ清掃する。通常の生成物・入力・保存済みワークフローは自動削除しない。
+清掃は起動中に行い、そのためにCPU/GPUを起動しない。[詳細と移行手順](../ambient/docs/split-storage.md)。
 
 GPUは入力のreload後に実行し、出力のcommit後に結果を保存する。
 CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを共有しない。
@@ -71,16 +76,31 @@ ComfyUI内部のキュー・履歴メソッドは差し替えない。
 追加API:
 
 - `GET /split/status`: モード、環境更新、結果不明ジョブ。
+- `GET /modal-control/v1/status`: 同じ状態を返すバージョン付きAPI。`api_version: 1`。
 - `POST /split/mode`: `{"mode":"split"}` または `{"mode":"legacy"}`。
 - `POST /split/environment/apply`: 候補環境を作成・検証して反映。
 - `POST /split/environment/discard`: 未反映の候補を破棄。
 - `/prompt` の `Idempotency-Key` ヘッダー: 同一キー・同一内容の再送を重複受付しない。
+- `POST /jobs/<id>/cancel`: 指定ジョブの待機キャンセル、またはそのGPU workerへの中断指示。
+
+[Ambient](ambient.md)はCPUの `ui` URLを接続先にする。モデル確認、WebSocket接続、
+結果取得はCPU側で処理し、H3とComfyUI版FastH3の生成をこのキューへ投入する。
+`X-Modal-Execution-Mode: split` を付けたリクエストは、従来モードでは409を返す。
+事前の状態確認後にモードが変わっても、Ambientのリクエストを従来モードのGPUへ転送しない。
+通常のComfyUI画面はこのヘッダーを送らず、従来どおりモードを切り替えて使える。
+
+`/modal-control/v1/status` の `dependencies` は実行中のCPU ComfyUI環境の
+comfy-kitchen版、固定版、必要APIの不足を返す。GPUカーネルの動作検証とは区別する。
+comfy-kitchenは上流ComfyUIの指定版を固定依存に含め、イメージ構築時と仮想環境の
+適用時に検査する。古いVolume上の仮想環境が別版を優先している場合はCPU側の
+レポートに反映し、AmbientのFastH3生成前に検出する。修復は既存の環境更新手順で行う。
 
 GPU呼び出し前にdispatch intentを保存し、呼び出しIDを取得後に保存する。
 CPUが間で停止してIDを記録できなかった場合は `unknown` とし、結果記録を待つ。
 結果不明のジョブは自動再実行せず、後続投入の実行も停止する。
-管理者はModalのGPU呼び出しとresults Volumeを確認してから復旧する。
+管理者はModalのGPU呼び出しと`comfy-split-data/jobs/`を確認してから復旧する。
 ネットワークエラーだけを根拠に再投入しない。
+GPU関数の実行タイムアウトは失敗として確定し、結果待ちのポーリングタイムアウトと区別する。
 
 GPU側も実行前に開始記録をcommitする。[Modalのプリエンプション](https://modal.com/docs/guide/preemption)
 では同じ入力が再開されるため、開始記録のみ残っている場合は `unknown` とし、再実行しない。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -137,6 +138,14 @@ def _prune_progress(now: float) -> None:
             return
 
 
+def verify_sha256(path: Path, expected: str) -> None:
+    """Check pinned artifacts before replacing a shared model file."""
+    with path.open("rb") as source:
+        actual = hashlib.file_digest(source, "sha256").hexdigest()
+    if actual != expected:
+        raise ValueError(f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}")
+
+
 @app.function(
     volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
     image=download_image,
@@ -149,6 +158,7 @@ def preserve_model(
     filename: Optional[str] = None,
     revision: Optional[str] = None,
     destination_subdir: Optional[str] = None,
+    expected_sha256: Optional[str] = None,
 ):
     from huggingface_hub import hf_hub_download
 
@@ -182,6 +192,10 @@ def preserve_model(
         raise ValueError("repo_id を必ず指定してください")
     if not filename:
         raise ValueError("filename を必ず指定してください")
+    if expected_sha256 is not None and (
+        len(expected_sha256) != 64 or any(c not in "0123456789abcdef" for c in expected_sha256)
+    ):
+        raise ValueError("expected_sha256 must be a lowercase SHA-256 digest")
 
     call_id = modal.current_function_call_id() or ""
     started_at = time.time()
@@ -238,6 +252,9 @@ def preserve_model(
             stop_watching.set()
             watcher.join(timeout=PROGRESS_POLL_SECONDS)
 
+        if expected_sha256:
+            report("verifying", destination=destination_path.as_posix())
+            verify_sha256(downloaded_path, expected_sha256)
         if downloaded_path.resolve() != destination_path.resolve():
             report("copying", destination=destination_path.as_posix())
             shutil.copy2(downloaded_path, destination_path)
