@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from .contracts import fingerprint, public_job, stored_backend, validate_request
+from .job_state import finish_job, read_job
 
 
 class Conflict(ValueError):
@@ -51,17 +52,17 @@ class JobService:
             # Separate keys prevent dispatch and worker status writes overwriting each other.
             self.store.put("call:" + job_id, str(call))
         except Exception:
-            job.update(
+            finish_job(
+                self.store, job_id,
                 status="failed",
                 stage="Dispatch failed",
                 error="Job dispatch failed; create a new request to retry.",
             )
-            self.store.put(job_id, job)
             raise
         return self.get(job_id)
 
     def get(self, job_id):
-        job = self.store.get(job_id)
+        job = read_job(self.store, job_id)
         if not job:
             raise KeyError(job_id)
         # A missing acknowledgement cannot prove that dispatch failed. Keep polling
@@ -84,22 +85,16 @@ class JobService:
             if call_id:
                 reason = self.reconcile(call_id)
                 if reason:
-                    # Re-read: a completion racing this poll must win over reconciliation.
-                    fresh = self.store.get(job_id)
-                    if fresh["status"] in ("queued", "running"):
-                        job = {
-                            **fresh,
-                            "status": "failed",
-                            "stage": "Worker stopped",
-                            "error": reason,
-                        }
-                    else:
-                        job = fresh
-        return public_job(job, bool(self.store.get("cancel:" + job_id)))
+                    job = finish_job(
+                        self.store, job_id, status="failed",
+                        stage="Worker stopped", error=reason,
+                    )
+        return public_job(job)
 
     def cancel(self, job_id):
         job = self.get(job_id)
         if job["status"] not in ("queued", "running"):
             return job
-        self.store.put("cancel:" + job_id, True)
-        return self.get(job_id)
+        return public_job(finish_job(
+            self.store, job_id, status="cancelled", stage="Cancelled",
+        ))
