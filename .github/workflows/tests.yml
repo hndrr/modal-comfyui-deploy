@@ -2,6 +2,7 @@ name: Tests
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -13,8 +14,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      web: ${{ steps.filter.outputs.web }}
+      worker: ${{ steps.filter.outputs.worker }}
+    steps:
+      # PRs use the files API; main pushes compare against the previous push.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          base: ${{ github.event_name == 'push' && github.ref || '' }}
+          filters: |
+            python:
+              - '.github/workflows/tests.yml'
+              - '**/*.py'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.python-version'
+              - 'comfy_split/extension_paths.yaml'
+              - 'extensions/**/web/**'
+              - 'scripts/modal.sh'
+            web:
+              - '.github/workflows/tests.yml'
+              - 'web/**'
+              - 'asset_manager.py'
+              - 'asset_rpc.py'
+              - 'preserve_model.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.python-version'
+            worker:
+              - '.github/workflows/tests.yml'
+              - 'worker/**'
+
+  # Keep the existing check names. If detection fails, run all tests rather than
+  # silently skipping checks that may be required by branch protection.
   python:
     name: Python tests
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+          github.event_name == 'workflow_dispatch' ||
+          needs.changes.outputs.python == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -37,6 +92,11 @@ jobs:
 
   web:
     name: Asset manager tests and build
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+          github.event_name == 'workflow_dispatch' ||
+          needs.changes.outputs.web == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -57,6 +117,11 @@ jobs:
 
   worker:
     name: Access proxy tests and typecheck
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+          github.event_name == 'workflow_dispatch' ||
+          needs.changes.outputs.worker == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
