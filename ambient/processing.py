@@ -6,6 +6,7 @@ import tempfile
 
 from .storage import AmbientStorage
 from .contracts import stored_backend, validate_request
+from .job_state import finish_job, read_job
 
 
 Generator = Callable[[dict, Path | None, Path, Callable[[], bool], Callable[[str], None]], None]
@@ -19,7 +20,7 @@ def run_job(
     request = {**job["request"], "backend": stored_backend(job["request"])}
 
     def cancelled():
-        return bool(jobs.get("cancel:" + job_id))
+        return read_job(jobs, job_id)["status"] == "cancelled"
 
     def progress(stage):
         job.update(status="running", stage=stage)
@@ -43,9 +44,7 @@ def run_job(
             clip = storage.publish_clip(source, job_id)
             if cancelled():
                 return
-            job.update(status="completed", stage="Complete", clip=clip)
-            jobs.put(job_id, job)
+            finish_job(jobs, job_id, status="completed", stage="Complete", clip=clip)
     except Exception as error:
-        job.update(status="failed", stage="Failed", error=str(error)[:1800])
-        jobs.put(job_id, job)
+        finish_job(jobs, job_id, status="failed", stage="Failed", error=str(error)[:1800])
         print(f"Ambient job {job_id} failed: {type(error).__name__}: {error}")

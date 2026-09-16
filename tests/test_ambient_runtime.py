@@ -255,13 +255,17 @@ class RuntimeTest(unittest.TestCase):
         expired = now - RETENTION_SECONDS - 1
         removed = []
         retained = []
-        for status, created, cancelled in (
-            ("completed", expired, False),
-            ("failed", expired, False),
-            ("running", expired, True),
-            ("running", expired, False),
-            ("queued", expired, False),
-            ("completed", now, False),
+        for status, created, cancelled, terminal in (
+            ("completed", expired, False, None),
+            ("failed", expired, False, None),
+            ("running", expired, True, None),
+            ("running", expired, False, None),
+            ("queued", expired, False, None),
+            ("completed", now, False, None),
+            ("running", expired, False, "completed"),
+            ("running", expired, False, "failed"),
+            ("queued", expired, False, "cancelled"),
+            ("running", now, False, "completed"),
         ):
             job_id = str(uuid4())
             self.jobs.put(job_id, {"status": status, "createdAt": created})
@@ -269,6 +273,8 @@ class RuntimeTest(unittest.TestCase):
             self.jobs.put("fast-call:" + job_id, "fc-2")
             if cancelled:
                 self.jobs.put("cancel:" + job_id, True)
+            if terminal:
+                self.jobs.put("terminal:" + job_id, {"status": terminal, "createdAt": created})
             paths = [
                 self.storage.input_root / frame_path(job_id),
                 self.storage.output_root / clip_path(job_id),
@@ -279,7 +285,7 @@ class RuntimeTest(unittest.TestCase):
                 path.write_bytes(b"clip")
             (
                 removed
-                if created == expired and (status in ("completed", "failed") or cancelled)
+                if created == expired and (status in ("completed", "failed") or cancelled or terminal)
                 else retained
             ).append((job_id, paths))
         self.jobs["prepared:h3"] = {"url": "https://comfy.example", "checkedAt": expired}
@@ -299,7 +305,7 @@ class RuntimeTest(unittest.TestCase):
             os.utime(path, (now, now) if path.name == "recent.png" else (expired, expired))
         cleanup_jobs(self.jobs, self.storage, now=lambda: now)
         for job_id, paths in removed:
-            for prefix in ("", "call:", "fast-call:", "cancel:"):
+            for prefix in ("", "call:", "fast-call:", "cancel:", "terminal:"):
                 self.assertNotIn(prefix + job_id, self.jobs)
             self.assertTrue(all(not path.exists() for path in paths))
         for job_id, paths in retained:

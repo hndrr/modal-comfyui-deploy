@@ -3,6 +3,8 @@
 import time
 
 from .config import RETENTION_SECONDS
+from .contracts import TERMINAL
+from .job_state import read_job
 
 
 def cleanup_jobs(jobs, storage, now=time.time) -> None:
@@ -11,10 +13,10 @@ def cleanup_jobs(jobs, storage, now=time.time) -> None:
     for key, job in list(jobs.items()):
         if ":" in key or not isinstance(job, dict) or job.get("createdAt", cutoff + 1) > cutoff:
             continue
-        if job.get("status") not in ("completed", "failed") and not jobs.get("cancel:" + key):
+        if read_job(jobs, key)["status"] not in TERMINAL:
             continue
         storage.remove_clip(key)
-        for prefix in ("", "call:", "cancel:", "fast-call:"):
+        for prefix in ("", "call:", "cancel:", "fast-call:", "terminal:"):
             jobs.pop(prefix + key, None)
     storage.expire_temporary_files(cutoff)
     storage.commit()

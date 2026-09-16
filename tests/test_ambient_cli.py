@@ -215,7 +215,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 130)
         self.assertIn("Cancel response", err)
         job_id = next(
-            key for key in self.store if not key.startswith(("call:", "cancel:"))
+            key for key in self.store if ":" not in key
         )
         self.assertEqual(self.service.get(job_id)["status"], "cancelled")
         with patch.object(

@@ -68,11 +68,10 @@ def prompt_text(request: dict) -> str:
             f"overall_soundscape: {request['sound']}\n\nnon_diegetic_music: N/A")
 
 
-def public_job(job: dict, cancelled: bool = False) -> dict:
+def public_job(job: dict) -> dict:
     result = {k: job[k] for k in ("id", "status", "stage", "error", "clip", "references") if k in job}
     if "request" in job:
         result.update(mode=job["request"]["mode"], backend=stored_backend(job["request"]))
-    if cancelled:
-        result.update(status="cancelled", stage="Cancelled")
+    if result["status"] == "cancelled":
         result.pop("clip", None)
     return result
