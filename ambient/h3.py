@@ -58,7 +58,7 @@ class Workflow:
     def add(self, node_id, kind, **values):
         if kind not in self.objects:
             raise ValueError(
-                f"ComfyUI is missing native node {kind}; check the upstream H3 workflow"
+                f"ComfyUI is missing node {kind}; check the installed H3 nodes"
             )
         definition = self.objects[kind]
         required, fields = input_fields(definition["input"], values)
@@ -192,7 +192,10 @@ def workflow(
         sigmas=Link("10"),
         latent_image=Link("6"),
     )
-    add("12", "VAEDecode", samples=Link("11", "output"), vae=Link("4"))
+    add(
+        "12", "MiniMaxH3FastVAEDecode",
+        samples=Link("11", "output"), vae=Link("4"), tile_batch_size=4,
+    )
     add("13", "VAEDecodeAudio", samples=Link("11", "output"), vae=Link("5"))
     add("14", "CreateVideo", images=Link("12"), audio=Link("13"), fps=FPS)
     format_spec = (

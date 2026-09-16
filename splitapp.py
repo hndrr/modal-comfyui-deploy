@@ -19,14 +19,15 @@ from comfyapp import (
 )
 
 APP_NAME = "comfyui-split"
-COMFY_REVISION = "5bbdf8a76678e2c7cfb519a49a9c3a7137fd6280"
-FRONTEND_VERSION = "1.51.10"  # Version required by this ComfyUI revision.
+COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
+FRONTEND_VERSION = "1.52.7"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
 NODE_REVISIONS = {
     "crystian/ComfyUI-Crystools": "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
     "Firetheft/ComfyUI_Local_Media_Manager": "5e74ce0cc708798ed25a77097d6059b6c796da87",
     "hayden-cn/ComfyUI-Image-Browsing": "3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7",  # v2.3.0
     "rgthree/rgthree-comfy": "2c5342a8cb0eaecaabf61435a5f37dd594c510ba",
+    "Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE": "b719329e0ecf35f0ae08d241c363ed1e56adbb95",
 }
 volumes = {key: modal.Volume.from_name(name, create_if_missing=True)
            for key, name in VOLUME_NAMES.items()}

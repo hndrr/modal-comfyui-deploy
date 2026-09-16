@@ -7,6 +7,21 @@ from test_ambient import request
 
 
 class UpstreamContractTest(unittest.TestCase):
+    def test_video_decode_uses_fast_vae_and_requires_the_extension(self):
+        for mode in ("h3", "fasth3"):
+            with self.subTest(mode=mode):
+                info = object_info()
+                graph = workflow({**request(), "mode": mode}, object_info=info)
+                self.assertEqual(graph["12"], {
+                    "class_type": "MiniMaxH3FastVAEDecode",
+                    "inputs": {"samples": ["11", 0], "vae": ["4", 0], "tile_batch_size": 4},
+                })
+                self.assertEqual(graph["13"]["class_type"], "VAEDecodeAudio")
+                self.assertEqual(graph["14"]["inputs"]["images"], ["12", 0])
+                del info["MiniMaxH3FastVAEDecode"]
+                with self.assertRaisesRegex(ValueError, "missing node MiniMaxH3FastVAEDecode"):
+                    validate_object_info(info, mode)
+
     def test_save_video_nested_codec_follows_live_container_schema(self):
         info = object_info()
         codec = ["COMFY_DYNAMICCOMBO_V3", {"options": [
