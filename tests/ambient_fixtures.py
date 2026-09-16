@@ -65,7 +65,9 @@ def object_info():
             ["LATENT", "LATENT"],
             output_name=["output", "denoised_output"],
         ),
-        "VAEDecode": node({"samples": "LATENT", "vae": "VAE"}, ["IMAGE"]),
+        "MiniMaxH3FastVAEDecode": node(
+            {"samples": "LATENT", "vae": "VAE", "tile_batch_size": "INT"}, ["IMAGE"]
+        ),
         "VAEDecodeAudio": node({"samples": "LATENT", "vae": "VAE"}, ["AUDIO"]),
         "CreateVideo": node({"images": "IMAGE", "audio": "AUDIO", "fps": "FLOAT"}, ["VIDEO"]),
         "SaveVideo": node(

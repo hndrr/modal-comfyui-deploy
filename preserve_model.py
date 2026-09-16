@@ -259,6 +259,10 @@ def preserve_model(
             report("copying", destination=destination_path.as_posix())
             shutil.copy2(downloaded_path, destination_path)
             downloaded_path = destination_path
+        # modal run can stop the app as soon as this function returns. Wait for
+        # the shared Volume to persist the complete file before reporting success.
+        report("committing", destination=destination_path.as_posix())
+        volume.commit()
         file_stat = downloaded_path.stat()
         completed_at = datetime.now(timezone.utc).isoformat()
         print(f"モデルファイルを {downloaded_path} に保存しました")

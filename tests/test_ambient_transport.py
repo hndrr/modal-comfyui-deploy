@@ -205,7 +205,7 @@ class DownloadTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_incompatible_server_never_receives_a_prompt(self):
         del self.objects["MiniMaxH3ImageToVideo"]
-        with self.assertRaisesRegex(ValueError, "missing native node"):
+        with self.assertRaisesRegex(ValueError, "missing node"):
             await self.generate()
         self.assertEqual(self.prompts, [])
 
