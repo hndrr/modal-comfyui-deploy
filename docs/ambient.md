@@ -168,6 +168,11 @@ Macの切断・GPUの終了・キャンセル時には進行中のBridge処理�
 旧モードへ切り替える際はMacのBridgeを切断してください。環境更新中の新規接続は拒否します。
 Mac側へのBridgeパッケージの組み込みとCodexログインは別途必要です。
 
+デプロイ後の転送確認は `./scripts/modal.sh run scripts/check_agent_bridge.py` で実行できます。
+実際のBridgeノードで入力画像・生成画像・大きな実行結果を往復させ、保存画像を検査します。
+GPUを1ジョブ起動しますが、応答は確認用の固定データで、Codexや外部の生成APIは呼びません。
+Macが既に接続中の場合は接続を奪わず失敗します。
+
 Skills Loaderのアップロード先 `input/skills/` は既存の入力Volumeへ保存され、GPUからも参照できます。
 手元のPCのSkillやCLIのログイン情報は自動転送しません。
 
