@@ -22,13 +22,14 @@ from comfyapp import (
 APP_NAME = "comfyui-split"
 AMBIENT_MODE = ambient_nodes.enabled()
 # The read-only repository token belongs only to the CPU updater. Provider keys
-# reach both the CPU metadata endpoints and the GPU that executes the nodes.
+# and Bridge credentials reach the CPU endpoints and the GPU executing nodes.
 ambient_secrets = [
     modal.Secret.from_name(secret_name, required_keys=[key])
     for setting, key in (
         ("GEMINI_SECRET_NAME", "GEMINI_API_KEY"),
         ("TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"),
         ("OPENROUTER_SECRET_NAME", "OPENROUTER_API_KEY"),
+        ("AGENT_RUNTIME_SECRET_NAME", "AGENT_RUNTIME_BRIDGE_TOKEN"),
     )
     if (secret_name := os.environ.get(setting, "").strip())
 ] if AMBIENT_MODE else []
