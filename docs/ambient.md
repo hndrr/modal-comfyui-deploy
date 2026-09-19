@@ -86,6 +86,67 @@ Configured backend URLs must use HTTPS and a valid host, without embedded creden
 
 Ambient reuses the function timeout from `comfyapp.py`. GPU resources and lifecycle are configured in Splitapp; Ambient itself runs on CPU only.
 
+### Ambient用ComfyUIの追加ノード
+
+`ambient_app.py` の接続先である `splitapp.py` に、次のprivateリポジトリを追加します。
+
+- [ComfyUI-AgentRuntime](https://github.com/hndrr/ComfyUI-AgentRuntime)
+- [ComfyUI-Skills-Loader](https://github.com/hndrr/ComfyUI-Skills-Loader)
+- [ComfyUI-GeminiTools](https://github.com/hndrr/ComfyUI-GeminiTools)
+- [ComfyUI-Jev](https://github.com/hndrr/ComfyUI-Jev)
+
+ModalにSecret `github-secret` を作り、`GITHUB_TOKEN` に4リポジトリの
+Contentsを読み取れるGitHubトークンを登録してください。別名のSecretを使う場合は
+`GITHUB_SECRET_NAME` で指定します。トークンはCPUの取得処理へ渡し、
+ComfyUI子プロセス・GPU・Git remote URL・イメージには保存しません。
+
+`.env` の `COMFYUI_AMBIENT_MODE=on` を設定してからデプロイします。一度だけ指定する場合は次の形です。
+
+```sh
+COMFYUI_AMBIENT_MODE=on ./scripts/modal.sh deploy splitapp.py
+./scripts/modal.sh deploy ambient_app.py
+```
+
+CPUゲートウェイの起動時に、4リポジトリのデフォルトブランチの最新HEADを取得します。
+ビルド時の固定SHAではなく、再起動やスケールゼロからの復帰でも更新を確認します。
+実行中のcheckoutへ直接pullせず、全件を一時ディレクトリへcloneした後、変更がある場合だけ
+既存環境を複製して4つを入れ替えます。requirementsをまとめてインストールし、既存の
+CUDA等の依存制約とCPUでの4パッケージの読み込みを確認してからVolumeへ保存・反映します。
+GPUはジョブに記録された同じ環境を使い、独立したpullや更新確認のための起動は行いません。
+
+最新SHAが同じなら環境の複製や依存の再インストールは省略します。取得・依存・importの失敗時は
+旧環境を維持し、CPUログに理由を出します。初回導入が失敗した場合は追加ノードなしで起動します。
+未完了ジョブ、Managerの編集中環境、従来モードのセッションが残る起動では、次のアイドル起動まで
+更新を延期します。CPU検査はノードのimport検査であり、外部API・CLI実行やGPU推論の成功確認ではありません。
+
+追加分は各環境の `ambient_nodes/` に保存し、モードがonの場合だけComfyUIの検索パスへ追加します。
+通常の `comfyapp.py` と、モードoffのsplitappでは取得も読み込みも行いません。
+無効化は `COMFYUI_AMBIENT_MODE=off` でsplitappを再デプロイします。
+同名パッケージが既存の `custom_nodes/` に手動導入されている場合は、自動置換せず更新を止めて
+重複をログに表示します。Managerでの他ノードの更新時も4つのスナップショットを引き継ぎます。
+
+GeminiToolsとJevのAPIキーも、Modalに保存したSecretから読み込みます。
+使うサービスのSecretを作成し、デプロイ元の環境変数または `.env` にはSecret名だけを指定してください。
+
+| `.env` の設定例 | Modal Secret内のキー |
+| --- | --- |
+| `GEMINI_SECRET_NAME=gemini-secret` | `GEMINI_API_KEY` |
+| `TYPESAFE_SECRET_NAME=typesafe-secret` | `TYPESAFE_API_KEY` |
+| `OPENROUTER_SECRET_NAME=openrouter-secret` | `OPENROUTER_API_KEY` |
+
+Secret名は既存のものを指定でき、空欄のサービスは使いません。
+指定したSecretと必要なキーの存在はデプロイ時にModalが検査します。
+AmbientモードのCPU/GPUへ同じSecretを渡し、コンテナ起動時にキーを環境変数へ注入します。
+ローカルの `GEMINI_API_KEY`、`TYPESAFE_API_KEY`、`OPENROUTER_API_KEY` はデプロイ設定に取り込みません。
+
+Skills Loaderのアップロード先 `input/skills/` は既存の入力Volumeへ保存され、GPUからも参照できます。
+手元のPCのSkillやCLIのログイン情報は自動転送しません。
+
+AgentRuntimeのCLIプロバイダーを使う場合は、Modal側にも対応CLIの導入と認証が必要です。
+今回の自動取得はカスタムノード本体とPython依存が対象です。
+4つのノードはComfyUIのワークフローから利用でき、Ambient Studioの画面やH3生成レシピに
+自動で組み込まれるわけではありません。
+
 ## Explicit provisioning (incurs cloud usage; not automatic)
 
 When ready to use Modal again:

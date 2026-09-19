@@ -11,6 +11,7 @@ import time
 import modal
 
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
+from comfy_split import ambient_nodes
 
 from comfyapp import (
     base_image, FUNCTION_TIMEOUT, GPU_PROFILE, SAGE_ATTENTION_ENABLED,
@@ -19,6 +20,22 @@ from comfyapp import (
 )
 
 APP_NAME = "comfyui-split"
+AMBIENT_MODE = ambient_nodes.enabled()
+# The read-only repository token belongs only to the CPU updater. Provider keys
+# reach both the CPU metadata endpoints and the GPU that executes the nodes.
+ambient_secrets = [
+    modal.Secret.from_name(secret_name, required_keys=[key])
+    for setting, key in (
+        ("GEMINI_SECRET_NAME", "GEMINI_API_KEY"),
+        ("TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"),
+        ("OPENROUTER_SECRET_NAME", "OPENROUTER_API_KEY"),
+    )
+    if (secret_name := os.environ.get(setting, "").strip())
+] if AMBIENT_MODE else []
+github_secrets = [modal.Secret.from_name(
+    os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret",
+    required_keys=[ambient_nodes.TOKEN_ENV],
+)] if AMBIENT_MODE else []
 COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
 FRONTEND_VERSION = "1.52.7"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
@@ -71,6 +88,7 @@ image = (
         "Path(\"/opt/split-constraints.txt\").write_text(\"\\n\".join(n+\"==\"+m.version(n) for n in names)+\"\\n\")'",
     )
     .env({"SPLIT_APP": APP_NAME, "SPLIT_VOLUMES": json.dumps(VOLUME_NAMES),
+          ambient_nodes.MODE_ENV: "on" if AMBIENT_MODE else "off",
           "COMFYUI_SAGE_ATTENTION": "on" if SAGE_ATTENTION_ENABLED else "off",
           "SPLIT_GENERATION_TIMEOUT": str(FUNCTION_TIMEOUT),
           "PYTHONPATH": "/opt/split"})
@@ -87,6 +105,7 @@ app = modal.App(APP_NAME)
 
 
 @app.function(image=image, gpu=str(GPU_PROFILE["modal_gpu"]),
+              secrets=ambient_secrets,
               min_containers=0, max_containers=1, scaledown_window=30,
               timeout=86400, retries=0,
               volumes={MOUNTS[key]: value for key, value in volumes.items()})
@@ -96,6 +115,7 @@ async def gpu_worker(spec):
 
 
 @app.function(image=image, min_containers=0, max_containers=1, scaledown_window=30, cpu=2, memory=8192,
+              secrets=[*ambient_secrets, *github_secrets],
               timeout=86400, volumes={MOUNTS[key]: value for key, value in volumes.items()})
 @modal.concurrent(max_inputs=100)
 @modal.web_server(8000, startup_timeout=600, requires_proxy_auth=True)
