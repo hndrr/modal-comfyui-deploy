@@ -253,6 +253,32 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
                 named.assert_not_called()
                 self.assertEqual(app["ambient_secrets"], [])
 
+    def test_container_import_preserves_named_secret_dependencies(self):
+        import comfyapp
+        import modal
+
+        image_env = {}
+        original = modal.Image.env
+
+        def capture(image, values):
+            image_env.update(values)
+            return original(image, values)
+
+        settings = {ambient_nodes.MODE_ENV: "on", "GITHUB_SECRET_NAME": "private-repos",
+                    "GEMINI_SECRET_NAME": "provider-a", "TYPESAFE_SECRET_NAME": "",
+                    "OPENROUTER_SECRET_NAME": "provider-b", "AGENT_RUNTIME_SECRET_NAME": "mac-bridge",
+                    "GEMINI_API_KEY": "must-not-be-baked", "AGENT_RUNTIME_BRIDGE_TOKEN": "also-private"}
+        path = str(Path(comfyapp.__file__).with_name("splitapp.py"))
+        with patch.dict(os.environ, settings), patch.object(modal.Image, "env", capture):
+            local = runpy.run_path(path)
+        self.assertNotIn("must-not-be-baked", json.dumps(image_env))
+        self.assertNotIn("also-private", json.dumps(image_env))
+        # A container has image env + injected credentials, but no local .env.
+        with patch.dict(os.environ, image_env, clear=True):
+            remote = runpy.run_path(path)
+        for key in ("ambient_secrets", "github_secrets"):
+            self.assertEqual([secret.name for secret in remote[key]], [secret.name for secret in local[key]])
+
     async def test_cpu_and_gpu_use_same_snapshot_only_when_enabled_without_git_token(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

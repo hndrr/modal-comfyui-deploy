@@ -21,20 +21,26 @@ from comfyapp import (
 
 APP_NAME = "comfyui-split"
 AMBIENT_MODE = ambient_nodes.enabled()
+AMBIENT_SECRET_KEYS = (
+    ("GEMINI_SECRET_NAME", "GEMINI_API_KEY"),
+    ("TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"),
+    ("OPENROUTER_SECRET_NAME", "OPENROUTER_API_KEY"),
+    ("AGENT_RUNTIME_SECRET_NAME", "AGENT_RUNTIME_BRIDGE_TOKEN"),
+)
+# Modal imports this module again inside each container. Preserve the names so
+# that the remote function has exactly the same Secret dependencies as deploy.
+# Only names belong in the image; credential values come from Modal Secrets.
+secret_names = {name: os.environ.get(name, "").strip() for name, _ in AMBIENT_SECRET_KEYS}
+secret_names["GITHUB_SECRET_NAME"] = os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret"
 # The read-only repository token belongs only to the CPU updater. Provider keys
 # and Bridge credentials reach the CPU endpoints and the GPU executing nodes.
 ambient_secrets = [
     modal.Secret.from_name(secret_name, required_keys=[key])
-    for setting, key in (
-        ("GEMINI_SECRET_NAME", "GEMINI_API_KEY"),
-        ("TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"),
-        ("OPENROUTER_SECRET_NAME", "OPENROUTER_API_KEY"),
-        ("AGENT_RUNTIME_SECRET_NAME", "AGENT_RUNTIME_BRIDGE_TOKEN"),
-    )
-    if (secret_name := os.environ.get(setting, "").strip())
+    for setting, key in AMBIENT_SECRET_KEYS
+    if (secret_name := secret_names[setting])
 ] if AMBIENT_MODE else []
 github_secrets = [modal.Secret.from_name(
-    os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret",
+    secret_names["GITHUB_SECRET_NAME"],
     required_keys=[ambient_nodes.TOKEN_ENV],
 )] if AMBIENT_MODE else []
 COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
@@ -88,7 +94,7 @@ image = (
         "names=[\"torch\",\"torchvision\",\"torchaudio\",\"xformers\",\"flash-attn\",\"sageattention\",\"comfyui-frontend-package\",\"comfyui-manager\",\"comfy-kitchen\"]; "
         "Path(\"/opt/split-constraints.txt\").write_text(\"\\n\".join(n+\"==\"+m.version(n) for n in names)+\"\\n\")'",
     )
-    .env({"SPLIT_APP": APP_NAME, "SPLIT_VOLUMES": json.dumps(VOLUME_NAMES),
+    .env({**secret_names, "SPLIT_APP": APP_NAME, "SPLIT_VOLUMES": json.dumps(VOLUME_NAMES),
           ambient_nodes.MODE_ENV: "on" if AMBIENT_MODE else "off",
           "COMFYUI_SAGE_ATTENTION": "on" if SAGE_ATTENTION_ENABLED else "off",
           "SPLIT_GENERATION_TIMEOUT": str(FUNCTION_TIMEOUT),

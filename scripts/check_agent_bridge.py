@@ -14,8 +14,9 @@ from pathlib import Path
 
 import modal
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import comfyapp  # noqa: E402,F401 - shared dotenv resolution
+if modal.is_local():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import comfyapp  # noqa: E402,F401 - shared dotenv resolution
 
 app = modal.App("comfyui-agent-bridge-check")
 image = modal.Image.debian_slim(python_version="3.12").pip_install("aiohttp==3.12.15", "pillow==11.3.0")
@@ -25,7 +26,7 @@ bridge_secret = modal.Secret.from_name(os.environ.get("AGENT_RUNTIME_SECRET_NAME
                                        required_keys=["AGENT_RUNTIME_BRIDGE_TOKEN"])
 
 
-@app.function(image=image, secrets=[configuration, bridge_secret], timeout=600)
+@app.function(image=image, secrets=[configuration, bridge_secret], timeout=1200)
 async def check():
     from aiohttp import ClientSession, ClientTimeout, WSMsgType
     from PIL import Image
@@ -40,12 +41,14 @@ async def check():
     image_bytes = output.getvalue()
     job_id = None
     terminal = False
-    async with ClientSession(headers=headers, timeout=ClientTimeout(total=300)) as client:
+    async with ClientSession(headers=headers, timeout=ClientTimeout(total=660)) as client:
+        print("Waiting for split startup and Ambient node refresh", flush=True)
         async with client.get(url + "/split/status") as response:
             response.raise_for_status()
             status = await response.json()
             if status["mode"] != "split" or status["busy"] or status["candidate"] or status["transitioning"]:
                 raise RuntimeError("Bridge smoke requires an idle split deployment")
+        print("Split ready; connecting fixture Bridge peer", flush=True)
         async with client.ws_connect(url + prefix + "/ws", heartbeat=15, max_msg_size=20 * 1024 * 1024) as socket:
             catalog = {"models": [], "skills": [], "revision": "transport-smoke", "auth": "authenticated"}
             await socket.send_json({"type": "hello", "version": 1,
@@ -102,6 +105,7 @@ async def check():
                                        headers={"Idempotency-Key": "bridge-smoke-" + uuid.uuid4().hex}) as response:
                     response.raise_for_status()
                     job_id = (await response.json())["prompt_id"]
+                print("Bridge workflow accepted: " + job_id, flush=True)
                 async with asyncio.timeout(480):
                     while True:
                         if peer.done():
