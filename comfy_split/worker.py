@@ -131,6 +131,8 @@ async def generate(spec, client, control, emit):
             if accepted.get("prompt_id") != job_id:
                 raise RuntimeError("ComfyUI did not preserve prompt_id")
 
+        relay_finished = asyncio.Event()
+
         async def relay():
             async for message in socket:
                 if message.type == WSMsgType.TEXT:
@@ -139,6 +141,7 @@ async def generate(spec, client, control, emit):
                     if event.get("type") == "status":
                         continue
                     if event.get("type") == "executing" and event.get("data", {}).get("node") is None:
+                        relay_finished.set()
                         continue
                     if event.get("type") == "executed":
                         event["data"]["output"] = process.durable_outputs(event["data"].get("output", {}))
@@ -157,6 +160,14 @@ async def generate(spec, client, control, emit):
                     response.raise_for_status()
                     history = (await response.json()).get(job_id)
                 if history:
+                    # History becomes available just before the final WS marker.
+                    # Let preceding progress/output frames reach the controller
+                    # before cancelling the relay; history remains authoritative
+                    # if the connection no longer delivers the marker.
+                    try:
+                        await asyncio.wait_for(relay_finished.wait(), timeout=2)
+                    except TimeoutError:
+                        pass
                     status = history.get("status", {}).get("status_str")
                     messages = history.get("status", {}).get("messages", [])
                     interrupted = any(m[0] == "execution_interrupted" for m in messages)

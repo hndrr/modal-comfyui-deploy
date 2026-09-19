@@ -125,8 +125,11 @@ async def gpu_worker(spec):
               secrets=[*ambient_secrets, *github_secrets],
               timeout=86400, volumes={MOUNTS[key]: value for key, value in volumes.items()})
 @modal.concurrent(max_inputs=100)
-@modal.web_server(8000, startup_timeout=600, requires_proxy_auth=True)
+@modal.asgi_app(requires_proxy_auth=True)
 def ui():
+    from modal._runtime.asgi import wait_for_web_server
+    from comfy_split.modal_proxy import web_server_proxy
+
     gateway = subprocess.Popen(["python", "-m", "comfy_split.gateway"], env=dict(os.environ))
     
     def monitor():
@@ -139,3 +142,5 @@ def ui():
             time.sleep(5)
     
     threading.Thread(target=monitor, daemon=True).start()
+    wait_for_web_server("127.0.0.1", 8000, timeout=600)
+    return web_server_proxy("127.0.0.1", 8000)

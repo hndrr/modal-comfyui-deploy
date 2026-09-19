@@ -19,6 +19,7 @@ import modal
 from aiohttp import ClientError, WSMsgType, web
 
 from comfy_split.proxy import proxy
+from comfy_split.bridge_transport import HttpChannel, HttpSocket, TRANSPORT
 
 PREFIX = "/agent_runtime/bridge"
 TOKEN_ENV = "AGENT_RUNTIME_BRIDGE_TOKEN"
@@ -45,16 +46,24 @@ def normalized_path(request):
     return path[4:] if path.startswith("/api/") else path
 
 
-async def connect(client, url, token, hello):
+async def connect(client, url, token, hello, *, http_transport=False):
     async with asyncio.timeout(15):
         socket = await client.ws_connect(url + PREFIX + "/ws",
             headers={"Authorization": "Bearer " + token}, heartbeat=15,
             compress=0, max_msg_size=MAX_MESSAGE)
         try:
-            await socket.send_json(hello)
+            wire_hello = hello
+            if http_transport:
+                wire_hello = dict(hello, transport=TRANSPORT, catalog={
+                    "models": [], "skills": [], "revision": "", "auth": "unknown"})
+            await socket.send_json(wire_hello)
             ready = await socket.receive_json()
-            if ready != {"type": "ready", "version": 1}:
+            if ready.get("type") != "ready" or ready.get("version") != 1:
                 raise ValueError("Incompatible AgentRuntime Bridge protocol")
+            if http_transport:
+                if ready.get("transport") != TRANSPORT or not ready.get("session"):
+                    raise ValueError("GPU does not support HTTP Bridge payloads")
+                return HttpSocket(socket, client, url, token, ready["session"]), ready
             return socket, ready
         except BaseException:
             await socket.close()
@@ -74,6 +83,7 @@ class AgentBridge:
         self.url = None
         self.token = None
         self.jobs = set()
+        self.channel = None
 
     def identity(self):
         if not self.connection_id or self.socket is None or self.socket.closed:
@@ -86,6 +96,10 @@ class AgentBridge:
             return await proxy(request, self.controller.client, self.controller.cpu.url,
                                path=normalized_path(request))
         authorize(request, os.environ.get(TOKEN_ENV, ""))
+        if path == PREFIX + "/messages" or path.startswith(PREFIX + "/messages/"):
+            if self.channel is None:
+                raise web.HTTPConflict(text="Connect Bridge first")
+            return await self.channel.http(request)
         if path == PREFIX + "/ws" and request.method == "GET":
             return await self.websocket(request)
         match = FILE_ROUTE.fullmatch(path)
@@ -108,6 +122,9 @@ class AgentBridge:
                                             os.environ[TOKEN_ENV], hello)
             self.hello = hello
             self.connection_id = secrets.token_hex(16)
+            self.channel = HttpChannel(socket, self.connection_id, hello.get("transport") == TRANSPORT)
+            if self.channel.enabled:
+                ready = dict(ready, transport=TRANSPORT, session=self.connection_id)
             await socket.send_json(ready)
 
             async def watch_cpu():
@@ -120,16 +137,17 @@ class AgentBridge:
             async for message in socket:
                 if message.type != WSMsgType.TEXT:
                     continue
-                data = json.loads(message.data)
+                raw = self.channel.decode(message.data)
+                data = json.loads(raw)
                 if not isinstance(data, dict):
                     raise ValueError("Expected a Bridge message object")
                 if data.get("type") == "catalog":
                     self.hello = dict(self.hello, catalog=data["catalog"])
-                    await self.cpu.send_str(message.data)
+                    await self.cpu.send_str(raw)
                     if self.gpu is not None:
-                        await self.gpu.send_str(message.data)
+                        await self.gpu.send_str(raw)
                 elif data.get("type") in {"event", "result"} and data.get("id") in self.jobs:
-                    await self.gpu.send_str(message.data)
+                    await self.gpu.send_str(raw)
                     if data["type"] == "result":
                         self.jobs.discard(data["id"])
         except (ValueError, KeyError, TypeError, TimeoutError):
@@ -138,6 +156,8 @@ class AgentBridge:
             await socket.close(code=1011, message=b"Bridge connection lost")
         finally:
             self.connection_id = None
+            if self.channel:
+                self.channel.clear()
             await self.detach()
             if monitor:
                 monitor.cancel()
@@ -145,6 +165,7 @@ class AgentBridge:
             if self.cpu is not None:
                 await self.cpu.close()
             self.cpu = self.hello = self.socket = None
+            self.channel = None
         return socket
 
     async def attach(self, record, event):
@@ -157,7 +178,8 @@ class AgentBridge:
         await self.detach()
         # Keep ownership even after a failed connection to prevent silent retries.
         self.record_id = record["id"]
-        socket, _ = await connect(self.controller.client, event["url"], event["token"], self.hello)
+        socket, _ = await connect(self.controller.client, event["url"], event["token"], self.hello,
+                                  http_transport=event.get("transport") == TRANSPORT)
         try:
             if record["agent_bridge"] != self.identity():
                 raise ValueError("Mac Bridge disconnected while attaching GPU")
@@ -180,7 +202,7 @@ class AgentBridge:
                         self.jobs.discard(data["id"])
                     else:
                         continue
-                    await self.socket.send_str(message.data)
+                    await self.channel.send_str(message.data)
             finally:
                 await self.cancel_jobs()
                 self.url = self.token = None
@@ -219,10 +241,58 @@ async def gpu_tunnel(client, origin):
     """Only native Bridge routes are reachable through this per-job tunnel."""
     token = secrets.token_urlsafe(32)
     sockets = set()
+    channel = None
 
     async def handler(request):
+        nonlocal channel
         authorize(request, token)
         path = request.path
+        if path == PREFIX + "/messages" or path.startswith(PREFIX + "/messages/"):
+            if channel is None:
+                raise web.HTTPConflict(text="Connect Bridge first")
+            return await channel.http(request)
+        if path == PREFIX + "/ws" and request.method == "GET":
+            if channel is not None:
+                raise web.HTTPConflict()
+            socket = web.WebSocketResponse(heartbeat=15, max_msg_size=MAX_MESSAGE)
+            channel = HttpChannel(socket, secrets.token_hex(16), False)
+            sockets.add(socket)
+            upstream = None
+            tasks = []
+            try:
+                await socket.prepare(request)
+                hello = await socket.receive_json(timeout=15)
+                upstream, ready = await connect(client, origin, os.environ.get(TOKEN_ENV, ""), hello)
+                channel.enabled = hello.get("transport") == TRANSPORT
+                if channel.enabled:
+                    ready = dict(ready, transport=TRANSPORT, session=channel.session)
+                await socket.send_json(ready)
+
+                async def incoming():
+                    async for message in socket:
+                        if message.type == WSMsgType.TEXT:
+                            await upstream.send_str(channel.decode(message.data))
+
+                async def outgoing():
+                    async for message in upstream:
+                        if message.type == WSMsgType.TEXT:
+                            await channel.send_str(message.data)
+
+                tasks = [asyncio.create_task(incoming()), asyncio.create_task(outgoing())]
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                channel.clear()
+                if upstream is not None:
+                    await upstream.close()
+                await socket.close()
+                sockets.discard(socket)
+                channel = None
+            return socket
         if not (path == PREFIX + "/ws" and request.method == "GET" or
                 FILE_ROUTE.fullmatch(path) and request.method in {"GET", "POST"}):
             raise web.HTTPNotFound()
@@ -239,7 +309,7 @@ async def gpu_tunnel(client, origin):
     try:
         await web.TCPSite(runner, "0.0.0.0", 8191).start()
         async with modal.forward(8191) as tunnel:
-            yield {"type": "agent_bridge_ready", "url": tunnel.url, "token": token}
+            yield {"type": "agent_bridge_ready", "url": tunnel.url, "token": token, "transport": TRANSPORT}
     finally:
         await runner.cleanup()
 

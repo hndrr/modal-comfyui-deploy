@@ -10,7 +10,7 @@ from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split.gateway import Controller, api_path
-from comfy_split.state import Journal
+from comfy_split.state import Journal, job_history
 from comfy_split import worker as worker_module
 from comfy_split.check_environment import check_pins
 
@@ -20,6 +20,42 @@ def remote_mock(result=None):
 
 
 class JournalTests(unittest.TestCase):
+    def test_native_metadata_repairs_old_failures_without_changing_requests(self):
+        body = {"prompt": {"1": {}}, "extra_data": {"extra_pnginfo": {"workflow": {"id": "wf"}}}}
+        job = self.journal.enqueue(body, "retry")
+        pending = self.journal.queue()["queue_pending"][0]
+        self.assertEqual(pending[3]["create_time"], int(job["created_at"] * 1000))
+        self.assertNotIn("create_time", body["extra_data"])
+        job.update(status="failed", history={
+            "prompt": [0, job["id"], body["prompt"], {}, []], "outputs": {},
+            "status": {"status_str": "error", "completed": False, "messages": [
+                ["execution_error", {"prompt_id": job["id"], "exception_message": "worker failed"}]]}})
+        repaired = self.journal.history()[job["id"]]
+        self.assertEqual(repaired["prompt"][3], pending[3])
+        error = repaired["status"]["messages"][0][1]
+        self.assertEqual(error["exception_message"], "worker failed")
+        self.assertEqual(error["exception_type"], "RemoteExecutionError")
+        self.assertEqual(error["traceback"], [])
+        self.assertEqual(error["node_id"], "")
+        self.assertEqual(error["node_type"], "")
+        self.assertNotIn("exception_type", job["history"]["status"]["messages"][0][1])
+        self.assertIs(self.journal.enqueue(body, "retry"), job)
+        self.journal.save()
+        self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]], repaired)
+
+    def test_native_history_preserves_real_errors_outputs_and_timestamps(self):
+        job = self.journal.enqueue({"prompt": {"1": {}}})
+        job.update(status="failed", history={
+            "prompt": [0, job["id"], {"1": {}}, {"create_time": 1234}, []],
+            "outputs": {"1": {"images": [{"filename": "existing.png"}]}},
+            "status": {"status_str": "error", "messages": [["execution_error", {
+                "node_id": "1", "node_type": "SaveImage", "exception_type": "ValueError",
+                "exception_message": "original", "traceback": ["original trace"]}]]}})
+        result = job_history(job)
+        self.assertEqual(result["prompt"][3]["create_time"], 1234)
+        self.assertEqual(result["outputs"], job["history"]["outputs"])
+        self.assertEqual(result["status"]["messages"][0][1]["traceback"], ["original trace"])
+
     def test_candidate_rejects_install_scripts_that_override_protected_packages(self):
         check_pins("torch==2.10.0+cu130\n", lambda _: "2.10.0+cu130")
         with self.assertRaisesRegex(RuntimeError, "固定依存の競合"):
@@ -250,7 +286,64 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         ready.set()
         await finishing
         self.assertEqual(job["status"], "completed")
-        self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]], history)
+        self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]], job_history(job))
+
+    async def test_progress_counts_finished_non_output_nodes_and_preserves_real_outputs(self):
+        job = self.control.journal.enqueue({"prompt": {str(n): {} for n in range(1, 5)}})
+        self.control.broadcast = AsyncMock()
+        async def relay(kind, data):
+            await self.control.relay_event(job, {"type": "event", "event": {"type": kind, "data": data}})
+        await relay("execution_cached", {"prompt_id": job["id"], "nodes": ["1"]})
+        output = {"images": [{"filename": "real.png", "type": "output", "subfolder": ""}]}
+        await relay("executed", {"prompt_id": job["id"], "node": "4", "output": output})
+        states = {"1": {"state": "finished"}, "2": {"state": "finished"},
+                  "3": {"state": "running", "value": 1, "max": 4},
+                  "4": {"state": "finished"}, "expanded-child": {"state": "finished"}}
+        for _ in range(2):
+            await relay("progress_state", {"prompt_id": job["id"], "nodes": states})
+        await relay("progress_state", {"prompt_id": "another-job", "nodes": {"3": {"state": "finished"}}})
+        emitted = [call.args[0] for call in self.control.broadcast.call_args_list]
+        completed = [event["data"] for event in emitted if event["type"] == "executed"]
+        self.assertEqual(completed, [{"prompt_id": job["id"], "node": "2", "display_node": "2", "output": {}}])
+        # The native frontend now counts cached node 1 + completed node 2 (50%).
+        self.assertEqual(len({"1"} | {event["node"] for event in completed}) / 4, 0.5)
+        self.assertEqual(job["deferred_events"][0]["data"]["output"], output)
+
+    async def test_terminal_event_waits_for_files_and_readable_history_even_with_backlog(self):
+        job = self.control.journal.enqueue({"prompt": {"1": {}}, "client_id": "browser"})
+        job["status"] = "running"
+        history = {"outputs": {"1": {"images": [{"filename": "saved.png"}]}},
+                   "status": {"status_str": "success", "messages": [
+                       ["execution_success", {"prompt_id": job["id"], "timestamp": 123}]]}}
+        success = {"type": "event", "event": {"type": "execution_success", "data": {"prompt_id": job["id"]}}}
+        progress = {"type": "event", "event": {"type": "progress", "data": {"value": 1, "max": 2}}}
+        self.events.get_many.aio.side_effect = [[progress] * 100, [success]]
+        self.control.broadcast = AsyncMock()
+        ready = asyncio.Event()
+        self.volumes["output"].reload.aio.side_effect = ready.wait
+        task = asyncio.create_task(self.control.finish(job, {"status": "completed", "history": history}))
+        await asyncio.sleep(0)
+        self.assertEqual(job["status"], "running")
+        self.assertTrue(all(call.args[0]["type"] == "progress" for call in self.control.broadcast.call_args_list))
+        async def visible(event, client_id=None):
+            self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]]["outputs"], history["outputs"])
+        self.control.broadcast.side_effect = visible
+        ready.set()
+        await task
+        kinds = [call.args[0]["type"] for call in self.control.broadcast.call_args_list]
+        self.assertEqual(kinds[-4:], ["executed", "execution_success", "executing", "status"])
+        self.assertEqual(kinds.count("execution_success"), 1)
+        self.assertEqual(self.events.get_many.aio.await_count, 2)
+
+    async def test_worker_failure_has_valid_history_and_error_notification(self):
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        self.control.broadcast = AsyncMock()
+        await self.control.finish(job, {"status": "failed", "error": "worker stopped"})
+        event = self.control.broadcast.call_args_list[0].args[0]
+        self.assertEqual(event["type"], "execution_error")
+        self.assertEqual(event["data"]["exception_message"], "worker stopped")
+        self.assertEqual(event["data"]["node_id"], "")
+        self.assertIn("create_time", job["history"]["prompt"][3])
 
     async def test_mode_switch_refuses_queued_jobs(self):
         self.control.journal.enqueue({"prompt": {"1": {}}})
@@ -343,6 +436,13 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             state["history_reads"] += 1
             if state["history_reads"] < 2:
                 return web.json_response({})
+            async def tail():
+                # Native history is committed just before the final WS frames.
+                await asyncio.sleep(0.02)
+                for socket in sockets:
+                    await socket.send_json({"type": "progress", "data": {"value": 2, "max": 2}})
+                    await socket.send_json({"type": "executing", "data": {"node": None, "prompt_id": "job-1"}})
+            asyncio.create_task(tail())
             return web.json_response({"job-1": {"outputs": {}, "status": {
                 "status_str": "error", "messages": [["execution_interrupted", {}]]}}})
 
@@ -368,6 +468,9 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             types = [call.args[0]["type"] for call in emit.call_args_list]
             self.assertIn("event", types)
             self.assertIn("preview", types)
+            progress = [call.args[0]["event"]["data"]["value"] for call in emit.call_args_list
+                        if call.args[0].get("event", {}).get("type") == "progress"]
+            self.assertEqual(progress, [1, 2])
         finally:
             await server.close()
 

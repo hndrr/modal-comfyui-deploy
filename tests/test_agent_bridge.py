@@ -13,6 +13,7 @@ from aiohttp import ClientSession, WSServerHandshakeError, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split.agent_bridge import PREFIX, TOKEN_ENV, await_connection, gpu_tunnel
+from comfy_split.bridge_transport import HttpSocket, TRANSPORT, MAX_MESSAGE
 from comfy_split.gateway import Controller
 from comfy_split.worker import generate_with_bridge
 
@@ -215,6 +216,66 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await socket.receive_json())["type"], "ready")
             await socket.receive(timeout=2)
             self.assertTrue(socket.closed)
+
+    async def test_http_payloads_cross_both_gateway_and_gpu_tunnel(self):
+        self.mac = await self.client.ws_connect(PREFIX + "/ws", headers={
+            "Authorization": "Bearer shared-test-token"}, max_msg_size=2 * 1024 * 1024)
+        await self.mac.send_json(dict(HELLO, transport=TRANSPORT))
+        ready = await self.mac.receive_json(timeout=2)
+        self.assertEqual(ready["transport"], TRANSPORT)
+        public_url = str(self.client.make_url("/")).rstrip("/")
+        peer = HttpSocket(self.mac, self.controller.client, public_url, "shared-test-token", ready["session"])
+
+        @asynccontextmanager
+        async def forward(port):
+            yield SimpleNamespace(url=f"http://127.0.0.1:{port}")
+
+        with patch("comfy_split.agent_bridge.modal.forward", forward):
+            async with gpu_tunnel(self.controller.client, self.gpu_url) as endpoint:
+                record = {"id": "large-workflow", "agent_bridge": self.controller.bridge.identity()}
+                await self.controller.bridge.attach(record, endpoint)
+                prompt = "p" * (3 * 1024 * 1024)
+                await self.gpu.socket.send_json({"type": "job", "id": "large-job", "spec": {"prompt": prompt}})
+                async with asyncio.timeout(5):
+                    message = await anext(aiter(peer))
+                self.assertEqual(json.loads(message.data)["spec"]["prompt"], prompt)
+                result = {"response": "r" * (6 * 1024 * 1024)}
+                await peer.send_json({"type": "result", "id": "large-job", "result": result})
+                async with asyncio.timeout(5):
+                    while True:
+                        received = await self.gpu.messages.get()
+                        if received["type"] == "result":
+                            break
+                self.assertEqual(received["result"], result)
+                self.assertFalse(self.controller.bridge.channel.incoming)
+                self.assertFalse(self.controller.bridge.channel.outgoing)
+                await self.controller.bridge.detach(record["id"])
+        await self.mac.close()
+        headers = {"Authorization": "Bearer shared-test-token"}
+        response = await self.client.post(PREFIX + "/messages", params={"session": ready["session"]},
+                                          headers=headers, data="{}")
+        self.assertEqual(response.status, 409)
+
+    async def test_http_payload_auth_limit_and_replayed_reference(self):
+        self.mac = await self.client.ws_connect(PREFIX + "/ws", headers={
+            "Authorization": "Bearer shared-test-token"})
+        await self.mac.send_json(dict(HELLO, transport=TRANSPORT))
+        ready = await self.mac.receive_json(timeout=2)
+        params = {"session": ready["session"]}
+        headers = {"Authorization": "Bearer shared-test-token"}
+        route = PREFIX + "/messages"
+        self.assertEqual((await self.client.post(route, params=params, data="{}")).status, 401)
+        response = await self.client.post(route, params=params, headers=headers,
+                                          data=io.BytesIO(b"x" * (MAX_MESSAGE + 1)))
+        self.assertEqual(response.status, 413)
+        response = await self.client.post(route, params=params, headers=headers,
+            data=json.dumps({"type": "catalog", "catalog": HELLO["catalog"]}))
+        key = (await response.json())["id"]
+        reference = {"type": "bridge_payload", "id": key}
+        await self.mac.send_json(reference)
+        await self.mac.send_json(reference)
+        await self.mac.receive(timeout=2)
+        self.assertTrue(self.mac.closed)
 
 
 class WorkerBridgeTests(unittest.IsolatedAsyncioTestCase):

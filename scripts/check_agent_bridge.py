@@ -19,7 +19,9 @@ if modal.is_local():
     import comfyapp  # noqa: E402,F401 - shared dotenv resolution
 
 app = modal.App("comfyui-agent-bridge-check")
-image = modal.Image.debian_slim(python_version="3.12").pip_install("aiohttp==3.12.15", "pillow==11.3.0")
+image = (modal.Image.debian_slim(python_version="3.12").pip_install("aiohttp==3.12.15", "pillow==11.3.0")
+         .add_local_file(Path(__file__).resolve().parents[1] / "comfy_split/bridge_transport.py",
+                         "/root/bridge_transport.py"))
 configuration = modal.Secret.from_dict({key: os.environ.get(key, "") for key in (
     "AMBIENT_COMFYUI_URL", "MODAL_PROXY_KEY", "MODAL_PROXY_SECRET")})
 bridge_secret = modal.Secret.from_name(os.environ.get("AGENT_RUNTIME_SECRET_NAME") or "agent-runtime-secret",
@@ -30,6 +32,7 @@ bridge_secret = modal.Secret.from_name(os.environ.get("AGENT_RUNTIME_SECRET_NAME
 async def check():
     from aiohttp import ClientSession, ClientTimeout, WSMsgType
     from PIL import Image
+    from bridge_transport import HttpSocket, TRANSPORT
 
     url = os.environ["AMBIENT_COMFYUI_URL"].rstrip("/")
     headers = {"Modal-Key": os.environ["MODAL_PROXY_KEY"], "Modal-Secret": os.environ["MODAL_PROXY_SECRET"],
@@ -52,12 +55,15 @@ async def check():
         async with client.ws_connect(url + prefix + "/ws", heartbeat=15, max_msg_size=20 * 1024 * 1024) as socket:
             catalog = {"models": [], "skills": [], "revision": "transport-smoke", "auth": "authenticated"}
             await socket.send_json({"type": "hello", "version": 1,
-                                    "worker_id": "transport-smoke-" + uuid.uuid4().hex, "catalog": catalog})
-            if await socket.receive_json(timeout=20) != {"type": "ready", "version": 1}:
+                                    "worker_id": "transport-smoke-" + uuid.uuid4().hex, "catalog": catalog,
+                                    "transport": TRANSPORT})
+            ready = await socket.receive_json(timeout=20)
+            if ready.get("type") != "ready" or ready.get("transport") != TRANSPORT:
                 raise RuntimeError("Bridge handshake failed")
+            transport = HttpSocket(socket, client, url, os.environ["AGENT_RUNTIME_BRIDGE_TOKEN"], ready["session"])
 
             async def mac_peer():
-                async for message in socket:
+                async for message in transport:
                     if message.type != WSMsgType.TEXT:
                         continue
                     import json
@@ -66,7 +72,7 @@ async def check():
                         continue
                     counts["jobs"] += 1
                     if job["spec"]["kind"] == "catalog":
-                        await socket.send_json({"type": "result", "id": job["id"], "result": {"catalog": catalog}})
+                        await transport.send_json({"type": "result", "id": job["id"], "result": {"catalog": catalog}})
                         continue
                     if job["spec"]["kind"] != "imagegen":
                         raise RuntimeError("Unexpected Bridge operation")
@@ -82,9 +88,11 @@ async def check():
                         response.raise_for_status()
                         artifact = await response.json()
                     counts["artifacts"] += 1
-                    await socket.send_json({"type": "result", "id": job["id"], "result": {
+                    if len(job["spec"]["instruction"]) < 3 * 1024 * 1024:
+                        raise RuntimeError("Large request payload was lost")
+                    await transport.send_json({"type": "result", "id": job["id"], "result": {
                         "response": "Bridge transport verified", "exit_code": 0, "stderr": "",
-                        "raw_output": "x" * (2 * 1024 * 1024), "used_prompt": job["spec"]["prompt"],
+                        "raw_output": "x" * (6 * 1024 * 1024), "used_prompt": job["spec"]["prompt"],
                         "artifacts": [artifact["id"]]}})
 
             peer = asyncio.create_task(mac_peer())
@@ -97,7 +105,7 @@ async def check():
                     options = definition[1] if len(definition) > 1 else {}
                     inputs[name] = options.get("default", definition[0][0] if isinstance(definition[0], list) else "")
                 inputs.update(prompt="Verify the Bridge image transport using a fixture.", images=["1", 0],
-                              timeout_seconds=120, cache_mode="always_run")
+                              instruction="i" * (3 * 1024 * 1024), timeout_seconds=120, cache_mode="always_run")
                 prompt = {"1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 1, "color": 0}},
                           "2": {"class_type": "AgentRuntimeBridgeImageGen", "inputs": inputs},
                           "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "_bridge_smoke/transport"}}}
@@ -127,7 +135,7 @@ async def check():
                             if counts["inputs"] < 1 or counts["artifacts"] != 1:
                                 raise RuntimeError("Bridge file transfer was not exercised")
                             return {"status": "passed", "prompt_id": job_id, **counts, "output": saved,
-                                    "model_api_called": False}
+                                    "request_mib": 3, "result_mib": 6, "model_api_called": False}
                         await asyncio.sleep(1)
             finally:
                 if job_id and not terminal:
