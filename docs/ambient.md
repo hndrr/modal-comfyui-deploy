@@ -125,7 +125,7 @@ GPUはジョブに記録された同じ環境を使い、独立したpullや更�
 同名パッケージが既存の `custom_nodes/` に手動導入されている場合は、自動置換せず更新を止めて
 重複をログに表示します。Managerでの他ノードの更新時も4つのスナップショットを引き継ぎます。
 
-GeminiToolsとJevのAPIキーも、Modalに保存したSecretから読み込みます。
+追加ノードのAPIキーとBridgeの接続トークンも、Modalに保存したSecretから読み込みます。
 使うサービスのSecretを作成し、デプロイ元の環境変数または `.env` にはSecret名だけを指定してください。
 
 | `.env` の設定例 | Modal Secret内のキー |
@@ -133,11 +133,25 @@ GeminiToolsとJevのAPIキーも、Modalに保存したSecretから読み込み�
 | `GEMINI_SECRET_NAME=gemini-secret` | `GEMINI_API_KEY` |
 | `TYPESAFE_SECRET_NAME=typesafe-secret` | `TYPESAFE_API_KEY` |
 | `OPENROUTER_SECRET_NAME=openrouter-secret` | `OPENROUTER_API_KEY` |
+| `AGENT_RUNTIME_SECRET_NAME=agent-runtime-secret` | `AGENT_RUNTIME_BRIDGE_TOKEN` |
 
 Secret名は既存のものを指定でき、空欄のサービスは使いません。
 指定したSecretと必要なキーの存在はデプロイ時にModalが検査します。
 AmbientモードのCPU/GPUへ同じSecretを渡し、コンテナ起動時にキーを環境変数へ注入します。
-ローカルの `GEMINI_API_KEY`、`TYPESAFE_API_KEY`、`OPENROUTER_API_KEY` はデプロイ設定に取り込みません。
+ローカルのAPIキーや `AGENT_RUNTIME_BRIDGE_TOKEN` の値はデプロイ設定に取り込みません。
+
+Bridgeの接続トークンは、自分で生成するランダムな共有文字列です。たとえば手元で
+`openssl rand -hex 32` を実行し、その値をModal Secretの `AGENT_RUNTIME_BRIDGE_TOKEN` に保存します。
+`.env` に `AGENT_RUNTIME_SECRET_NAME=agent-runtime-secret` を設定してsplitappを再デプロイすると、
+ComfyUIプロセスに注入されます。MacのNode.js backendにも同じ値を設定し、
+`createAgentRuntimeBridge` の `bridgeToken` に渡します。上流サンプルではMac側の環境変数名は
+`COMFY_BRIDGE_TOKEN` です。Reactの公開環境変数やワークフローJSONには入れません。
+
+この設定はトークンの注入までです。[上流Bridge](https://github.com/hndrr/ComfyUI-AgentRuntime/tree/main/packages/agent-runtime-bridge)
+はWebSocket・ファイル転送・ノード実行が同じComfyUIプロセスへ届くことを前提とします。
+現在のSplitゲートウェイはAuthorizationを除去し、通常の拡張APIとノード実行をCPU/GPUの
+別プロセスへ振り分けるため、Bridge利用には認証転送と接続先の統合が別途必要です。
+トークン設定だけでSplit構成のBridgeが動作するわけではありません。
 
 Skills Loaderのアップロード先 `input/skills/` は既存の入力Volumeへ保存され、GPUからも参照できます。
 手元のPCのSkillやCLIのログイン情報は自動転送しません。

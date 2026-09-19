@@ -226,9 +226,11 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
             "GEMINI_SECRET_NAME": " my-gemini ",
             "TYPESAFE_SECRET_NAME": "",  # An unused provider needs no Secret.
             "OPENROUTER_SECRET_NAME": "my-openrouter",
+            "AGENT_RUNTIME_SECRET_NAME": "my-agent-runtime",
             "GEMINI_API_KEY": "local-value-must-not-be-uploaded",
             "TYPESAFE_API_KEY": "local-value-must-not-enable-provider",
             "OPENROUTER_API_KEY": "local-value-must-not-be-uploaded",
+            "AGENT_RUNTIME_BRIDGE_TOKEN": "local-bridge-value-must-not-be-uploaded",
         }
         for mode in ("on", "off"):
             with self.subTest(mode=mode), \
@@ -239,11 +241,12 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
             inline.assert_not_called()
             if mode == "on":
                 self.assertEqual([secret.name for secret in app["ambient_secrets"]],
-                                 ["my-gemini", "my-openrouter"])
+                                 ["my-gemini", "my-openrouter", "my-agent-runtime"])
                 self.assertEqual([(call.args[0], call.kwargs["required_keys"])
                                   for call in named.call_args_list], [
                     ("my-gemini", ["GEMINI_API_KEY"]),
                     ("my-openrouter", ["OPENROUTER_API_KEY"]),
+                    ("my-agent-runtime", ["AGENT_RUNTIME_BRIDGE_TOKEN"]),
                     ("github-for-test", ["GITHUB_TOKEN"]),
                 ])
             else:
@@ -264,7 +267,8 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
             user.mkdir()
             provider_keys = {"GEMINI_API_KEY": "gemini-from-modal",
                              "TYPESAFE_API_KEY": "typesafe-from-modal",
-                             "OPENROUTER_API_KEY": "openrouter-from-modal"}
+                             "OPENROUTER_API_KEY": "openrouter-from-modal",
+                             "AGENT_RUNTIME_BRIDGE_TOKEN": "bridge-from-modal"}
             def local_path(value):
                 return root / value.lstrip("/") if value in {"/models", "/data/input", "/data/output"} else Path(value)
             for mode in ("on", "off"):
