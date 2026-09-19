@@ -9,15 +9,18 @@ HOP = {"host", "connection", "upgrade", "transfer-encoding", "content-length",
        "sec-websocket-accept", "origin", "authorization", "modal-key", "modal-secret"}
 
 
-async def proxy(request, client, origin, token=None, body=None, before_response=None):
+async def proxy(request, client, origin, token=None, body=None, before_response=None,
+                *, path=None, sockets=None):
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
     if token:
         headers["Authorization"] = "Bearer " + token
-    url = origin.rstrip("/") + request.rel_url.raw_path_qs
+    url = origin.rstrip("/") + (path or request.rel_url.raw_path_qs)
     if request.headers.get("Upgrade", "").lower() == "websocket":
         async with client.ws_connect(url, headers=headers, compress=0, max_msg_size=0) as upstream:
             socket = web.WebSocketResponse(compress=False, max_msg_size=0)
             await socket.prepare(request)
+            if sockets is not None:
+                sockets.add(socket)
 
             async def relay(source, destination):
                 async for message in source:
@@ -37,6 +40,8 @@ async def proxy(request, client, origin, token=None, body=None, before_response=
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 await socket.close()
+                if sockets is not None:
+                    sockets.discard(socket)
             return socket
     async with client.request(request.method, url, headers=headers,
                               data=body if body is not None else request.content if request.can_read_body else None,

@@ -147,11 +147,26 @@ ComfyUIプロセスに注入されます。MacのNode.js backendにも同じ値�
 `createAgentRuntimeBridge` の `bridgeToken` に渡します。上流サンプルではMac側の環境変数名は
 `COMFY_BRIDGE_TOKEN` です。Reactの公開環境変数やワークフローJSONには入れません。
 
-この設定はトークンの注入までです。[上流Bridge](https://github.com/hndrr/ComfyUI-AgentRuntime/tree/main/packages/agent-runtime-bridge)
-はWebSocket・ファイル転送・ノード実行が同じComfyUIプロセスへ届くことを前提とします。
-現在のSplitゲートウェイはAuthorizationを除去し、通常の拡張APIとノード実行をCPU/GPUの
-別プロセスへ振り分けるため、Bridge利用には認証転送と接続先の統合が別途必要です。
-トークン設定だけでSplit構成のBridgeが動作するわけではありません。
+[上流Bridge](https://github.com/hndrr/ComfyUI-AgentRuntime/tree/main/packages/agent-runtime-bridge)
+のMac backendは、splitappのCPU `ui` URLへ接続します。Modalのproxy認証も必要なので、
+`createAgentRuntimeBridge` の設定へ次を追加してください。これらもMac backendの環境変数です。
+
+```ts
+headers: {
+  "Modal-Key": process.env.MODAL_PROXY_KEY!,
+  "Modal-Secret": process.env.MODAL_PROXY_SECRET!,
+},
+```
+
+分離モードでは、CPUがMacの接続とモデル・Skill一覧を保持します。Bridgeノードを含む
+ワークフローを実行すると、GPUのBridgeへ接続を中継し、接続完了後に生成を開始します。
+入力ファイル・生成画像・実行結果もそのGPUジョブへ転送します。Bridgeへの接続や一覧の
+取得だけではGPUを起動しません。GPUの終了後もMacとの接続は保持します。
+
+Macの切断・GPUの終了・キャンセル時には進行中のBridge処理も終了し、失敗した処理を
+自動再実行しません。待機中にMacが再接続された場合も、元の接続に紐づくジョブは失敗にします。
+旧モードへ切り替える際はMacのBridgeを切断してください。環境更新中の新規接続は拒否します。
+Mac側へのBridgeパッケージの組み込みとCodexログインは別途必要です。
 
 Skills Loaderのアップロード先 `input/skills/` は既存の入力Volumeへ保存され、GPUからも参照できます。
 手元のPCのSkillやCLIのログイン情報は自動転送しません。
