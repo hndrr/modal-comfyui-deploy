@@ -41,6 +41,12 @@ Split専用Volumeは環境用とデータ用の2つ。過去の環境は保管�
 
 GPUは入力のreload後に実行し、出力のcommit後に結果を保存する。
 CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを共有しない。
+`execution_success`・エラー通知も、出力の公開と履歴の保存が済むまで保留する。
+固定版フロントエンドのTotal表示は `executed` で完了数を数えるため、
+`progress_state` で完了した出力なしのノードにも空のUI結果を1回通知する。
+実際の画像・動画を含むUI結果は出力の公開後に通知する。
+待機・実行中・過去の履歴には受付日時を付け、旧形式の失敗履歴の不足項目も補う。
+これにより、失敗ジョブ1件によってMedia Assetsの一覧全体が読めなくなるのを防ぐ。
 一時出力は通常のローカル作業領域で生成し、外部側が出力Volumeの `.split-temp/<起動ID>/` へコピーする。
 履歴と完了イベントの参照を永続出力へ変換してから公開する。
 従来の `.split-temp/temp` に保存済みの一時出力も引き続き閲覧できる。
@@ -77,6 +83,13 @@ ManagerからのComfyUI本体更新は提供せず、固定バージョンを再
 ComfyUIの `/prompt`, `/queue`, `/history`, `/ws` と `/api/` プレフィックスを扱う。
 ジョブ一覧APIは外部キューのスナップショットを標準拡張へ渡して整形する。
 ComfyUI内部のキュー・履歴メソッドは差し替えない。
+
+Modal 1.1.4の標準Webサーバー中継は、ASGIのデコード済みパスを転送するため、
+`/userdata/workflows%2Fname.json` の保存・読み込みに失敗する。
+CPU入口は認証付きASGIアプリとし、`comfy_split/modal_proxy.py` でファイルパスを再エンコードして
+固定版ModalのHTTP/WebSocket中継へ渡す。`raw_path` が提供される環境ではそれを優先する。
+SDK更新時は `tests/test_modal_proxy.py` と
+公開URL経由のワークフロー保存・読み込みを確認する。
 
 追加API:
 

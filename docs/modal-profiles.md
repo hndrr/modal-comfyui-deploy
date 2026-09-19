@@ -148,25 +148,38 @@ Volume はアカウントごとに別物なので、切り替えると一覧の�
 
 ## Cloudflare Access を使っている場合
 
-Access 越しの公開はアカウントを跨げません。切り替えたら Worker 側の secret を入れ直します。
+1 つの Worker から複数の Modal ワークスペースへ転送できます。ただし、Proxy Auth トークンはワークスペース単位なので、転送先 URL と、そのワークスペースで発行したキーを対応させる必要があります。
 
-| secret | 入れ直す理由 |
+| secret | 切り替え・追加時の扱い |
 | --- | --- |
-| `MODAL_ORIGINS` | デプロイ URL に workspace 名が入るため（`https://<workspace>--<app>.modal.run`） |
-| `MODAL_KEY` / `MODAL_SECRET` | Proxy Auth トークンがワークスペース単位のため。新しいアカウントで作り直します |
+| `MODAL_ORIGINS` | 基本の転送先一覧。公開ホスト名に対応する Modal URL を更新します |
+| `MODAL_ADDITIONAL_ORIGINS` | 既存の転送先一覧を残したまま、別の公開ホストを追加できます。既存ホストの上書きはできません |
+| `MODAL_KEY` / `MODAL_SECRET` | 特定の 1 ワークスペースの既定ペアです。接続先別の指定がない URL に使われます。更新すると、それらすべての接続先に影響します |
+| `MODAL_PROXY_CREDENTIALS` | 別ワークスペースの接続先には、その Modal オリジンをキーとして、そのワークスペースの `key` / `secret` を指定します。既定ペアより優先されます |
 
-`MODAL_ORIGINS` はホスト名 → オリジンのマップなので、**両アカウント分のホスト名を 1 つの Worker に並べて置けます**。
+例えば既定ペアをワークスペース A 用のままにして、B を追加する場合、転送先一覧は次の形になります。ドメインとワークスペース名はすべてプレースホルダーです。
 
 ```json
 {
-  "comfy.example.com": "https://<本番の workspace>--comfyui-ui.modal.run",
-  "comfy-test.example.com": "https://<検証の workspace>--comfyui-ui.modal.run"
+  "comfy.example.com": "https://<workspace-a>--comfyui-ui.modal.run",
+  "comfy-test.example.com": "https://<workspace-b>--comfyui-split-ui.modal.run"
 }
 ```
 
-ただし `worker/src/index.ts` は `MODAL_KEY` / `MODAL_SECRET` を**1 組しか持てない**ため、この並記だけでは片方のアカウントにしか認証が通りません。両方を Access で公開するなら、**アカウントごとに Worker を立てる**のが素直です（コード変更が不要で、検証側の設定ミスが本番を巻き込みません）。1 つの Worker に相乗りさせるには、ホスト名ごとに資格情報を持たせる改修が必要です。
+これに加えて `MODAL_PROXY_CREDENTIALS` に B のキーを登録します。
 
-検証用アカウントで動作確認したいだけなら、Access を組まずに `COMFYUI_REQUIRES_PROXY_AUTH=off` で直 URL を開き、終わったら `./scripts/modal.sh app stop <app-id>` で止めるほうが早いです。ただしその間は、URL を知っていれば誰でも開ける状態になります。
+```json
+{
+  "https://<workspace-b>--comfyui-split-ui.modal.run": {
+    "key": "wk-WORKSPACE_B_EXAMPLE",
+    "secret": "ws-WORKSPACE_B_EXAMPLE"
+  }
+}
+```
+
+A への接続には既定の `MODAL_KEY` / `MODAL_SECRET`、B への接続にはこの表のペアが使われます。B の登録を省くと A のキーが送られ、認証に失敗します。指定はワークスペース名ではなく Modal オリジン単位です。B の別 app も公開する場合は、そのオリジンにもキーを登録してください。同じワークスペースの app 同士には同じペアを使えます。
+
+公開ホストを追加するときは、Cloudflare Access の保護対象に追加したうえで、Worker の Custom Domain を割り当てます。トークンの実値は Cloudflare の secret に保存し、ドキュメントやリポジトリには書きません。
 
 設定手順そのものは [cloudflare-access.md](cloudflare-access.md) を参照してください。
 

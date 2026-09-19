@@ -21,7 +21,7 @@ from comfy_split.agent_bridge import AgentBridge, PREFIX as BRIDGE_PREFIX, requi
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
-from comfy_split.state import ACTIVE, Journal, write_json
+from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
 
@@ -318,51 +318,92 @@ class Controller:
                 return {"status": "failed", "error": str(error)}
             raise
 
-    async def drain_events(self, record):
-        for event in await self.events.get_many.aio(100, block=False, partition=record["id"]):
-            if event["type"] == "legacy_ready":
-                record["url"] = event["url"]
-                await self.persist()
-            elif event["type"] == "agent_bridge_ready":
-                try:
-                    await self.bridge.attach(record, event)
-                except Exception:
-                    # Do not persist/log the tunnel bearer token from the event.
-                    log.warning("AgentRuntime Bridge connection failed for %s", record["id"])
-                    await self.command(record["id"], "agent_bridge_error")
-                else:
-                    await self.command(record["id"], "agent_bridge_connected")
-            elif event["type"] in {"event", "preview"}:
-                data = event.get("event", event.get("data"))
-                # Files referenced in executed events may not be committed yet.
-                if isinstance(data, dict) and data.get("type") == "executed":
-                    record.setdefault("deferred_events", []).append(data)
-                else:
-                    await self.broadcast(data, record.get("body", {}).get("client_id"))
+    async def drain_events(self, record, *, all_pending=False):
+        while True:
+            events = await self.events.get_many.aio(100, block=False, partition=record["id"])
+            for event in events:
+                await self.relay_event(record, event)
+            if not all_pending or len(events) < 100:
+                break
+
+    async def relay_event(self, record, event):
+        if event["type"] == "legacy_ready":
+            record["url"] = event["url"]
+            await self.persist()
+        elif event["type"] == "agent_bridge_ready":
+            try:
+                await self.bridge.attach(record, event)
+            except Exception:
+                # Do not persist/log the tunnel bearer token from the event.
+                log.warning("AgentRuntime Bridge connection failed for %s", record["id"])
+                await self.command(record["id"], "agent_bridge_error")
+            else:
+                await self.command(record["id"], "agent_bridge_connected")
+        elif event["type"] in {"event", "preview"}:
+            data = event.get("event", event.get("data"))
+            kind = data.get("type") if isinstance(data, dict) else None
+            # Terminal notifications are reconstructed from durable history
+            # in finish(), after output reload and journal persistence.
+            if kind in {"execution_success", "execution_error", "execution_interrupted"}:
+                return
+            # Files referenced in executed events may not be committed yet.
+            if kind == "executed":
+                record.setdefault("deferred_events", []).append(data)
+            else:
+                await self.broadcast(data, record.get("body", {}).get("client_id"))
+            # Frontend 1.52 counts `executed`/`execution_cached` for Total,
+            # while core reports non-output node completion in progress_state.
+            # Emit one empty UI result only for those genuinely finished
+            # prompt nodes; leave real UI results and expanded child IDs alone.
+            if kind in {"executed", "execution_cached", "progress_state"}:
+                detail = data.get("data", {})
+                notified = record.setdefault("completed_nodes", [])
+                if kind == "executed":
+                    notified.append(str(detail["node"]))
+                elif kind == "execution_cached":
+                    notified.extend(str(node) for node in detail.get("nodes", []))
+                elif detail.get("prompt_id") == record["id"]:
+                    prompt = record.get("body", {}).get("prompt", {})
+                    for node_id, node in detail.get("nodes", {}).items():
+                        if node.get("state") != "finished" or node_id not in prompt or node_id in notified:
+                            continue
+                        notified.append(node_id)
+                        await self.broadcast({"type": "executed", "data": {
+                            "prompt_id": record["id"], "node": node_id,
+                            "display_node": node.get("display_node_id", node_id), "output": {},
+                        }}, record.get("body", {}).get("client_id"))
 
     async def finish(self, record, result):
+        # A result can arrive while more than one dispatch batch remains queued.
+        await self.drain_events(record, all_pending=True)
         await self.bridge.detach(record["id"])
         await self.volumes["output"].reload.aio()
         record.update({key: value for key, value in result.items()
                        if key in {"status", "error", "history", "seconds"}})
         record["finished_at"] = time.time()
-        if not record.get("history"):
-            record["history"] = {
-                "prompt": [record.get("number", 0), record["id"], record.get("body", {}).get("prompt", {}), {}, []],
-                "outputs": {}, "status": {"status_str": "error", "completed": False,
-                "messages": [["execution_error", {"prompt_id": record["id"],
-                               "exception_message": str(record.get("error", "Execution failed"))}]]},
-            }
+        record["history"] = job_history(record)
+        deferred = record.pop("deferred_events", [])
+        record.pop("completed_nodes", None)
         await self.persist()
         self.cleanup_due = 0
-        for event in record.pop("deferred_events", []):
+        delivered = set()
+        for event in deferred:
             await self.broadcast(event, record.get("body", {}).get("client_id"))
-        if record["status"] == "failed":
-            await self.broadcast({"type": "execution_error", "data": {
-                "prompt_id": record["id"], "node_id": "", "node_type": "",
-                "executed": [], "exception_type": "RemoteExecutionError",
-                "exception_message": str(record.get("error", "生成に失敗しました")),
-                "traceback": []}}, record.get("body", {}).get("client_id"))
+            delivered.add(str(event["data"]["node"]))
+        # Queue overflow/disconnection must not lose saved node previews.
+        for node_id, output in record["history"]["outputs"].items():
+            if node_id not in delivered:
+                meta = record["history"].get("meta", {}).get(node_id, {})
+                await self.broadcast({"type": "executed", "data": {
+                    "prompt_id": record["id"], "node": node_id,
+                    "display_node": meta.get("display_node", node_id), "output": output,
+                }}, record.get("body", {}).get("client_id"))
+        terminal = {"completed": "execution_success", "cancelled": "execution_interrupted"}.get(
+            record["status"], "execution_error")
+        messages = record["history"].get("status", {}).get("messages", [])
+        detail = next((data for kind, data in reversed(messages) if kind == terminal),
+                      {"prompt_id": record["id"], "timestamp": int(record["finished_at"] * 1000)})
+        await self.broadcast({"type": terminal, "data": detail}, record.get("body", {}).get("client_id"))
         await self.broadcast({"type": "executing", "data": {"node": None, "prompt_id": record["id"]}})
         await self.status()
 
