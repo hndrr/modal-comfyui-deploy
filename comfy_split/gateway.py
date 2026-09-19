@@ -16,6 +16,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
 from comfy_split import storage
+from comfy_split import ambient_nodes
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
@@ -194,6 +195,7 @@ class Controller:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
+        await self.refresh_ambient_nodes()
         try:
             async with self.lock:
                 await self.cleanup_storage()
@@ -204,6 +206,36 @@ class Controller:
         self.task = asyncio.create_task(self.dispatch())
         if candidate and candidate["status"] == "validating" and session:
             self.apply_task = asyncio.create_task(self.apply_environment(resume=True))
+
+    async def refresh_ambient_nodes(self):
+        if not ambient_nodes.enabled():
+            return
+        data = self.journal.data
+        if data["mode"] != "split" or self.journal.busy() or data["candidate"] or data["session"]:
+            log.info("Ambient node refresh deferred until an idle CPU startup")
+            return
+        previous = data["environment"]
+        await self.pin_cpu(True)
+        try:
+            try:
+                version = await asyncio.to_thread(ambient_nodes.prepare_environment, previous)
+                if version is None:
+                    return
+                # Validate imports without starting a GPU or running any node/API task.
+                await self.candidate.start(version, cpu=True)
+                ambient_nodes.check_catalog(await self.candidate.catalog(self.client))
+            except Exception:
+                log.exception("Ambient node refresh failed; keeping environment %s", previous)
+                return
+            finally:
+                await self.candidate.stop()
+            # Commit the complete snapshot before any new job can reference it.
+            await self.volumes["environment"].commit.aio()
+            data["environment"] = version
+            await self.persist()
+            log.info("Ambient nodes refreshed: %s -> %s", previous, version)
+        finally:
+            await self.pin_cpu(False)
 
     async def close(self, app):
         await self.close_candidate_relays()
@@ -751,9 +783,13 @@ class Controller:
         catalog_path = environment_path(self.journal.data["environment"]) / "catalog.json"
         if catalog_path.exists():
             catalog = json.loads(catalog_path.read_text())
+            # Ambient packs are CPU-importable and always use live definitions.
+            # Old GPU catalogs must not resurrect removed or disabled node IDs.
+            catalog["objects"] = {name: definition for name, definition in catalog["objects"].items()
+                                  if not ambient_nodes.is_ambient_node(definition)}
             # Live CPU definitions take precedence so model/file choices stay fresh.
             for name, sections in catalog.get("choice_sources", {}).items():
-                if name in objects:
+                if name in objects or name not in catalog["objects"]:
                     continue
                 for section, fields in sections.items():
                     for field, folder in fields.items():

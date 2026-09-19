@@ -15,6 +15,11 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ./scripts/modal.sh deploy splitapp.py
 ```
 
+`ambient_app.py` 向けにAgentRuntime / Skills Loader / GeminiTools / Jevを使う場合は、
+`COMFYUI_AMBIENT_MODE=on` とGitHub取得用Modal Secretを設定する。
+CPU起動時にprivateリポジトリの最新版を取得し、CPU/GPUで同じ環境を使う。
+[設定と更新・復帰の動作](ambient.md#ambient用comfyuiの追加ノード)。既定はoff。
+
 検証用URLはModal Proxy Authを必須とする。Cloudflare Workerの既存
 `MODAL_ORIGINS` で新しいホスト名をこのURLへ向ければ、既存のAccess認証を使える。
 本番ホスト名の接続先は受け入れ検証後に切り替える。

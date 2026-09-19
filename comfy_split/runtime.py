@@ -14,6 +14,7 @@ from pathlib import Path
 
 from aiohttp import ClientError, ClientSession
 
+from comfy_split import ambient_nodes
 from comfy_split.state import write_json
 from comfy_split.storage import ENVIRONMENTS, TEMP_ARCHIVE, USER
 
@@ -38,6 +39,11 @@ def create_environment(source="base", *, restore_image_browsing=False):
     target.mkdir()
     shutil.copytree(origin / "comfy/custom_nodes", target / "comfy/custom_nodes", symlinks=True)
     shutil.copytree(origin / "venv", target / "venv", symlinks=True)
+    if (origin / ambient_nodes.DIRECTORY).is_dir():
+        shutil.copytree(origin / ambient_nodes.DIRECTORY, target / ambient_nodes.DIRECTORY,
+                        symlinks=True)
+    if (origin / ambient_nodes.MANIFEST).is_file():
+        shutil.copyfile(origin / ambient_nodes.MANIFEST, target / ambient_nodes.MANIFEST)
     if restore_image_browsing:
         node = "ComfyUI-Image-Browsing"
         destination = target / "comfy/custom_nodes" / node
@@ -204,6 +210,14 @@ class ComfyProcess:
         self.temp_namespace = uuid.uuid4().hex
         temporary = self.temp_root
         temporary.mkdir(parents=True, exist_ok=True)
+        extension_paths = Path(__file__).with_name("extension_paths.yaml")
+        if ambient_nodes.enabled() and (source / ambient_nodes.DIRECTORY).is_dir():
+            # JSON is valid YAML. Absolute Volume paths are identical on CPU/GPU.
+            extension_paths = self.root / "ambient-extension-paths.json"
+            write_json(extension_paths, {
+                "modal_control": {"custom_nodes": "/opt/comfy-extensions"},
+                "ambient": {"custom_nodes": str(source / ambient_nodes.DIRECTORY)},
+            })
         command = [str(source / "venv/bin/python"), str(self.root / "main.py"),
                    "--listen", "127.0.0.1", "--port", str(self.port),
                    "--base-directory", str(self.root),
@@ -212,12 +226,13 @@ class ComfyProcess:
                    "--temp-directory", str(temporary),
                    "--database-url", f"sqlite:////tmp/split-{self.role}.db",
                    "--enable-manager", "--preview-method", "auto",
-                   "--extra-model-paths-config", str(Path(__file__).with_name("extension_paths.yaml"))]
+                   "--extra-model-paths-config", str(extension_paths)]
         if cpu:
             command.append("--cpu")
         elif os.environ.get("COMFYUI_SAGE_ATTENTION", "on") == "on":
             command.append("--use-sage-attention")
         environment = dict(os.environ)
+        environment.pop(ambient_nodes.TOKEN_ENV, None)
         environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),
