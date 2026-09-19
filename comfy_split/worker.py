@@ -7,22 +7,23 @@ import os
 import queue
 import shutil
 import time
-from pathlib import Path
 
 import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
+from comfy_split.agent_bridge import gpu_tunnel, await_connection
 from comfy_split.runtime import ComfyProcess
 from comfy_split.state import write_json
+from comfy_split.storage import JOBS, STATE, USER
 
 process = ComfyProcess("gpu", 8188)
 
 
 async def run_worker(spec, events, commands, volumes):
     session_id = spec["id"]
-    result_path = Path("/results") / (session_id + ".json")
-    started_path = Path("/results") / (session_id + ".started.json")
+    result_path = JOBS / (session_id + ".json")
+    started_path = JOBS / (session_id + ".started.json")
     started = time.monotonic()
 
     async def emit(value):
@@ -40,7 +41,7 @@ async def run_worker(spec, events, commands, volumes):
         try:
             if process.version is not None and process.version != spec["environment"]:
                 await process.stop()
-            for name in ("environment", "input", "models", "user", "results", "output"):
+            for name in ("environment", "input", "models", "data", "output"):
                 # Environments are immutable. Native libraries imported from a
                 # venv stay open for the process lifetime and prevent reload.
                 if name == "environment" and process.version == spec["environment"]:
@@ -54,6 +55,11 @@ async def run_worker(spec, events, commands, volumes):
                     # Close those handles before refreshing the Volume snapshot.
                     await process.stop()
                     await volumes[name].reload.aio()
+            journal_path = STATE / "controller.json"
+            if journal_path.exists():
+                retired = json.loads(journal_path.read_text()).get("retired_jobs", {})
+                if session_id in retired:
+                    return {"status": retired[session_id]["status"], "history_expired": True}
             if result_path.exists():
                 return json.loads(result_path.read_text())
             if started_path.exists():
@@ -61,10 +67,11 @@ async def run_worker(spec, events, commands, volumes):
                 # configured application retries. Never rerun ambiguous effects.
                 result = {"status": "unknown", "error": "GPUの実行開始記録がありますが結果がありません。自動再実行はしません。"}
                 write_json(result_path, result)
-                await volumes["results"].commit.aio()
+                await volumes["data"].commit.aio()
                 return result
-            write_json(started_path, {"id": session_id, "at": time.time(), "operation": spec["operation"]})
-            await volumes["results"].commit.aio()
+            write_json(started_path, {"id": session_id, "at": time.time(),
+                                     "environment": spec["environment"], "operation": spec["operation"]})
+            await volumes["data"].commit.aio()
             await process.start(spec["environment"])
             print(json.dumps({"event": "gpu_ready", "id": session_id,
                               "seconds": time.monotonic() - started}))
@@ -76,7 +83,7 @@ async def run_worker(spec, events, commands, volumes):
             elif spec["operation"] == "legacy":
                 result = await legacy(spec, client, control, emit)
             else:
-                result = await asyncio.wait_for(generate(spec, client, control, emit),
+                result = await asyncio.wait_for(generate_with_bridge(spec, client, control, emit),
                     timeout=int(os.environ.get("SPLIT_GENERATION_TIMEOUT", "1800")))
         except Exception as error:
             result = {"status": "failed", "error": str(error)}
@@ -92,14 +99,24 @@ async def run_worker(spec, events, commands, volumes):
             result["history"]["outputs"] = process.durable_outputs(result["history"].get("outputs", {}))
         await volumes["output"].commit.aio()
         if spec["operation"] == "legacy":
-            await volumes["user"].commit.aio()
+            await volumes["data"].commit.aio()
         result["seconds"] = time.monotonic() - started
+        result["finished_at"] = time.time()
         write_json(result_path, result)
-        await volumes["results"].commit.aio()
+        await volumes["data"].commit.aio()
         await emit({"type": "result_ready"})
         print(json.dumps({"event": "gpu_finished", "id": session_id,
                           "seconds": result["seconds"], "status": result["status"]}))
         return result
+
+
+async def generate_with_bridge(spec, client, control, emit):
+    if not spec.get("agent_bridge"):
+        return await generate(spec, client, control, emit)
+    async with gpu_tunnel(client, process.url) as ready:
+        if not await await_connection(ready, control, emit):
+            return {"status": "cancelled"}
+        return await generate(spec, client, control, emit)
 
 
 async def generate(spec, client, control, emit):
@@ -114,6 +131,8 @@ async def generate(spec, client, control, emit):
             if accepted.get("prompt_id") != job_id:
                 raise RuntimeError("ComfyUI did not preserve prompt_id")
 
+        relay_finished = asyncio.Event()
+
         async def relay():
             async for message in socket:
                 if message.type == WSMsgType.TEXT:
@@ -122,6 +141,7 @@ async def generate(spec, client, control, emit):
                     if event.get("type") == "status":
                         continue
                     if event.get("type") == "executing" and event.get("data", {}).get("node") is None:
+                        relay_finished.set()
                         continue
                     if event.get("type") == "executed":
                         event["data"]["output"] = process.durable_outputs(event["data"].get("output", {}))
@@ -140,6 +160,14 @@ async def generate(spec, client, control, emit):
                     response.raise_for_status()
                     history = (await response.json()).get(job_id)
                 if history:
+                    # History becomes available just before the final WS marker.
+                    # Let preceding progress/output frames reach the controller
+                    # before cancelling the relay; history remains authoritative
+                    # if the connection no longer delivers the marker.
+                    try:
+                        await asyncio.wait_for(relay_finished.wait(), timeout=2)
+                    except TimeoutError:
+                        pass
                     status = history.get("status", {}).get("status_str")
                     messages = history.get("status", {}).get("messages", [])
                     interrupted = any(m[0] == "execution_interrupted" for m in messages)
@@ -210,7 +238,7 @@ async def legacy(spec, client, control, emit):
             item["outputs"] = process.durable_outputs(item.get("outputs", {}))
         await process.stop()
         # CPU server is stopped throughout legacy mode, so there is one user writer.
-        shutil.copytree(process.root / "user", "/data/user", dirs_exist_ok=True,
+        shutil.copytree(process.root / "user", USER, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("*.db", "*.db-shm", "*.db-wal", "__manager"))
         return {"status": "completed", "legacy_history": history}
     finally:
