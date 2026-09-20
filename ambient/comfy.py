@@ -11,8 +11,9 @@ from .split import SPLIT_HEADERS, check_dependencies, check_split
 from .urls import redirect_guard, validate_endpoint
 
 
-def output_file(history: dict) -> dict:
-    for output in history.get("outputs", {}).values():
+def output_file(history: dict, node_id=None) -> dict:
+    outputs = history.get("outputs", {})
+    for output in ([outputs.get(node_id, {})] if node_id else outputs.values()):
         for key in ("images", "gifs", "videos"):
             for item in output.get(key, []):
                 if isinstance(item, dict) and str(item.get("filename", "")).lower().endswith(
@@ -31,7 +32,7 @@ async def generate(
     cancelled,
     progress,
     timeout: int = 1800,
-) -> None:
+) -> dict | None:
     import aiohttp
 
     base = validate_endpoint(base, allow_http_loopback=not headers)
@@ -90,12 +91,18 @@ async def generate(
                     )
                 if cancelled():
                     return
+                graph = workflow(request, image_name, object_info=objects)
+                extra = {}
+                if "sessionId" in request:
+                    from comfy_split.ambient_workflows import h3_metadata
+                    extra = {"extra_data": {"ambient": h3_metadata(request, graph)}}
                 submitted = await call(
                     "POST",
                     "/prompt",
                     json={
-                        "prompt": workflow(request, image_name, object_info=objects),
+                        "prompt": graph,
                         "client_id": client_id,
+                        **extra,
                     },
                 )
                 if submitted.get("node_errors"):
@@ -134,7 +141,8 @@ async def generate(
                         if not history.get("status", {}).get("completed", False):
                             await asyncio.sleep(1)
                             continue
-                        artifact = output_file(history)
+                        meta = history.get("prompt", [None, None, None, {}])[3].get("ambient", {})
+                        artifact = output_file(history, meta.get("outputs", {}).get("video"))
                         progress("Downloading generated video")
                         # Allow a slow but progressing transfer, bounded by the job deadline.
                         download_timeout = aiohttp.ClientTimeout(
@@ -150,6 +158,8 @@ async def generate(
                             with destination.open("wb") as handle:
                                 async for chunk in response.content.iter_chunked(1024 * 1024):
                                     handle.write(chunk)
+                        if extra:
+                            return meta
                         return
                     if socket.closed:
                         raise RuntimeError(

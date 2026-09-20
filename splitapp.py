@@ -106,6 +106,8 @@ image = (
                    copy=True, ignore=["**/__pycache__/**", "**/*.pyc"])
     .add_local_dir("comfy_split", "/opt/split/comfy_split", copy=True,
                    ignore=["**/__pycache__/**", "**/*.pyc"])
+    .add_local_dir("ambient", "/opt/split/ambient", copy=True,
+                   ignore=["docs/**", "**/__pycache__/**", "**/*.pyc"])
     .run_commands("python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt")
 )
 app = modal.App(APP_NAME)

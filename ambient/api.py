@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import os
 
 from .contracts import DEFAULT_BACKENDS, FPS, FRAMES, RESOLUTIONS, identifier, validate_request
 from .service import Conflict
@@ -9,7 +10,7 @@ from .storage import AmbientStorage
 JOB_BODY_LIMIT = 128 * 1024
 
 
-def create_api(service, modes, inputs, outputs):
+def create_api(service, modes, inputs, outputs, *, library=None):
     from fastapi import FastAPI, Request
     from fastapi.responses import FileResponse, JSONResponse
     from starlette.background import BackgroundTask
@@ -17,6 +18,69 @@ def create_api(service, modes, inputs, outputs):
 
     storage = AmbientStorage(inputs, outputs)
     app = FastAPI(title="Ambient video jobs")
+
+    @app.get("/workflows")
+    async def workflows():
+        import aiohttp
+        from .urls import validate_endpoint, redirect_guard
+        base = validate_endpoint(os.environ.get("AMBIENT_COMFYUI_URL", ""))
+        headers = {"Modal-Key": os.environ.get("MODAL_PROXY_KEY", ""),
+                   "Modal-Secret": os.environ.get("MODAL_PROXY_SECRET", "")}
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30),
+                                         trace_configs=[redirect_guard()]) as client:
+            async with client.get(base + "/ambient/workflows") as response:
+                return JSONResponse(await response.json(), status_code=response.status)
+
+    @app.get("/library")
+    def list_library():
+        if library is None:
+            return {"clips": [], "count": 0, "bytes": 0}
+        return library.list()
+
+    @app.post("/library", status_code=201)
+    async def import_library(request: Request):
+        if library is None:
+            return JSONResponse({"error": "Library unavailable"}, status_code=503)
+        # Stream the raw file to disk before probing/transcoding; do not buffer a
+        # complete multipart video in API memory.
+        with tempfile.TemporaryDirectory(prefix="ambient-upload-") as directory:
+            source = Path(directory) / "upload"
+            size = 0
+            with source.open("wb") as handle:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 128 * 1024 * 1024:
+                        return JSONResponse({"error": "Video exceeds 128 MiB"}, status_code=413)
+                    handle.write(chunk)
+            if not size:
+                raise ValueError("Expected a video")
+            name = request.query_params.get("name", "Imported video")
+            try:
+                return await run_in_threadpool(library.import_video, source, name)
+            except RuntimeError as error:
+                return JSONResponse({"error": str(error)[:500]}, status_code=400)
+
+    @app.delete("/library/{clip_id}")
+    def delete_library(clip_id: str):
+        if library is None:
+            raise KeyError(clip_id)
+        library.delete(identifier(clip_id))
+        return {"deleted": clip_id}
+
+    @app.get("/library/{clip_id}/video")
+    def library_video(clip_id: str):
+        if library is None:
+            raise KeyError(clip_id)
+        identifier(clip_id)
+        directory = tempfile.TemporaryDirectory(prefix="ambient-library-download-")
+        target = Path(directory.name) / "clip.mp4"
+        try:
+            library.download(clip_id, target)
+        except Exception:
+            directory.cleanup()
+            raise
+        return FileResponse(target, media_type="video/mp4", background=BackgroundTask(directory.cleanup),
+                            headers={"Cache-Control": "private, no-store"})
 
     @app.exception_handler(ValueError)
     async def bad_request(_request, error):

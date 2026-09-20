@@ -11,7 +11,7 @@ def run(args: list[str]) -> None:
         raise RuntimeError(f"Media processing failed: {process.stderr[-1600:]}")
 
 
-def finalize(source: Path, destination: Path, final_frame: Path, clip_id: str) -> dict:
+def finalize(source: Path, destination: Path, final_frame: Path, clip_id: str, *, require_audio=True) -> dict:
     destination.parent.mkdir(parents=True, exist_ok=True)
     final_frame.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".part.mp4")
@@ -29,7 +29,7 @@ def finalize(source: Path, destination: Path, final_frame: Path, clip_id: str) -
                 "-map",
                 "0:v:0",
                 "-map",
-                "0:a:0",
+                "0:a:0" if require_audio else "0:a:0?",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -69,7 +69,7 @@ def finalize(source: Path, destination: Path, final_frame: Path, clip_id: str) -
         )
         video = next(s for s in info["streams"] if s["codec_type"] == "video")
         audio = next((s for s in info["streams"] if s["codec_type"] == "audio"), None)
-        if not audio:
+        if require_audio and not audio:
             raise RuntimeError("The generated clip has no audio track")
         frames = int(video["nb_read_frames"])
         if frames < 2:
@@ -94,7 +94,7 @@ def finalize(source: Path, destination: Path, final_frame: Path, clip_id: str) -
         if not final_frame.exists():
             raise RuntimeError("Final frame extraction failed")
         duration = float(video.get("duration") or info["format"]["duration"])
-        if abs(float(audio.get("duration", duration)) - duration) > 0.25:
+        if audio and abs(float(audio.get("duration", duration)) - duration) > 0.25:
             raise RuntimeError("Generated video and audio durations do not match")
         numerator, denominator = video["avg_frame_rate"].split("/")
         fps = float(numerator) / float(denominator)
@@ -107,7 +107,7 @@ def finalize(source: Path, destination: Path, final_frame: Path, clip_id: str) -
             "width": video["width"],
             "height": video["height"],
             "frames": frames,
-            "hasAudio": True,
+            "hasAudio": audio is not None,
             "bytes": destination_tmp_size,
         }
     finally:
