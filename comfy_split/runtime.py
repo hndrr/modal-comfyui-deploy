@@ -117,7 +117,7 @@ def configure_manager(user, enabled):
 
 
 class ComfyProcess:
-    def __init__(self, role, port):
+    def __init__(self, role, port, *, user_directory=None):
         self.role, self.port = role, port
         self.process = None
         self.version = None
@@ -126,6 +126,7 @@ class ComfyProcess:
         self.log = Path("/tmp") / ("split-comfy-" + role + ".log")
         self.temp_root = self.root / "temporary"
         self.temp_namespace = uuid.uuid4().hex
+        self.user_directory = user_directory
 
     def archive_temp(self, *, legacy_paths=False):
         source = self.temp_root / "temp"
@@ -183,7 +184,9 @@ class ComfyProcess:
             elif destination.exists():
                 continue
             destination.symlink_to(path, target_is_directory=path.is_dir())
-        if self.role == "cpu":
+        if self.user_directory is not None:
+            user = self.user_directory
+        elif self.role == "cpu":
             user = USER
         elif self.role == "candidate":
             user = source / "manager-user"

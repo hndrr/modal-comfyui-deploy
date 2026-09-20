@@ -12,5 +12,7 @@ if os.environ.get("SPLIT_INTEGRATION") == "1":
 
     if os.environ.get("SPLIT_CPU") == "1":
         install_cpu_guard()
+        from .restore import restore
+        PromptServer.instance.routes.post("/_split/restore")(restore)
     PromptServer.instance.routes.get("/_split/catalog")(catalog)
     PromptServer.instance.routes.post("/_split/jobs")(jobs)
