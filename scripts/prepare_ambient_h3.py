@@ -1,6 +1,7 @@
 """Explicit model preparation; never runs on app startup or deploy.
 Run FastH3: ./scripts/modal.sh run scripts/prepare_ambient_h3.py --mode fasth3
-Use --mode h3 for H3.
+Use --mode h3 or h3-turbo-4step for the existing H3/Turbo assets.
+Use --mode h3-fused-4step for the fused Turbo/Mystic model (no separate LoRA).
 """
 from pathlib import Path
 import sys

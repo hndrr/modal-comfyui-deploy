@@ -7,8 +7,8 @@ validation and execution; no ComfyUI source or runtime method is patched here.
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .contracts import DEFAULT_BACKENDS, FAST8_MODES, IMAGE_MODES, FPS, FRAMES, generation_size, prompt_text
-from .models import FAST8_MODEL_FILES, FAST_MODEL_FILES, MODEL_FILES
+from .contracts import DEFAULT_BACKENDS, FAST8_MODES, H3_FOUR_STEP_MODES, IMAGE_MODES, FPS, FRAMES, generation_size, prompt_text
+from .models import FAST8_MODEL_FILES, FAST_MODEL_FILES, MODEL_FILES, MODE_MODEL_FILES
 
 FAST_SIGMAS = (1.0, 36 / 37, 12 / 13, 4 / 5, 0.0)
 
@@ -120,11 +120,12 @@ def workflow(
         raise ValueError("FastH3 Preview supports text-to-video-and-audio only")
     if i2v and not image_name and not request.get("sessionId"):
         raise ValueError("FastH3 8-step I2V requires a first-frame image")
-    files = FAST8_MODEL_FILES if fast8 else FAST_MODEL_FILES if fast else MODEL_FILES
+    files = MODE_MODEL_FILES[mode]
     width, height = generation_size(request)
     builder = Workflow(object_info)
     add = builder.add
     add("1", "UNETLoader", unet_name=files["unet"], weight_dtype="default")
+    model_node = "2"
     if fast or fast8:
         add(
             "17",
@@ -149,7 +150,7 @@ def workflow(
             sink_conditioning="exact_kv_and_rows",
             verbose=not fast8,
         )
-    else:
+    elif "lora" in files:
         add(
             "2",
             "LoraLoaderModelOnly",
@@ -157,6 +158,12 @@ def workflow(
             lora_name=files["lora"],
             strength_model=1.0,
         )
+    if mode in H3_FOUR_STEP_MODES:
+        # Keep the existing dense attention backend for a standalone four-step
+        # recipe. The fused weights already contain Turbo and Mystic: no LoRA.
+        add("17", "MiniMaxH3SigmaShift", model=Link("2" if "lora" in files else "1"),
+            shift_video=12.0, shift_audio=3.0)
+        model_node = "17"
     add("3", "CLIPLoader", clip_name=files["clip"], type="minimax", device="default")
     add("4", "VAELoader", vae_name=files["video_vae"])
     add("5", "VAELoader", vae_name=files["audio_vae"])
@@ -177,7 +184,7 @@ def workflow(
         length=FRAMES,
         **anchor,
     )
-    add("7", "BasicGuider", model=Link("2"), conditioning=Link("6"))
+    add("7", "BasicGuider", model=Link(model_node), conditioning=Link("6"))
     add("8", "RandomNoise", noise_seed=request["seed"])
     add("9", "KSamplerSelect", sampler_name="euler" if fast else "res_multistep")
     if fast:
@@ -186,9 +193,9 @@ def workflow(
         add(
             "10",
             "BasicScheduler",
-            model=Link("2"),
+            model=Link(model_node),
             scheduler="simple",
-            steps=8,
+            steps=4 if mode in H3_FOUR_STEP_MODES else 8,
             denoise=1.0,
         )
     add(

@@ -310,6 +310,6 @@ def h3_metadata(request, graph):
                 "seed": binding("8", "noise_seed"), "width": binding("6", "width"),
                 "height": binding("6", "height")}
     if request["mode"] in IMAGE_MODES:
-        bindings["reference"] = binding("16", "image", optional=request["mode"] == "h3")
+        bindings["reference"] = binding("16", "image", optional=request["mode"] != "fasth3-8step-i2v")
     return {"sessionId": request["sessionId"], "stage": request["mode"],
             "revision": request["workflowRevision"], "bindings": bindings, "outputs": {"video": "15"}}

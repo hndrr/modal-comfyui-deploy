@@ -9,12 +9,12 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ambient.client import Client, save_request
 from ambient.cli import progress
-from ambient.contracts import DEFAULT_BACKENDS, validate_request
+from ambient.contracts import DEFAULT_BACKENDS, IMAGE_MODES, validate_request
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["h3", "fasth3"], required=True)
+    parser.add_argument("--mode", choices=[mode for mode in DEFAULT_BACKENDS if mode != "fasth3-8step-i2v"], required=True)
     parser.add_argument("--backend", choices=["comfyui"])
     parser.add_argument("--clips", type=int, default=3)
     parser.add_argument("--output", default="ambient-smoke")
@@ -34,7 +34,7 @@ def main():
     directory.mkdir(parents=True, exist_ok=True)
     for index in range(args.clips):
         req = {**template, "requestId": str(uuid4()), "seed": 42 + index}
-        if parent and args.mode == "h3":
+        if parent and args.mode in IMAGE_MODES:
             req["parentClipId"] = parent
         saved = save_request(req, directory)
         print(f"Request {req['requestId']} saved to {saved}", flush=True)

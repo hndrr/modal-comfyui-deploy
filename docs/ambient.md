@@ -237,6 +237,8 @@ CLIとバックエンドの変更は、このリポジトリに含まれます�
 | mode | Studioの選択肢 | 入力・Attention |
 | --- | --- | --- |
 | `h3` | H3 Continuity · 8 step Turbo | テキスト／画像、従来のTurbo LoRA |
+| `h3-turbo-4step` | H3 Turbo · 4 step | テキスト／画像、既存Turbo LoRAを4stepで実行 |
+| `h3-fused-4step` | H3 Fused + Mystic · 4 step | テキスト／画像、Turbo・Mystic統合済みモデル |
 | `fasth3` | FastH3 · 4 step VSA | テキスト、従来の4-step VSA |
 | `fasth3-8step-t2v` | FastH3 V2 · 8 step T2V | テキスト、VSA |
 | `fasth3-8step-i2v` | FastH3 V2 · 8 step I2V (experimental) | 開始画像必須、sol-attn |
@@ -250,6 +252,28 @@ I2Vの開始画像はアップロード、カメラ、CodexのGenerate first fra
 モデル未配置の場合だけ `scripts/modal.sh run scripts/prepare_ambient_h3.py --mode fasth3-8step-t2v` を実行します（両新モードの資産は共通）。準備確認は各モードで `scripts/modal.sh run ambient_app.py::check_comfy --mode fasth3-8step-t2v` / `--mode fasth3-8step-i2v`。ノード・資産の在庫確認はCPUのみで、GPU検証とは区別します。CLIでは `python -m ambient.cli generate --mode fasth3-8step-i2v --image first-frame.png --prompt ... --sound ...` を使います。
 
 通常のPython依存パッケージをインストールし、`AMBIENT_BACKEND_URL`、`MODAL_PROXY_KEY`、`MODAL_PROXY_SECRET` を環境変数として設定します。URLはAmbient APIを指します。準備状態、既存ジョブ、完了済みクリップの取得では、生成用GPUは起動しません。
+
+### H3 Turbo／Fusedの4step設定
+
+`h3-turbo-4step`は現行H3の重みとTurbo LoRAを再利用し、`h3-fused-4step`は[MATLOWAIのFused Turbo + Mystic](https://huggingface.co/MATLOWAI/minimax-h3-fused-turbo-int8-convrot)を使います。両方とも単段の`res_multistep` / `simple` / 4 steps、video/audio shift 12/3、BasicGuider（CFGなし）です。初期設定は既存のdense Attention経路を使います。配布元のSLA拡張や4+4 de-ropeを追加した構成とは異なり、その速度の実測値は引き継ぎません。AttentionなどはComfyUIの各stageで編集できます。
+
+Fusedは`minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors`（約21 GB）を標準UNETLoaderで読み込み、Turboを二重適用しません。Mysticの強度0.7は組み込み済みで、後からその強度だけを変える設定はありません。映像VAEは既存のKijai INT8、テキストエンコーダー・音声VAEは共通です。取得元のリビジョンとSHA-256は`ambient/config.py`と`ambient/models.py`で固定しています。
+
+StudioのGeneration → Modelで選択できます。どちらも画像なしでT2Vを実行でき、画像アップロード・カメラ・Codex開始画像・成功動画の最終フレーム継承も使えます。既存`h3`の8step設定や保存済みワークフローは自動変更しません。新しいmodeごとにComfyUIドラフト・適用版・準備記録を持ち、通信再試行も元のmodeを維持します。
+
+サーバーへ反映する際は更新した`splitapp.py`／`ambient_app.py`を配備し、Fusedの重みが未配置なら明示的に準備します。これらの操作はテストやStudio起動からは実行されません。
+
+```sh
+# Fusedのモデル準備（既存Turbo 4stepの資産はh3と同一）
+./scripts/modal.sh run scripts/prepare_ambient_h3.py --mode h3-fused-4step
+# 各レシピの在庫・ノード契約を確認。実GPU生成は行わない。
+./scripts/modal.sh run ambient_app.py::check_comfy --mode h3-turbo-4step
+./scripts/modal.sh run ambient_app.py::check_comfy --mode h3-fused-4step
+```
+
+モデルが準備されていない場合は未準備として表示し、別モデルへ自動変更しません。今回の検証はローカルの模擬API・保存・ワークフロー契約までで、両4stepレシピの実GPU品質・速度は未検証です。
+
+### CLIの基本操作
 
 ```sh
 python -m ambient.cli capabilities
@@ -315,7 +339,7 @@ python scripts/ambient_smoke.py --mode fasth3 --backend comfyui --clips 1
 
 - `GET /capabilities`：モード、解像度、124フレーム・24fpsに加え、`modes[mode].backends.comfyui` の準備状態・理由・検証情報を返します。モード全体の準備状態は、両モードとも `defaultBackend: comfyui` についての情報です。
 - `POST /images`：マルチパートの `image` フィールドを受け付けます。上限は12 MiB・2400万画素で、`{id}` を返します。
-- `POST /jobs`：本文は `{requestId,mode,backend?,prompt,sound,seed,resolution,imageId?,parentClipId?}` です。JSON解析前のストリーム受信時点で本文全体を128 KiBに制限し、超過時はジョブを投入せず413を返します。UUIDのリクエストIDはアトミックに確保します。同じ内容なら既存ジョブを返し、同じIDで内容が異なれば409を返します。`mode` は上表の4種類、解像度は `preview` または `quality` です。`fasth3` / `fasth3-8step-t2v` は画像・親クリップを拒否します。`fasth3-8step-i2v` は画像・親クリップ、または版固定したComfyUIワークフローのreferenceを必要とします。音声の指定は必須です。`backend` は `comfyui` だけを受け付けます。明示的な `fastvideo` の要求は400を返します。保存済みの古いFastVideoジョブは、バックエンド未記録の旧FastH3ジョブも含め、元のバックエンド情報を維持します。それらのIDをComfyUI用に再利用すると409を返し、新たな生成は行いません。
+- `POST /jobs`：本文は `{requestId,mode,backend?,prompt,sound,seed,resolution,imageId?,parentClipId?}` です。JSON解析前のストリーム受信時点で本文全体を128 KiBに制限し、超過時はジョブを投入せず413を返します。UUIDのリクエストIDはアトミックに確保します。同じ内容なら既存ジョブを返し、同じIDで内容が異なれば409を返します。`mode` は上表の6種類、解像度は `preview` または `quality` です。`fasth3` / `fasth3-8step-t2v` は画像・親クリップを拒否します。`fasth3-8step-i2v` は画像・親クリップ、または版固定したComfyUIワークフローのreferenceを必要とします。音声の指定は必須です。`backend` は `comfyui` だけを受け付けます。明示的な `fastvideo` の要求は400を返します。保存済みの古いFastVideoジョブは、バックエンド未記録の旧FastH3ジョブも含め、元のバックエンド情報を維持します。それらのIDをComfyUI用に再利用すると409を返し、新たな生成は行いません。
 - `GET /jobs/:id`：`queued/running/completed/failed/cancelled` の状態、モード・バックエンド、新規ジョブで想定する参照元、処理段階・エラーを返します。完了時は、実際の寸法・長さ・フレーム数・`hasAudio` を含むクリップのメタデータも返します。
 - `DELETE /jobs/:id`：キュー内または実行中のジョブについて、キャンセルを最終結果として確定しようとします。完了または失敗が先に確定していれば、その結果を返します。`cancelled` の応答は確定済みであり、後からワーカーが書き込んでも完了や失敗には変わりません。完了・失敗・キャンセル済みのジョブは、現在の状態をそのまま返します。完了したクリップは引き続きダウンロードでき、親クリップにも使えます。H3アダプターは自分のsplitappジョブだけをキャンセルし、全体を対象とする `/interrupt` は送りません。
 - `GET /clips/:id`：永続保存されたH.264/AACのMP4を返し、バイト範囲の指定に対応します。CPU側のVolume SDKでファイルを取得するため、GPUは起動しません。

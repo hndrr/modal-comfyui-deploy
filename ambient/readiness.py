@@ -4,7 +4,7 @@ import time
 from itertools import product
 
 from .h3 import workflow
-from .contracts import ASPECT_RATIOS, DEFAULT_BACKENDS, IMAGE_MODES, RESOLUTIONS
+from .contracts import ASPECT_RATIOS, DEFAULT_BACKENDS, H3_FOUR_STEP_MODES, IMAGE_MODES, RESOLUTIONS
 from .models import references
 from .config import COMFYUI_REFERENCE
 from .split import SPLIT_HEADERS, check_dependencies, check_split
@@ -49,7 +49,7 @@ def describe_modes(jobs, comfy_url: str) -> dict:
             "camera": mode in IMAGE_MODES,
             "continuity": mode in IMAGE_MODES,
             "audio": True,
-            "steps": 4 if mode == "fasth3" else 8,
+            "steps": 4 if mode in {"fasth3", *H3_FOUR_STEP_MODES} else 8,
         }
     return modes
 
@@ -94,7 +94,8 @@ def validate_object_info(info, mode="h3"):
     if mode not in DEFAULT_BACKENDS:
         raise ValueError("Invalid ComfyUI generation mode")
     for resolution, aspect in product(RESOLUTIONS, ASPECT_RATIOS):
-        images = (None, "ambient/anchor.png") if mode == "h3" else ("ambient/anchor.png",) if mode in IMAGE_MODES else (None,)
+        images = (("ambient/anchor.png",) if mode == "fasth3-8step-i2v"
+                  else (None, "ambient/anchor.png") if mode in IMAGE_MODES else (None,))
         for image in images:
             workflow(
                 {

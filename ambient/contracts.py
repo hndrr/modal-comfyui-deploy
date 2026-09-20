@@ -18,8 +18,11 @@ FRAMES = 124
 FPS = 24
 TERMINAL = {"completed", "failed", "cancelled"}
 FAST8_MODES = {"fasth3-8step-t2v", "fasth3-8step-i2v"}
-IMAGE_MODES = {"h3", "fasth3-8step-i2v"}
-DEFAULT_BACKENDS = {mode: "comfyui" for mode in ("h3", "fasth3", "fasth3-8step-t2v", "fasth3-8step-i2v")}
+H3_FOUR_STEP_MODES = {"h3-turbo-4step", "h3-fused-4step"}
+IMAGE_MODES = {"h3", *H3_FOUR_STEP_MODES, "fasth3-8step-i2v"}
+DEFAULT_BACKENDS = {mode: "comfyui" for mode in (
+    "h3", "h3-turbo-4step", "h3-fused-4step", "fasth3", "fasth3-8step-t2v", "fasth3-8step-i2v",
+)}
 ROUTES = tuple(DEFAULT_BACKENDS.items())
 
 

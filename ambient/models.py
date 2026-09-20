@@ -6,6 +6,8 @@ from .config import (
     COMFY_FAST_MODEL_REVISION,
     COMFY_FAST8_MODEL,
     COMFY_FAST8_MODEL_REVISION,
+    COMFY_FUSED_MODEL,
+    COMFY_FUSED_MODEL_REVISION,
     H3_MODEL_REVISION,
 )
 from .contracts import DEFAULT_BACKENDS, FAST8_MODES
@@ -31,13 +33,25 @@ FAST8_MODEL_FILES = {
     "unet": "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
 }
 FAST8_SHA256 = "0922785978dc9bfe1adf27d8b291b0ca763f9f165f882e6cb297c72fbb6deda8"
+FUSED_MODEL_FILES = {
+    **FAST_MODEL_FILES,
+    "unet": "minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+}
+FUSED_SHA256 = "4262e4e9963c553fa00016bbe83961407a4fc0a888be95fd836c8d4f2304e48b"
+MODE_MODEL_FILES = {
+    "h3": MODEL_FILES,
+    "h3-turbo-4step": MODEL_FILES,
+    "h3-fused-4step": FUSED_MODEL_FILES,
+    "fasth3": FAST_MODEL_FILES,
+    **{mode: FAST8_MODEL_FILES for mode in FAST8_MODES},
+}
 
 
 def comfy_assets(mode: str) -> list[dict]:
     """Arguments for the existing model saver, shared with reference reporting."""
     if mode not in DEFAULT_BACKENDS:
         raise ValueError("Invalid ComfyUI generation mode")
-    files = MODEL_FILES if mode == "h3" else FAST8_MODEL_FILES if mode in FAST8_MODES else FAST_MODEL_FILES
+    files = MODE_MODEL_FILES[mode]
     result = []
     for key, subdir in (
         ("unet", "diffusion_models"),
@@ -48,7 +62,7 @@ def comfy_assets(mode: str) -> list[dict]:
     ):
         if key not in files:
             continue
-        fast = mode != "h3" and key in FAST_CHECKSUMS
+        fast = key in FAST_CHECKSUMS and files[key] == FAST_MODEL_FILES[key]
         asset = {
             "repo_id": COMFY_FAST_MODEL if fast else "Comfy-Org/MiniMax-H3",
             "revision": COMFY_FAST_MODEL_REVISION if fast else H3_MODEL_REVISION,
@@ -60,6 +74,9 @@ def comfy_assets(mode: str) -> list[dict]:
         if mode in FAST8_MODES and key == "unet":
             asset.update(repo_id=COMFY_FAST8_MODEL, revision=COMFY_FAST8_MODEL_REVISION,
                          filename=f"{subdir}/{files[key]}", expected_sha256=FAST8_SHA256)
+        if mode == "h3-fused-4step" and key == "unet":
+            asset.update(repo_id=COMFY_FUSED_MODEL, revision=COMFY_FUSED_MODEL_REVISION,
+                         filename=f"{subdir}/{files[key]}", expected_sha256=FUSED_SHA256)
         result.append(asset)
     return result
 
@@ -71,6 +88,8 @@ def references(mode: str, backend: str) -> dict:
     return {
         "implementation": COMFYUI_REFERENCE,
         "recipe": {"h3": "h3-turbo-8step", "fasth3": "fasth3-vsa-4step",
+                   "h3-turbo-4step": "h3-turbo-4step-res-multistep",
+                   "h3-fused-4step": "h3-fused-mystic-4step-res-multistep-dense",
                    "fasth3-8step-t2v": "fasth3-v2-8step-vsa-t2v",
                    "fasth3-8step-i2v": "fasth3-v2-8step-sol-attn-i2v"}[mode],
         "models": comfy_assets(mode),

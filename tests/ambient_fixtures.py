@@ -1,6 +1,7 @@
 """Small /object_info double for adapter tests; not a GPU compatibility claim."""
 
 from ambient.h3 import FAST8_MODEL_FILES, FAST_MODEL_FILES, MODEL_FILES
+from ambient.models import FUSED_MODEL_FILES
 
 
 def object_info():
@@ -13,7 +14,7 @@ def object_info():
 
     info = {
         "UNETLoader": node(
-            {"unet_name": [MODEL_FILES["unet"], FAST_MODEL_FILES["unet"], FAST8_MODEL_FILES["unet"]], "weight_dtype": ["default"]}, ["MODEL"]
+            {"unet_name": [MODEL_FILES["unet"], FAST_MODEL_FILES["unet"], FAST8_MODEL_FILES["unet"], FUSED_MODEL_FILES["unet"]], "weight_dtype": ["default"]}, ["MODEL"]
         ),
         "LoraLoaderModelOnly": node(
             {"model": "MODEL", "lora_name": [MODEL_FILES["lora"]], "strength_model": "FLOAT"},

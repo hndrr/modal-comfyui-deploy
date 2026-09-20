@@ -184,6 +184,8 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("h3", catalog["stages"])
         self.assertIn("fasth3-8step-t2v", catalog["stages"])
         self.assertIn("fasth3-8step-i2v", catalog["stages"])
+        self.assertIn("h3-turbo-4step", catalog["stages"])
+        self.assertIn("h3-fused-4step", catalog["stages"])
         template = deepcopy(catalog["stages"]["h3"])
         template["bindings"]["seed"]["source"] = "workflow"
         template["graph"]["8"]["inputs"]["noise_seed"] = 123
