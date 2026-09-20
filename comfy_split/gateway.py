@@ -203,7 +203,6 @@ class Controller:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
-        self.startup_phase = "updating_nodes"
         await self.refresh_ambient_nodes()
         self.startup_phase = "starting_comfy"
         if self.journal.data["mode"] == "split":
@@ -223,26 +222,47 @@ class Controller:
             log.info("Ambient node refresh deferred until an idle CPU startup")
             return
         previous = data["environment"]
+        deployment = os.environ.get(ambient_nodes.DEPLOYMENT_ENV, "unversioned")
+        revisions = await asyncio.to_thread(ambient_nodes.snapshot_revisions, previous)
+        last_refresh = data.get(ambient_nodes.REFRESH_KEY) or {}
+        if (revisions and last_refresh.get("deployment") == deployment
+                and last_refresh.get("revisions") == revisions):
+            log.info("Ambient nodes reused without GitHub access: %s (last update: %s)",
+                     previous, last_refresh.get("status"))
+            return
+        started = time.monotonic()
+        self.startup_phase = "updating_nodes"
         await self.pin_cpu(True)
         try:
             try:
                 version = await asyncio.to_thread(ambient_nodes.prepare_environment, previous)
-                if version is None:
-                    return
-                # Validate imports without starting a GPU or running any node/API task.
-                self.startup_phase = "validating_nodes"
-                await self.candidate.start(version, cpu=True)
-                ambient_nodes.check_catalog(await self.candidate.catalog(self.client))
+                if version is not None:
+                    # Validate imports without starting a GPU or running any node/API task.
+                    self.startup_phase = "validating_nodes"
+                    await self.candidate.start(version, cpu=True)
+                    ambient_nodes.check_catalog(await self.candidate.catalog(self.client))
             except Exception:
                 log.exception("Ambient node refresh failed; keeping environment %s", previous)
+                if revisions:
+                    # A valid previous snapshot remains usable. Do not delay every
+                    # cold start with the same failed update; redeploy to retry.
+                    data[ambient_nodes.REFRESH_KEY] = {"deployment": deployment,
+                        "revisions": revisions, "status": "failed", "checked_at": time.time()}
+                    await self.persist()
                 return
             finally:
                 await self.candidate.stop()
             # Commit the complete snapshot before any new job can reference it.
-            await self.volumes["environment"].commit.aio()
-            data["environment"] = version
+            if version is not None:
+                await self.volumes["environment"].commit.aio()
+                data["environment"] = version
+            data[ambient_nodes.REFRESH_KEY] = {"deployment": deployment,
+                "revisions": await asyncio.to_thread(ambient_nodes.snapshot_revisions,
+                                                     data["environment"]),
+                "status": "updated" if version else "unchanged", "checked_at": time.time()}
             await self.persist()
-            log.info("Ambient nodes refreshed: %s -> %s", previous, version)
+            log.info("Ambient nodes checked for deployment: %s -> %s (%.2fs)",
+                     previous, data["environment"], time.monotonic() - started)
         finally:
             await self.pin_cpu(False)
 

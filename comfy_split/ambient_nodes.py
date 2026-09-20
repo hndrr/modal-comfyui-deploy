@@ -11,6 +11,8 @@ from comfy_split.state import write_json
 
 MODE_ENV = "COMFYUI_AMBIENT_MODE"
 TOKEN_ENV = "GITHUB_TOKEN"
+DEPLOYMENT_ENV = "SPLIT_AMBIENT_DEPLOYMENT"
+REFRESH_KEY = "ambient_nodes_refresh"
 REPOSITORIES = (
     "hndrr/ComfyUI-AgentRuntime",
     "hndrr/ComfyUI-Skills-Loader",
@@ -42,11 +44,31 @@ def check_catalog(catalog):
         raise RuntimeError("Ambient nodes failed to load: " + ", ".join(sorted(missing)))
 
 
-def prepare_environment(source):
-    """CPU startup only. Return a new environment, or None when already current.
+def snapshot_revisions(source):
+    """Read the saved snapshot locally; ordinary starts need no GitHub access."""
+    from comfy_split.runtime import environment_path
 
-    Clone each default branch afresh: no credentials in remotes, no force-pull
-    over user edits, and all four downloads must succeed before copying a venv.
+    origin = environment_path(source)
+    try:
+        revisions = json.loads((origin / MANIFEST).read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if (not isinstance(revisions, dict) or set(revisions) != NODE_NAMES
+            or any(not isinstance(sha, str) or len(sha) != 40
+                   or any(c not in "0123456789abcdef" for c in sha)
+                   for sha in revisions.values())
+            or not all((origin / DIRECTORY / name / "__init__.py").is_file()
+                       for name in NODE_NAMES)):
+        return None
+    return revisions
+
+
+def prepare_environment(source):
+    """Deployment update only. Return a new snapshot, or None when current.
+
+    Query default-branch HEADs first, then fetch only changed packs at those SHAs.
+    No credentials in remotes, no force-pull over user edits, and every required
+    download must succeed before copying a venv.
     The caller validates CPU imports and commits before publishing the version.
     """
     from comfy_split.runtime import create_environment, environment_path
@@ -54,6 +76,13 @@ def prepare_environment(source):
     if not os.environ.get(TOKEN_ENV):
         raise RuntimeError(f"Modal Secret must supply {TOKEN_ENV} for private Ambient repositories")
     origin = environment_path(source)
+    previous = snapshot_revisions(source) or {}
+    # Preserve user-installed duplicates instead of silently changing precedence.
+    duplicates = [name for name in NODE_NAMES
+                  if (origin / "comfy/custom_nodes" / name).exists()]
+    if duplicates:
+        raise RuntimeError("Ambient nodes already installed in custom_nodes: "
+                           + ", ".join(sorted(duplicates)))
     with tempfile.TemporaryDirectory(prefix="ambient-nodes-") as directory:
         staging = Path(directory)
         askpass = staging / "askpass"
@@ -72,34 +101,43 @@ def prepare_environment(source):
         revisions = {}
         for repo in REPOSITORIES:
             name = repo.split("/")[1]
+            head = subprocess.check_output(
+                ["git", "-c", "credential.helper=", "ls-remote", "--exit-code",
+                 "https://github.com/" + repo + ".git", "HEAD"],
+                env=git_env, text=True, timeout=60,
+            ).split()
+            if (len(head) != 2 or head[1] != "HEAD" or len(head[0]) != 40
+                    or any(c not in "0123456789abcdef" for c in head[0])):
+                raise RuntimeError("Invalid default-branch revision for " + repo)
+            revisions[name] = head[0]
+        if previous == revisions:
+            return None
+        changed = {name for name in revisions if previous.get(name) != revisions[name]}
+        for repo in REPOSITORIES:
+            name = repo.split("/")[1]
+            if name not in changed:
+                continue
             destination = staging / name
             subprocess.run(
-                ["git", "-c", "credential.helper=", "clone", "--quiet", "--depth", "1",
-                 "https://github.com/" + repo + ".git", str(destination)],
+                ["git", "init", "--quiet", str(destination)],
                 env=git_env, check=True, timeout=60,
             )
-            revisions[name] = subprocess.check_output(
-                ["git", "-C", str(destination), "rev-parse", "HEAD"],
-                env=git_env, text=True, timeout=10,
-            ).strip()
-        # A duplicate in the user's node directory makes import precedence
-        # ambiguous. Preserve it and report the conflict instead of replacing it.
-        duplicates = [name for name in NODE_NAMES
-                      if (origin / "comfy/custom_nodes" / name).exists()]
-        if duplicates:
-            raise RuntimeError("Ambient nodes already installed in custom_nodes: "
-                               + ", ".join(sorted(duplicates)))
-        previous = origin / MANIFEST
-        if (previous.exists() and json.loads(previous.read_text()) == revisions
-                and all((origin / DIRECTORY / name / "__init__.py").is_file() for name in NODE_NAMES)):
-            return None
+            subprocess.run(
+                ["git", "-c", "credential.helper=", "-C", str(destination),
+                 "fetch", "--quiet", "--depth", "1", "https://github.com/" + repo + ".git",
+                 revisions[name]], env=git_env, check=True, timeout=60,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+                env=git_env, check=True, timeout=10,
+            )
         version = create_environment(source)
         target = environment_path(version)
         nodes = target / DIRECTORY
-        if nodes.exists():
-            shutil.rmtree(nodes)
-        nodes.mkdir()
-        for name in revisions:
+        nodes.mkdir(exist_ok=True)
+        for name in changed:
+            if (nodes / name).exists():
+                shutil.rmtree(nodes / name)
             shutil.move(str(staging / name), nodes / name)
         python = str(target / "venv/bin/python")
         requirements = [node / "requirements.txt" for node in sorted(nodes.iterdir())
