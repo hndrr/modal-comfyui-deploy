@@ -153,6 +153,68 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.worker.spawn.aio.assert_not_awaited()
             self.assertFalse(socket.closed)
 
+    async def test_workflow_bootstrap_apply_conflict_and_pinned_execution_without_gpu(self):
+        from copy import deepcopy
+        from ambient.h3 import workflow
+        from comfy_split.ambient_workflows import h3_metadata
+        from uuid import uuid4
+
+        response = await self.client.get("/ambient/workflows")
+        self.assertEqual(response.status, 200)
+        catalog = await response.json()
+        self.assertEqual(catalog["revision"], 0)
+        self.assertIn("h3", catalog["stages"])
+        template = deepcopy(catalog["stages"]["h3"])
+        template["bindings"]["seed"]["source"] = "workflow"
+        template["graph"]["8"]["inputs"]["noise_seed"] = 123
+        payload = {"stage": "h3", "template": template, "expectedRevision": 0}
+        self.assertEqual((await self.client.post("/ambient/workflows/validate", json=payload)).status, 200)
+        applied = await self.client.post("/ambient/workflows/apply", json=payload)
+        self.assertEqual(applied.status, 200)
+        self.assertEqual((await applied.json())["revision"], 1)
+        self.assertEqual((await self.client.post("/ambient/workflows/apply", json=payload)).status, 409)
+        for revision, seed in [(0, 42), (1, 123)]:
+            req = {**self.req, "sessionId": str(uuid4()), "workflowRevision": revision}
+            graph = workflow(req, object_info=object_info())
+            body = {"prompt": graph, "client_id": "ambient-client", "extra_data": {"ambient": h3_metadata(req, graph)}}
+            submitted = await (await self.client.post("/prompt", json=body)).json()
+            job = self.control.journal.data["jobs"][submitted["prompt_id"]]
+            self.assertEqual(job["body"]["prompt"]["8"]["inputs"]["noise_seed"], seed)
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_mirror_events_and_reconnect_snapshot_are_session_scoped(self):
+        from ambient.h3 import workflow
+        from comfy_split.ambient_workflows import h3_metadata
+        from uuid import uuid4
+        req = {**self.req, "sessionId": str(uuid4()), "workflowRevision": 0}
+        graph = workflow(req, object_info=object_info())
+        body = {"prompt": graph, "client_id": "generator", "extra_data": {"ambient": h3_metadata(req, graph)}}
+        job_id = (await (await self.client.post("/prompt", json=body)).json())["prompt_id"]
+        async with self.client.ws_connect("/ws?clientId=mirror") as socket:
+            await socket.receive_json()
+            event = {"type": "executing", "data": {"prompt_id": job_id, "node": "11"}}
+            await self.control.broadcast(event, "generator")
+            message = await socket.receive_json()
+            self.assertEqual(message["type"], "ambient_execution")
+            self.assertEqual(message["data"]["sessionId"], req["sessionId"])
+        snapshot = await (await self.client.get("/ambient/executions", params={"sessionId": req["sessionId"]})).json()
+        self.assertEqual(snapshot["executions"][0]["event"], event)
+        other = await (await self.client.get("/ambient/executions", params={"sessionId": str(uuid4())})).json()
+        self.assertEqual(other["executions"], [])
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_bridge_templates_are_available_before_any_execution(self):
+        objects = {**object_info(), **{kind: {} for kind in (
+            "AgentRuntimeBridgeText", "AgentRuntimeBridgeMedia", "AgentRuntimeBridgeImageGen", "PreviewAny", "PreviewImage")}}
+        with patch.object(self.control, "objects", AsyncMock(return_value=web.json_response(objects))):
+            catalog = await (await self.client.get("/ambient/workflows")).json()
+        self.assertTrue({"media", "text", "imagegen"} <= set(catalog["stages"]))
+        self.assertEqual(catalog["stages"]["text"]["graph"]["1"]["inputs"]["sandbox_mode"], "read-only")
+        self.assertEqual(self.control.journal.data["jobs"], {})
+        initial = await (await self.client.get("/ambient/workflows/0")).json()
+        self.assertEqual(initial["stages"]["text"], catalog["stages"]["text"])
+        self.worker.spawn.aio.assert_not_awaited()
+
     async def test_fast_comfy_inventory_and_generation_use_the_existing_gateway(self):
         self.req = request(mode="fasth3", backend="comfyui")
         record = await check_comfyui(self.base, {}, "fasth3")

@@ -17,6 +17,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from comfy_split.proxy import proxy
 from comfy_split import storage
 from comfy_split import ambient_nodes
+from comfy_split.ambient_workflows import WorkflowRegistry, validate_template, pin_references
 from comfy_split.agent_bridge import AgentBridge, PREFIX as BRIDGE_PREFIX, requires_bridge
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
@@ -55,6 +56,8 @@ class Controller:
         self.cpu_scaling_lock = asyncio.Lock()
         self.cleanup_due = 0.0
         self.bridge = AgentBridge(self)
+        self.ambient_workflows = WorkflowRegistry(self.journal.data)
+        self.ambient_templates_loaded = False
 
     async def cleanup_storage(self):
         """Caller holds the controller lock; metadata reads never start a GPU."""
@@ -253,6 +256,15 @@ class Controller:
             await self.client.close()
 
     async def broadcast(self, event, client_id=None):
+        # Mirror events are namespaced and correlated to a prompt, never injected
+        # into unrelated browser sessions' native execution state.
+        if client_id and isinstance(event, dict) and event.get("data", {}).get("prompt_id"):
+            job = self.journal.data["jobs"].get(event["data"]["prompt_id"])
+            meta = job and job.get("body", {}).get("extra_data", {}).get("ambient")
+            if meta:
+                job["ambient_event"] = event
+                await self.broadcast({"type": "ambient_execution", "data": {
+                    "sessionId": meta["sessionId"], "stage": meta["stage"], "event": event}})
         targets = list(self.sockets.items())
         for sid, sockets in targets:
             if client_id and sid != client_id:
@@ -782,6 +794,7 @@ class Controller:
                     existing = request_id and any(j.get("request_id") == request_id for j in (
                         *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
                     bridge_id = self.bridge.identity() if requires_bridge(body) and not existing else None
+                    body = self.ambient_workflows.prepare(body)
                     job = self.journal.enqueue(body, request_id)
                     if bridge_id and job["status"] == "queued":
                         job.setdefault("agent_bridge", bridge_id)
@@ -789,6 +802,68 @@ class Controller:
                     await self.persist()
                 await self.status()
                 return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
+            if path.startswith("/ambient/"):
+                if path == "/ambient/workflows" and request.method == "GET":
+                    if not self.ambient_templates_loaded:
+                        from ambient.h3 import workflow
+                        from ambient.tagging import recipe
+                        from comfy_split.ambient_workflows import h3_metadata
+                        response = await self.objects("/object_info")
+                        objects = json.loads(response.body)
+                        async with self.lock:
+                            req = {"requestId": "00000000-0000-4000-8000-000000000000",
+                                   "sessionId": "00000000-0000-4000-8000-000000000000",
+                                   "workflowRevision": 0, "prompt": "A quiet natural scene",
+                                   "sound": "Soft ambient sounds", "seed": 42, "resolution": "preview"}
+                            for mode in ("h3", "fasth3"):
+                                try:
+                                    graph = workflow({**req, "mode": mode}, object_info=objects)
+                                    self.ambient_workflows.prepare({"prompt": graph, "extra_data": {
+                                        "ambient": h3_metadata({**req, "mode": mode}, graph)}})
+                                except ValueError:
+                                    pass  # Missing models/nodes are reported by normal readiness checks.
+                            if "JevInterpret" in objects:
+                                self.ambient_workflows.prepare(recipe({}, req["sessionId"], 0))
+                            templates = json.loads((Path(__file__).parent.parent / "ambient" / "bridge_templates.json").read_text())
+                            for stage, template in templates.items():
+                                if all(node["class_type"] in objects for node in template["graph"].values()):
+                                    self.ambient_workflows.state["defaults"].setdefault(stage, template)
+                            await self.persist()
+                            self.ambient_templates_loaded = True
+                    return web.json_response(self.ambient_workflows.describe())
+                if path.startswith("/ambient/workflows/") and request.method == "GET":
+                    return web.json_response(self.ambient_workflows.describe(int(path.rsplit("/", 1)[-1])))
+                if path in {"/ambient/workflows/apply", "/ambient/workflows/validate"} and request.method == "POST":
+                    payload = await request.json()
+                    response = await self.objects("/object_info")
+                    objects = json.loads(response.body)
+                    async with self.lock:
+                        if path.endswith("/validate"):
+                            validate_template(payload["template"], self.ambient_workflows.state["defaults"][payload["stage"]], objects)
+                            return web.json_response({"valid": True})
+                        if payload["expectedRevision"] != self.ambient_workflows.state["revision"]:
+                            raise ValueError("Workflow changed on another device. Reload before applying.")
+                        validate_template(payload["template"], self.ambient_workflows.state["defaults"][payload["stage"]], objects)
+                        template = await asyncio.to_thread(pin_references, payload["template"], self.volumes["input"])
+                        result = self.ambient_workflows.apply(payload["stage"], template, payload["expectedRevision"], objects)
+                        await self.persist()
+                    await self.broadcast({"type": "ambient_workflows", "data": {"revision": result["revision"]}})
+                    return web.json_response(result)
+                if path.startswith("/ambient/executions") and request.method == "GET":
+                    records = []
+                    for job in self.journal.data["jobs"].values():
+                        meta = job.get("body", {}).get("extra_data", {}).get("ambient")
+                        if not meta or (request.query.get("sessionId") and meta["sessionId"] != request.query["sessionId"]):
+                            continue
+                        if path != "/ambient/executions" and job["id"] != path.rsplit("/", 1)[-1]:
+                            continue
+                        records.append({"id": job["id"], "status": job["status"], "createdAt": job["created_at"],
+                                        "graph": job["body"]["prompt"], "meta": meta,
+                                        "workflow": meta.get("layout") or job["body"].get("extra_data", {}).get("extra_pnginfo", {}).get("workflow"),
+                                        "event": job.get("ambient_event"), "outputs": (job.get("history") or {}).get("outputs", {})})
+                    records.sort(key=lambda item: item["createdAt"], reverse=True)
+                    return web.json_response({"executions": records[:100]})
+                return web.json_response({"error": "Unknown Ambient route"}, status=404)
             if (path == "/jobs" or path.startswith("/jobs/")) and request.method == "GET":
                 async with self.client.post(self.cpu.url + "/_split/jobs", json={
                     "queue": self.journal.queue(), "history": self.journal.history(),

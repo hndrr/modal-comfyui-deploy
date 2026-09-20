@@ -29,7 +29,7 @@ def identifier(value: object) -> str:
 def validate_request(data: object) -> dict:
     if not isinstance(data, dict):
         raise ValueError("Expected a JSON object")
-    allowed = {"requestId", "mode", "backend", "prompt", "sound", "seed", "resolution", "imageId", "parentClipId"}
+    allowed = {"requestId", "mode", "backend", "prompt", "sound", "seed", "resolution", "imageId", "parentClipId", "saveToLibrary", "sessionId", "workflowRevision", "intent"}
     if set(data) - allowed:
         raise ValueError("Unknown request fields")
     out = {"requestId": identifier(data.get("requestId"))}
@@ -56,6 +56,24 @@ def validate_request(data: object) -> dict:
         raise ValueError("Choose imageId or parentClipId")
     if out["mode"] == "fasth3" and ("imageId" in out or "parentClipId" in out):
         raise ValueError("FastH3 Preview supports text-to-video-and-audio only")
+    if "saveToLibrary" in data:
+        if type(data["saveToLibrary"]) is not bool:
+            raise ValueError("saveToLibrary must be boolean")
+        out["saveToLibrary"] = data["saveToLibrary"]
+    if "intent" in data:
+        intent = data["intent"]
+        if not isinstance(intent, dict) or set(intent) != {"prompt", "sound"}:
+            raise ValueError("intent must contain prompt and sound")
+        for key, limit in (("prompt", 8000), ("sound", 4000)):
+            if not isinstance(intent[key], str) or len(intent[key]) > limit:
+                raise ValueError(f"Invalid intent {key}")
+        out["intent"] = dict(intent)
+    if "sessionId" in data or "workflowRevision" in data:
+        out["sessionId"] = identifier(data.get("sessionId"))
+        revision = data.get("workflowRevision")
+        if type(revision) is not int or revision < 0:
+            raise ValueError("workflowRevision must be a nonnegative integer")
+        out["workflowRevision"] = revision
     return out
 
 
