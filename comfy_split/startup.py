@@ -50,7 +50,8 @@ class StartupGate:
         return {"ready": self.ready, "failed": self.failed,
                 "stage": "ready" if self.ready else "failed" if self.failed
                 else self.controller.startup_phase,
-                "elapsed_seconds": round(time.monotonic() - self.started)}
+                "elapsed_seconds": round(time.monotonic() - self.started),
+                "snapshot": getattr(self.controller, "snapshot_status", None)}
 
     async def handle(self, request):
         path = request.path.removeprefix("/api") if request.path.startswith("/api/") else request.path

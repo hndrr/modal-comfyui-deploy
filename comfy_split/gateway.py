@@ -37,11 +37,12 @@ def manager_path(path):
 
 
 class Controller:
-    def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None):
+    def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
+                 warmed_cpu=None):
         self.worker, self.events, self.commands, self.volumes = worker, events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
-        self.cpu = ComfyProcess("cpu", 8187)
+        self.cpu = warmed_cpu or ComfyProcess("cpu", 8187)
         self.candidate = ComfyProcess("candidate", 8190)
         self.sockets = {}
         self.task = None
@@ -60,6 +61,7 @@ class Controller:
         self.ambient_templates_loaded = False
         self.starting = False
         self.startup_phase = "initializing"
+        self.snapshot_status = None
 
     async def cleanup_storage(self):
         """Caller holds the controller lock; metadata reads never start a GPU."""
@@ -79,7 +81,8 @@ class Controller:
         temporary = await storage.remote_files(self.volumes["output"], "/.split-temp")
         live = ["temp"] if self.cpu.process and self.cpu.process.returncode is None else []
         plan = storage.cleanup_plan(data, environments, receipts, temporary,
-                                    live_temp_namespaces=live)
+                                    live_temp_namespaces=live,
+                                    snapshot_environments=await storage.snapshot_environments(environment_volume))
         # A durable tombstone precedes every receipt deletion, including old
         # validation/legacy sessions that no longer appear in the main journal.
         self.journal.retire(plan["expired_jobs"])
@@ -205,8 +208,15 @@ class Controller:
         await self.persist()
         await self.refresh_ambient_nodes()
         self.startup_phase = "starting_comfy"
+        warm_process = self.cpu.process
         if self.journal.data["mode"] == "split":
             await self.cpu.start(self.journal.data["environment"], cpu=True)
+        else:
+            await self.cpu.stop()
+        if self.snapshot_status is not None:
+            self.snapshot_status["reused"] = (warm_process is not None and
+                self.cpu.process is warm_process and self.cpu.version is not None and
+                self.cpu.version == self.snapshot_status.get("environment"))
         # Retention can remove large old environments. Let the UI and first
         # requests finish before the dispatcher performs normal idle cleanup.
         self.cleanup_due = time.monotonic() + 300
@@ -1029,13 +1039,16 @@ def application(controller):
     return app
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+def make_controller(volumes=None, *, warmed_cpu=None):
     names = json.loads(os.environ["SPLIT_VOLUMES"])
-    volumes = {key: modal.Volume.from_name(name) for key, name in names.items()}
+    volumes = volumes or {key: modal.Volume.from_name(name) for key, name in names.items()}
     app_name = os.environ["SPLIT_APP"]
-    controller = Controller(modal.Function.from_name(app_name, "gpu_worker"),
+    return Controller(modal.Function.from_name(app_name, "gpu_worker"),
         modal.Queue.from_name(app_name + "-events", create_if_missing=True),
         modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
-        ui_function=modal.Function.from_name(app_name, "ui"))
-    web.run_app(application(controller), host="0.0.0.0", port=8000)
+        ui_function=modal.Function.from_name(app_name, "ui"), warmed_cpu=warmed_cpu)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    web.run_app(application(make_controller()), host="0.0.0.0", port=8000)

@@ -68,7 +68,7 @@ def temp_references(value):
 
 
 def cleanup_plan(data, environment_names, receipts, temporary_files, *, now=None,
-                 live_temp_namespaces=()):
+                 live_temp_namespaces=(), snapshot_environments=()):
     """Determine eligible files without performing deletions.
 
     Receipt entries contain path/mtime/result; temp entries contain path/mtime.
@@ -78,6 +78,8 @@ def cleanup_plan(data, environment_names, receipts, temporary_files, *, now=None
     now = time.time() if now is None else now
     expired = set(expired_jobs(data, now))
     protected = protected_environments(data)
+    for version in snapshot_environments:
+        protected.setdefault(version, "CPU memory snapshot")
     references = temp_references([job for key, job in data["jobs"].items() if key not in expired])
     references.update(temp_references(data.get("session")))
     protected_jobs = {key for key, job in data["jobs"].items() if key not in expired}
@@ -128,6 +130,24 @@ def cleanup_plan(data, environment_names, receipts, temporary_files, *, now=None
 async def read_json(volume, path):
     content = b"".join([chunk async for chunk in volume.read_file.aio(path)])
     return json.loads(content)
+
+
+async def snapshot_environments(volume):
+    """Pins outlive journal history: Volume edits do not invalidate Modal snapshots.
+
+    Fail closed on unreadable pins. Retire pins only after the corresponding
+    deployment/snapshots can no longer be restored (including rollbacks).
+    """
+    versions = set()
+    try:
+        entries = [entry async for entry in volume.iterdir.aio("/.cpu-snapshots", recursive=False)]
+    except FileNotFoundError:
+        return versions
+    for entry in entries:
+        if entry.path.endswith(".json"):
+            pin = await read_json(volume, entry.path)
+            versions.add(pin["environment"])
+    return versions
 
 
 async def remote_receipts(volume):
