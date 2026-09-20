@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 import modal
 
@@ -21,6 +22,9 @@ from comfyapp import (
 
 APP_NAME = "comfyui-split"
 AMBIENT_MODE = ambient_nodes.enabled()
+# Mint once on the deploying client and preserve it when Modal imports this
+# module in a container. Keep it in the final image layer to reuse build caches.
+AMBIENT_DEPLOYMENT = os.environ.get(ambient_nodes.DEPLOYMENT_ENV) or uuid.uuid4().hex
 AMBIENT_SECRET_KEYS = (
     ("GEMINI_SECRET_NAME", "GEMINI_API_KEY"),
     ("TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"),
@@ -109,6 +113,7 @@ image = (
     .add_local_dir("ambient", "/opt/split/ambient", copy=True,
                    ignore=["docs/**", "**/__pycache__/**", "**/*.pyc"])
     .run_commands("python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt")
+    .env({ambient_nodes.DEPLOYMENT_ENV: AMBIENT_DEPLOYMENT})
 )
 app = modal.App(APP_NAME)
 

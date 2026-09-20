@@ -55,7 +55,7 @@ class AmbientRepositoryTests(unittest.TestCase):
         self.calls.append((list(command), kwargs))
         if command[0] == "git":
             command = list(command)
-            if "clone" in command:
+            if "ls-remote" in command or "fetch" in command:
                 if self.fail_clone:
                     raise subprocess.CalledProcessError(128, command)
                 self.assertNotIn("GIT_TRACE_CURL", kwargs["env"])
@@ -65,8 +65,10 @@ class AmbientRepositoryTests(unittest.TestCase):
                 response = self.run([str(askpass), "Password for 'https://github.com':"],
                                     env=kwargs["env"], check=True, capture_output=True, text=True)
                 self.assertEqual(response.stdout.strip(), "test-token")
-                repo = command[-2].removeprefix("https://github.com/").removesuffix(".git")
-                command[-2] = self.remotes[repo].as_uri()
+                index = next(i for i, value in enumerate(command)
+                             if value.startswith("https://github.com/"))
+                repo = command[index].removeprefix("https://github.com/").removesuffix(".git")
+                command[index] = self.remotes[repo].as_uri()
             return self.run(command, **kwargs)
         self.assertNotIn(ambient_nodes.TOKEN_ENV, kwargs["env"])
         if self.fail_dependency:
@@ -85,12 +87,17 @@ class AmbientRepositoryTests(unittest.TestCase):
         pip = next(command for command, _ in self.calls if "pip" in command)
         self.assertEqual(pip.count("-r"), 4)
         self.assertIn("/opt/split-constraints.txt", pip)
+        self.calls.clear()
         self.assertIsNone(ambient_nodes.prepare_environment(version))
+        self.assertEqual(sum("ls-remote" in command for command, _ in self.calls), 4)
+        self.assertFalse(any("fetch" in command or "pip" in command for command, _ in self.calls))
         self.assertEqual(len(list(self.environments.iterdir())), 2)
         remote = self.remotes[ambient_nodes.REPOSITORIES[0]]
         (remote / "__init__.py").write_text("# latest version\n")
         self.commit(remote, "update")
+        self.calls.clear()
         updated = ambient_nodes.prepare_environment(version)
+        self.assertEqual(sum("fetch" in command for command, _ in self.calls), 1)
         name = remote.name
         self.assertEqual((target / ambient_nodes.DIRECTORY / name / "__init__.py").read_text(),
                          "# first version\n")
@@ -99,6 +106,45 @@ class AmbientRepositoryTests(unittest.TestCase):
         self.assertNotEqual(manifest[name], json.loads(
             (self.environments / updated / ambient_nodes.MANIFEST).read_text())[name])
         self.assertTrue(all("test-token" not in " ".join(command) for command, _ in self.calls))
+
+    def test_saved_snapshot_can_be_read_without_token_or_git(self):
+        version = ambient_nodes.prepare_environment("base")
+        self.calls.clear()
+        with patch.dict(os.environ, {ambient_nodes.TOKEN_ENV: ""}):
+            self.assertEqual(set(ambient_nodes.snapshot_revisions(version)), ambient_nodes.NODE_NAMES)
+        self.assertEqual(self.calls, [])
+        target = self.environments / version
+        (target / ambient_nodes.DIRECTORY / next(iter(ambient_nodes.NODE_NAMES)) / "__init__.py").unlink()
+        self.assertIsNone(ambient_nodes.snapshot_revisions(version))
+
+    def test_fetch_pins_checked_revision_even_if_branch_advances(self):
+        original_execute = self.execute
+        updated = False
+        first_repo = ambient_nodes.REPOSITORIES[0]
+        first_name = first_repo.split("/")[1]
+
+        def advance_branch(command, **kwargs):
+            nonlocal updated
+            if "fetch" in command and not updated:
+                remote = self.remotes[first_repo]
+                (remote / "__init__.py").write_text("# later version\n")
+                self.commit(remote, "advance after HEAD query")
+                updated = True
+            return original_execute(command, **kwargs)
+
+        with patch.object(ambient_nodes.subprocess, "run", side_effect=advance_branch):
+            version = ambient_nodes.prepare_environment("base")
+        self.assertEqual((self.environments / version / ambient_nodes.DIRECTORY
+                          / first_name / "__init__.py").read_text(), "# first version\n")
+
+    def test_corrupt_manifest_is_repaired_without_mutating_active_snapshot(self):
+        version = ambient_nodes.prepare_environment("base")
+        target = self.environments / version
+        (target / ambient_nodes.MANIFEST).write_text("{")
+        self.assertIsNone(ambient_nodes.snapshot_revisions(version))
+        repaired = ambient_nodes.prepare_environment(version)
+        self.assertIsNotNone(ambient_nodes.snapshot_revisions(repaired))
+        self.assertEqual((target / ambient_nodes.MANIFEST).read_text(), "{")
 
     def test_failed_fetch_or_missing_token_never_copies_the_active_environment(self):
         self.fail_clone = True
@@ -143,8 +189,12 @@ class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
         self.control.candidate = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(),
                                                 catalog=AsyncMock(return_value=self.catalog))
         self.addCleanup(patch.stopall)
-        patch.dict(os.environ, {ambient_nodes.MODE_ENV: "on"}).start()
+        patch.dict(os.environ, {ambient_nodes.MODE_ENV: "on",
+                              ambient_nodes.DEPLOYMENT_ENV: "deployment-1"}).start()
         self.prepare = patch.object(ambient_nodes, "prepare_environment", return_value="env-new").start()
+        self.revisions = {name: "a" * 40 for name in ambient_nodes.NODE_NAMES}
+        self.snapshot = patch.object(ambient_nodes, "snapshot_revisions",
+                                     return_value=self.revisions).start()
 
     async def test_refresh_commits_snapshot_before_selecting_it_and_never_wakes_gpu(self):
         selected_during_commit = []
@@ -172,6 +222,7 @@ class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_fetch_dependency_and_import_failures_keep_previous_environment(self):
         for error in (RuntimeError("private repository unavailable"),
                       RuntimeError("dependency conflict"), None):
+            self.control.journal.data.pop(ambient_nodes.REFRESH_KEY, None)
             self.prepare.side_effect = error
             self.control.candidate.catalog.return_value = {"objects": {}}
             with self.assertLogs("comfy_split.gateway", level="ERROR"):
@@ -179,6 +230,53 @@ class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.control.journal.data["environment"], "base")
         self.volumes["environment"].commit.aio.assert_not_awaited()
         self.assertEqual(self.worker.mock_calls, [])
+
+    async def test_cold_restart_reuses_persisted_snapshot_without_github_access(self):
+        self.prepare.return_value = None
+        await self.control.refresh_ambient_nodes()
+        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
+        self.prepare.reset_mock()
+        self.prepare.side_effect = AssertionError("ordinary startup must not use GitHub")
+        with patch.dict(os.environ, {ambient_nodes.TOKEN_ENV: ""}):
+            await restarted.refresh_ambient_nodes()
+        self.prepare.assert_not_called()
+        self.assertEqual(self.worker.mock_calls, [])
+
+    async def test_new_deployment_rechecks_but_manager_copy_reuses_saved_nodes(self):
+        self.prepare.return_value = None
+        await self.control.refresh_ambient_nodes()
+        self.prepare.reset_mock()
+        self.control.journal.data["environment"] = "env-manager-copy"
+        await self.control.refresh_ambient_nodes()
+        self.prepare.assert_not_called()
+        with patch.dict(os.environ, {ambient_nodes.DEPLOYMENT_ENV: "deployment-2"}):
+            await self.control.refresh_ambient_nodes()
+        self.prepare.assert_called_once_with("env-manager-copy")
+
+    async def test_failed_update_with_valid_snapshot_is_not_retried_on_each_cold_start(self):
+        self.prepare.side_effect = RuntimeError("GitHub unavailable")
+        with self.assertLogs("comfy_split.gateway", level="ERROR"):
+            await self.control.refresh_ambient_nodes()
+        self.assertEqual(self.control.journal.data[ambient_nodes.REFRESH_KEY]["status"], "failed")
+        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
+        await restarted.refresh_ambient_nodes()
+        self.prepare.assert_called_once()
+        self.prepare.side_effect = None
+        self.prepare.return_value = None
+        with patch.dict(os.environ, {ambient_nodes.DEPLOYMENT_ENV: "deployment-2"}):
+            await restarted.refresh_ambient_nodes()
+        self.assertEqual(self.prepare.call_count, 2)
+        self.assertEqual(restarted.journal.data[ambient_nodes.REFRESH_KEY]["status"], "unchanged")
+
+    async def test_missing_snapshot_is_repaired_and_failed_first_install_can_retry(self):
+        self.prepare.return_value = None
+        await self.control.refresh_ambient_nodes()
+        self.snapshot.return_value = None
+        self.prepare.side_effect = RuntimeError("initial install unavailable")
+        for _ in range(2):
+            with self.assertLogs("comfy_split.gateway", level="ERROR"):
+                await self.control.refresh_ambient_nodes()
+        self.assertEqual(self.prepare.call_count, 3)
 
     async def test_same_revisions_do_not_restart_comfy_or_republish(self):
         self.prepare.return_value = None
@@ -276,6 +374,10 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
         # A container has image env + injected credentials, but no local .env.
         with patch.dict(os.environ, image_env, clear=True):
             remote = runpy.run_path(path)
+        self.assertEqual(remote["AMBIENT_DEPLOYMENT"], local["AMBIENT_DEPLOYMENT"])
+        with patch.dict(os.environ, settings):
+            redeployed = runpy.run_path(path)
+        self.assertNotEqual(redeployed["AMBIENT_DEPLOYMENT"], local["AMBIENT_DEPLOYMENT"])
         for key in ("ambient_secrets", "github_secrets"):
             self.assertEqual([secret.name for secret in remote[key]], [secret.name for secret in local[key]])
 

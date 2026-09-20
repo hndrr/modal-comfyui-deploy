@@ -261,7 +261,7 @@ class ComfyProcess:
                             self.version = version
                             self.dependencies = metadata.get("dependencies", {})
                             print(json.dumps({"event": "comfy_ready", "role": self.role,
-                                              "seconds": time.monotonic() - started}))
+                                              "seconds": time.monotonic() - started}), flush=True)
                             return
                 except (OSError, ClientError, asyncio.TimeoutError):
                     pass

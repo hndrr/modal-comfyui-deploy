@@ -17,7 +17,11 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 
 `ambient_app.py` 向けにAgentRuntime / Skills Loader / GeminiTools / Jevを使う場合は、
 `COMFYUI_AMBIENT_MODE=on` とGitHub取得用Modal Secretを設定する。
-CPU起動時にprivateリポジトリの最新版を取得し、CPU/GPUで同じ環境を使う。
+デプロイ後の最初のアイドル起動でprivateリポジトリの最新HEADを確認し、変更されたものだけ取得する。
+確認結果は保存し、以降の通常起動はGitHubにアクセスせず保存済みノードを再利用する。
+追加ノードの更新を取り込むときは `./scripts/modal.sh deploy splitapp.py` を再実行する。
+取得・検証に失敗しても有効な旧環境があれば再利用し、同じデプロイでは毎回更新を再試行しない。
+CPU/GPUは引き続きジョブに固定した同じ環境を使う。
 HTTPの入口は更新処理より先に起動する。ComfyUIの準備中はルートに起動段階と経過時間を表示し、
 完了後に自動で画面を開く。`GET /split/startup` は準備状態を返す。
 APIは短い起動待ちを最大20秒待ち、それ以上は `503` と `Retry-After: 2` を返す。
