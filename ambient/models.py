@@ -4,8 +4,11 @@ from .config import (
     COMFYUI_REFERENCE,
     COMFY_FAST_MODEL,
     COMFY_FAST_MODEL_REVISION,
+    COMFY_FAST8_MODEL,
+    COMFY_FAST8_MODEL_REVISION,
     H3_MODEL_REVISION,
 )
+from .contracts import DEFAULT_BACKENDS, FAST8_MODES
 
 MODEL_FILES = {
     "unet": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
@@ -23,13 +26,18 @@ FAST_CHECKSUMS = {
     "unet": "7221ae65d78780354d51e5048d29728d9f1f8fb9baf50b1dd3df85f5101413d3",
     "video_vae": "9bb2d96f218c76babd85e0611b85ca8fb330a90546c01a0005e8a58a59593410",
 }
+FAST8_MODEL_FILES = {
+    **FAST_MODEL_FILES,
+    "unet": "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors",
+}
+FAST8_SHA256 = "0922785978dc9bfe1adf27d8b291b0ca763f9f165f882e6cb297c72fbb6deda8"
 
 
 def comfy_assets(mode: str) -> list[dict]:
     """Arguments for the existing model saver, shared with reference reporting."""
-    if mode not in ("h3", "fasth3"):
+    if mode not in DEFAULT_BACKENDS:
         raise ValueError("Invalid ComfyUI generation mode")
-    files = MODEL_FILES if mode == "h3" else FAST_MODEL_FILES
+    files = MODEL_FILES if mode == "h3" else FAST8_MODEL_FILES if mode in FAST8_MODES else FAST_MODEL_FILES
     result = []
     for key, subdir in (
         ("unet", "diffusion_models"),
@@ -40,7 +48,7 @@ def comfy_assets(mode: str) -> list[dict]:
     ):
         if key not in files:
             continue
-        fast = mode == "fasth3" and key in FAST_CHECKSUMS
+        fast = mode != "h3" and key in FAST_CHECKSUMS
         asset = {
             "repo_id": COMFY_FAST_MODEL if fast else "Comfy-Org/MiniMax-H3",
             "revision": COMFY_FAST_MODEL_REVISION if fast else H3_MODEL_REVISION,
@@ -49,6 +57,9 @@ def comfy_assets(mode: str) -> list[dict]:
         }
         if fast:
             asset["expected_sha256"] = FAST_CHECKSUMS[key]
+        if mode in FAST8_MODES and key == "unet":
+            asset.update(repo_id=COMFY_FAST8_MODEL, revision=COMFY_FAST8_MODEL_REVISION,
+                         filename=f"{subdir}/{files[key]}", expected_sha256=FAST8_SHA256)
         result.append(asset)
     return result
 
@@ -59,6 +70,8 @@ def references(mode: str, backend: str) -> dict:
         raise ValueError("Unsupported generation backend")
     return {
         "implementation": COMFYUI_REFERENCE,
-        "recipe": "h3-turbo-8step" if mode == "h3" else "fasth3-vsa-4step",
+        "recipe": {"h3": "h3-turbo-8step", "fasth3": "fasth3-vsa-4step",
+                   "fasth3-8step-t2v": "fasth3-v2-8step-vsa-t2v",
+                   "fasth3-8step-i2v": "fasth3-v2-8step-sol-attn-i2v"}[mode],
         "models": comfy_assets(mode),
     }

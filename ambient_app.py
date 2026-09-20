@@ -89,10 +89,9 @@ def generate_comfy(request, image, source, cancelled, progress):
     secrets=[configuration],
 )
 def process_job(job_id: str):
-    run_job(job_id, store(), storage(), {
-        ("h3", "comfyui"): generate_comfy,
-        ("fasth3", "comfyui"): generate_comfy,
-    }, library=library(), tag_dispatch=lambda clip_id, effective, request: tag_clip.spawn(clip_id, effective, request))
+    from ambient.contracts import ROUTES
+    run_job(job_id, store(), storage(), {route: generate_comfy for route in ROUTES},
+            library=library(), tag_dispatch=lambda clip_id, effective, request: tag_clip.spawn(clip_id, effective, request))
 
 
 @app.function(image=cpu_image, timeout=1200, secrets=[configuration])
@@ -105,6 +104,8 @@ def tag_clip(clip_id: str, effective: dict, request: dict):
             request.get("sessionId", clip_id), request.get("workflowRevision", 0)))
     except Exception as error:
         result = {"status": "failed", "error": str(error)[:300]}
+        if getattr(error, "execution_id", None):
+            result["executionId"] = error.execution_id
     try:
         library().tags(clip_id, result)
     except KeyError:

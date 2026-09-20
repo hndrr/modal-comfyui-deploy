@@ -230,7 +230,24 @@ Studioを停止すると、後続の生成投入を止めてローカルの再�
 
 ## CLIでモデルを選ぶ
 
-CLIとバックエンドの変更は、このリポジトリに含まれます。Ambient StudioのUIは変更していません。対応する組み合わせは `h3/comfyui` と `fasth3/comfyui` で、FastH3はテキストからの動画・音声生成だけに対応します。両モードの既定バックエンドはComfyUIです。GPUプロファイルは自動で切り替わりません。
+CLIとバックエンドの変更は、このリポジトリに含まれます。全モードの既定バックエンドはComfyUIです。GPUプロファイルは自動で切り替わりません。
+
+2026-09-20にStudioとAPIへ8-step V2の2モードを追加しました。既存設定のモードは自動変更しません。
+
+| mode | Studioの選択肢 | 入力・Attention |
+| --- | --- | --- |
+| `h3` | H3 Continuity · 8 step Turbo | テキスト／画像、従来のTurbo LoRA |
+| `fasth3` | FastH3 · 4 step VSA | テキスト、従来の4-step VSA |
+| `fasth3-8step-t2v` | FastH3 V2 · 8 step T2V | テキスト、VSA |
+| `fasth3-8step-i2v` | FastH3 V2 · 8 step I2V (experimental) | 開始画像必須、sol-attn |
+
+新モードは `FastVideo/FastVideo-FastH3-Comfy` の `fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors`、`res_multistep` / `simple` / 8 steps、video/audio shift 10/3を使います。Qwen NVFP4、Kijai INT8 Video VAE、FP32 Audio VAEと既存Fast VAE Decodeを再利用します。
+
+[指定記事](https://note.com/kongo_jun/n/n4e6fe1a076ab)の添付グラフに合わせ、T2VはVSA keep 10%、I2Vはsol-attn tau 1.3です。両方ともstart 0.2 / end 1 / min_tokens 12288 / extra_tokens 256 / sink exact_kv_and_rows。I2Vは[元モデルの蒸留対象外](https://huggingface.co/FastVideo/FastVideo-FastH3-8-Step-V2)のため実験扱いです。9月16日のVSAによるI2V実測は、今回のsol-attnレシピの品質・速度検証には流用しません。
+
+I2Vの開始画像はアップロード、カメラ、CodexのGenerate first frame、ComfyUIで固定したreferenceから選べます。同系統の次の動画は最後の成功動画の終端フレームを引き継ぎます。画像がないときは停止して説明し、T2Vへ自動変更しません。ComfyUI側の各グラフも独立したstageとして編集・版管理します。
+
+モデル未配置の場合だけ `scripts/modal.sh run scripts/prepare_ambient_h3.py --mode fasth3-8step-t2v` を実行します（両新モードの資産は共通）。準備確認は各モードで `scripts/modal.sh run ambient_app.py::check_comfy --mode fasth3-8step-t2v` / `--mode fasth3-8step-i2v`。ノード・資産の在庫確認はCPUのみで、GPU検証とは区別します。CLIでは `python -m ambient.cli generate --mode fasth3-8step-i2v --image first-frame.png --prompt ... --sound ...` を使います。
 
 通常のPython依存パッケージをインストールし、`AMBIENT_BACKEND_URL`、`MODAL_PROXY_KEY`、`MODAL_PROXY_SECRET` を環境変数として設定します。URLはAmbient APIを指します。準備状態、既存ジョブ、完了済みクリップの取得では、生成用GPUは起動しません。
 
@@ -298,7 +315,7 @@ python scripts/ambient_smoke.py --mode fasth3 --backend comfyui --clips 1
 
 - `GET /capabilities`：モード、解像度、124フレーム・24fpsに加え、`modes[mode].backends.comfyui` の準備状態・理由・検証情報を返します。モード全体の準備状態は、両モードとも `defaultBackend: comfyui` についての情報です。
 - `POST /images`：マルチパートの `image` フィールドを受け付けます。上限は12 MiB・2400万画素で、`{id}` を返します。
-- `POST /jobs`：本文は `{requestId,mode,backend?,prompt,sound,seed,resolution,imageId?,parentClipId?}` です。JSON解析前のストリーム受信時点で本文全体を128 KiBに制限し、超過時はジョブを投入せず413を返します。UUIDのリクエストIDはアトミックに確保します。同じ内容なら既存ジョブを返し、同じIDで内容が異なれば409を返します。`mode` は `h3` または `fasth3`、解像度は `preview` または `quality` です。FastH3は画像・親クリップの入力をすべて拒否します。音声の指定は必須です。`backend` は `comfyui` だけを受け付け、両モードともこれが既定値です。明示的な `fastvideo` の要求は400を返します。保存済みの古いFastVideoジョブは、バックエンド未記録の旧FastH3ジョブも含め、元のバックエンド情報を維持します。それらのIDをComfyUI用に再利用すると409を返し、新たな生成は行いません。
+- `POST /jobs`：本文は `{requestId,mode,backend?,prompt,sound,seed,resolution,imageId?,parentClipId?}` です。JSON解析前のストリーム受信時点で本文全体を128 KiBに制限し、超過時はジョブを投入せず413を返します。UUIDのリクエストIDはアトミックに確保します。同じ内容なら既存ジョブを返し、同じIDで内容が異なれば409を返します。`mode` は上表の4種類、解像度は `preview` または `quality` です。`fasth3` / `fasth3-8step-t2v` は画像・親クリップを拒否します。`fasth3-8step-i2v` は画像・親クリップ、または版固定したComfyUIワークフローのreferenceを必要とします。音声の指定は必須です。`backend` は `comfyui` だけを受け付けます。明示的な `fastvideo` の要求は400を返します。保存済みの古いFastVideoジョブは、バックエンド未記録の旧FastH3ジョブも含め、元のバックエンド情報を維持します。それらのIDをComfyUI用に再利用すると409を返し、新たな生成は行いません。
 - `GET /jobs/:id`：`queued/running/completed/failed/cancelled` の状態、モード・バックエンド、新規ジョブで想定する参照元、処理段階・エラーを返します。完了時は、実際の寸法・長さ・フレーム数・`hasAudio` を含むクリップのメタデータも返します。
 - `DELETE /jobs/:id`：キュー内または実行中のジョブについて、キャンセルを最終結果として確定しようとします。完了または失敗が先に確定していれば、その結果を返します。`cancelled` の応答は確定済みであり、後からワーカーが書き込んでも完了や失敗には変わりません。完了・失敗・キャンセル済みのジョブは、現在の状態をそのまま返します。完了したクリップは引き続きダウンロードでき、親クリップにも使えます。H3アダプターは自分のsplitappジョブだけをキャンセルし、全体を対象とする `/interrupt` は送りません。
 - `GET /clips/:id`：永続保存されたH.264/AACのMP4を返し、バイト範囲の指定に対応します。CPU側のVolume SDKでファイルを取得するため、GPUは起動しません。

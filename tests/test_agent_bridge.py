@@ -149,6 +149,47 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(retry["prompt_id"], job["id"])
         self.assertEqual(len(self.controller.journal.data["jobs"]), 1)
 
+    async def test_idle_disconnect_requires_auth_and_preserves_accepted_bridge_work(self):
+        path = PREFIX + "/idle"
+        headers = {"Authorization": "Bearer shared-test-token"}
+        self.assertEqual((await self.client.post(path)).status, 401)
+        await self.connect_mac()
+        identity = self.controller.bridge.identity()
+        body = {"prompt": {"1": {"class_type": "AgentRuntimeBridgeText"}}}
+        accepted = await (await self.client.post("/prompt", json=body)).json()
+        record = self.controller.journal.data["jobs"][accepted["prompt_id"]]
+        for status in ("queued", "dispatching", "running", "unknown"):
+            record["status"] = status
+            response = await self.client.post(path, headers=headers)
+            self.assertEqual(await response.json(), {"idle": False})
+            self.assertEqual(self.controller.bridge.identity(), identity)
+        record["status"] = "completed"
+        # Also retain a result that the native Bridge has not delivered yet.
+        self.controller.bridge.jobs.add("undelivered-result")
+        self.assertEqual(await (await self.client.post(path, headers=headers)).json(), {"idle": False})
+        self.controller.bridge.jobs.clear()
+        # Consume the close frame so the server can finish its close handshake.
+        receive = asyncio.create_task(self.mac.receive(timeout=2))
+        self.assertEqual(await (await self.client.post(path, headers=headers)).json(), {"idle": True})
+        await receive
+        with self.assertRaises(ValueError):
+            self.controller.bridge.identity()
+        # The retired connection cannot accept another graph during shutdown.
+        self.assertEqual((await self.client.post("/prompt", json=body)).status, 409)
+        self.assertEqual(len(self.controller.journal.data["jobs"]), 1)
+        self.controller.worker.spawn.aio.assert_not_awaited()
+
+    async def test_idle_does_not_cancel_unrelated_video_generation(self):
+        await self.connect_mac()
+        record = self.controller.journal.enqueue({"prompt": {"1": {"class_type": "HunyuanVideo"}}})
+        record["status"] = "running"
+        receive = asyncio.create_task(self.mac.receive(timeout=2))
+        response = await self.client.post(PREFIX + "/idle", headers={"Authorization": "Bearer shared-test-token"})
+        self.assertEqual(await response.json(), {"idle": True})
+        await receive
+        self.assertEqual(record["status"], "running")
+        self.assertTrue(self.controller.background_work())
+
     async def test_files_large_results_events_catalogs_and_cleanup(self):
         await self.connect_mac()
         record = await self.attach_gpu()

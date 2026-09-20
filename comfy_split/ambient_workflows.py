@@ -1,4 +1,5 @@
 """Versioned workflow registry owned by the single-writer CPU gateway."""
+from ambient.contracts import DEFAULT_BACKENDS, IMAGE_MODES, MUSIC_DIRECTION
 from copy import deepcopy
 import hashlib
 import json
@@ -6,7 +7,7 @@ import math
 from pathlib import Path, PurePosixPath
 import tempfile
 
-STAGES = {"h3", "fasth3", "jev", "media", "text", "imagegen"}
+STAGES = {*DEFAULT_BACKENDS, "jev", "media", "text", "imagegen"}
 PROTECTED = {"cwd", "extra_args_json", "sandbox_mode", "ephemeral", "skip_git_repo_check",
              "output_schema_json", "cli_skill", "concurrency_count", "auto_save_to_output"}
 
@@ -20,7 +21,9 @@ def field_value(graph, binding):
             raise ValueError("Keep the H3 prompt's integrated_multimodal_description / overall_soundscape sections")
         prompt, sound = value.split("\n\noverall_soundscape: ", 1)
         return (prompt.removeprefix("integrated_multimodal_description: [Shot 1] ")
-                if binding["part"] == "prompt" else sound.split("\n\nnon_diegetic_music:", 1)[0])
+                if binding["part"] == "prompt" else sound.split("\n\nnon_diegetic_music:", 1)[0] + (
+                    "\nMusic: " + sound.split("\n\nnon_diegetic_music:", 1)[1].strip()
+                    if "\n\nnon_diegetic_music:" in sound and sound.split("\n\nnon_diegetic_music:", 1)[1].strip() not in {"N/A", MUSIC_DIRECTION, ""} else ""))
     return deepcopy(value)
 
 
@@ -28,10 +31,16 @@ def set_field(graph, binding, value):
     inputs = graph[binding["node"]]["inputs"]
     if binding.get("part"):
         other = {**binding, "part": "sound" if binding["part"] == "prompt" else "prompt"}
+        raw = inputs[binding["input"]]
         previous = field_value(graph, other)
+        if other["part"] == "sound":
+            previous = raw.split("\n\noverall_soundscape: ", 1)[1].split("\n\nnon_diegetic_music:", 1)[0]
+        music = raw.split("\n\nnon_diegetic_music:", 1)[1].strip() if "\n\nnon_diegetic_music:" in raw else MUSIC_DIRECTION
+        if music == "N/A" and binding["part"] == "sound":
+            music = MUSIC_DIRECTION
         prompt, sound = (value, previous) if binding["part"] == "prompt" else (previous, value)
         value = (f"integrated_multimodal_description: [Shot 1] {prompt}\n\n"
-                 f"overall_soundscape: {sound}\n\nnon_diegetic_music: N/A")
+                 f"overall_soundscape: {sound}\n\nnon_diegetic_music: {music}")
     inputs[binding["input"]] = deepcopy(value)
 
 
@@ -51,6 +60,8 @@ def validate_template(template, baseline, objects):
     for name, binding in template["bindings"].items():
         if not isinstance(binding, dict) or not isinstance(binding.get("node"), str) or not isinstance(binding.get("input"), str):
             raise ValueError(f"Invalid binding: {name}")
+        if name in required_bindings and binding.get("optional"):
+            raise ValueError(f"Keep required Ambient input: {name}")
         if binding.get("part") not in (None, "prompt", "sound"):
             raise ValueError(f"Invalid prompt section: {name}")
         try:
@@ -223,7 +234,9 @@ class WorkflowRegistry:
             raise ValueError("Invalid Ambient stage")
         baseline = {"graph": body["prompt"], "bindings": meta["bindings"], "outputs": meta["outputs"],
                     "workflow": body.get("extra_data", {}).get("extra_pnginfo", {}).get("workflow")}
-        self.state["defaults"].setdefault(stage, deepcopy(baseline))
+        # Refresh display templates with shipped schemas. Applied snapshots and
+        # accepted execution graphs remain unchanged and keep their own version.
+        self.state["defaults"][stage] = deepcopy(baseline)
         saved = self.snapshot(meta["revision"])["stages"].get(stage)
         if saved:
             graph = deepcopy(saved["graph"])
@@ -248,7 +261,7 @@ class WorkflowRegistry:
                 if binding.get("source", "ambient") == "ambient":
                     source = baseline["bindings"].get(name)
                     value = field_value(baseline["graph"], source) if source else None
-                    if name == "reference" and stage == "h3":
+                    if name == "reference" and stage in IMAGE_MODES:
                         if value is None:
                             graph.get(bindings["prompt"]["node"], {}).get("inputs", {}).pop("first_frame", None)
                             graph.pop(binding["node"], None)
@@ -280,7 +293,9 @@ class WorkflowRegistry:
             body["extra_data"].pop("extra_pnginfo", None)
             meta["layout"] = saved.get("workflow")
         meta["effective"] = {name: field_value(body["prompt"], binding) for name, binding in meta["bindings"].items()}
-        if stage in {"h3", "fasth3"}:
+        if stage == "fasth3-8step-i2v" and not meta["effective"].get("reference"):
+            raise ValueError("FastH3 8-step I2V requires a first-frame image. Add an image in Ambient or fix the reference in its ComfyUI workflow.")
+        if stage in DEFAULT_BACKENDS:
             meta["effective"]["settings"] = {
                 node_id: {"class_type": node["class_type"], "inputs": deepcopy(node["inputs"])}
                 for node_id, node in body["prompt"].items()
@@ -294,7 +309,7 @@ def h3_metadata(request, graph):
                 "sound": binding("6", "prompt", part="sound"),
                 "seed": binding("8", "noise_seed"), "width": binding("6", "width"),
                 "height": binding("6", "height")}
-    if request["mode"] == "h3":
-        bindings["reference"] = binding("16", "image", optional=True)
+    if request["mode"] in IMAGE_MODES:
+        bindings["reference"] = binding("16", "image", optional=request["mode"] == "h3")
     return {"sessionId": request["sessionId"], "stage": request["mode"],
             "revision": request["workflowRevision"], "bindings": bindings, "outputs": {"video": "15"}}

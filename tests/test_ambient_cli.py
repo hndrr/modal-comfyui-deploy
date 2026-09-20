@@ -65,6 +65,7 @@ class CliTest(unittest.TestCase):
                 },
             },
         }
+        self.modes.update({mode: {"ready": True, "backends": {backend: {"ready": True}}} for mode, backend in ROUTES})
 
         def generate(req, image, source, cancelled, progress):
             self.invocations.append((req["mode"], req["backend"]))
@@ -123,9 +124,11 @@ class CliTest(unittest.TestCase):
     def test_comfyui_routes_generate_save_retrieve_and_report_references(self):
         self.assertEqual(self.invoke("capabilities")[0], 0)
         self.assertEqual(self.invocations, [])
+        image = self.root / "first-frame.png"
+        Image.new("RGB", (64, 64)).save(image)
         for mode, backend in ROUTES:
             with self.subTest(mode=mode, backend=backend):
-                code, out, err = self.generate(mode, backend)
+                code, out, err = self.generate(mode, backend, *(["--image", str(image)] if mode == "fasth3-8step-i2v" else []))
                 self.assertEqual(code, 0, err)
                 result = json.loads(out)
                 job = result["job"]

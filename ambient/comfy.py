@@ -60,16 +60,29 @@ async def generate(
         async with session.ws_connect(
             base.rstrip("/") + "/ws?clientId=" + client_id, compress=0, heartbeat=15
         ) as socket:
+            prompt_id = None
+            sampling = False
+            last_progress = 0.0
 
             async def drain():
+                nonlocal sampling, last_progress
                 async for message in socket:
                     if message.type == aiohttp.WSMsgType.TEXT:
                         event = json.loads(message.data)
+                        data = event.get("data", {})
+                        if data.get("prompt_id") != prompt_id or prompt_id is None:
+                            continue
                         if event.get("type") == "progress":
-                            progress("Sampling")
+                            value, maximum = data.get("value"), data.get("max")
+                            if not (isinstance(value, (int, float)) and isinstance(maximum, (int, float))
+                                    and maximum > 0 and 0 <= value <= maximum):
+                                continue
+                            now = time.monotonic()
+                            if not sampling or now - last_progress >= 1 or value == maximum:
+                                progress("Sampling", {"value": value, "max": maximum})
+                                sampling, last_progress = True, now
 
             drain_task = asyncio.create_task(drain())
-            prompt_id = None
             try:
                 objects = await call("GET", "/object_info")
                 # Resolve contracts before uploading or submitting any generation.
@@ -118,6 +131,8 @@ async def generate(
                     history = (await call("GET", f"/history/{prompt_id}")).get(prompt_id)
                     if not history:
                         queue = await call("GET", "/queue")
+                        if not sampling and any(row[1] == prompt_id for row in queue.get("queue_running", [])):
+                            progress("Starting GPU and loading models")
                         if not any(
                             row[1] == prompt_id
                             for name in ("queue_pending", "queue_running")

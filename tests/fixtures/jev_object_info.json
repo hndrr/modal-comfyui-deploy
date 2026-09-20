@@ -1,0 +1,208 @@
+{
+  "PrimitiveStringMultiline": {
+    "input": {
+      "required": {
+        "value": [
+          "STRING",
+          {
+            "multiline": true
+          }
+        ]
+      }
+    },
+    "output": [
+      "STRING"
+    ]
+  },
+  "PreviewAny": {
+    "input": {
+      "required": {
+        "source": [
+          "*",
+          {}
+        ]
+      }
+    },
+    "output": [
+      "STRING"
+    ]
+  },
+  "JevInterpret": {
+    "input": {
+      "required": {
+        "state": [
+          "STRING",
+          {
+            "default": "I want a sense of luxury that feels warm and approachable.",
+            "multiline": true
+          }
+        ],
+        "instructions": [
+          "STRING",
+          {
+            "default": "Choose the candidate that best meets the creative intent.",
+            "multiline": true
+          }
+        ],
+        "task": [
+          "COMBO",
+          {
+            "default": "choice",
+            "multiselect": false,
+            "options": [
+              "choice",
+              "multi_choice",
+              "boolean",
+              "score",
+              "extract",
+              "suggest"
+            ]
+          }
+        ],
+        "candidates": [
+          "COMFY_AUTOGROW_V3",
+          {
+            "template": {
+              "input": {
+                "required": {
+                  "candidate": [
+                    "STRING",
+                    {
+                      "forceInput": true,
+                      "multiline": false
+                    }
+                  ]
+                }
+              },
+              "prefix": "candidate",
+              "min": 0,
+              "max": 100
+            }
+          }
+        ],
+        "model": [
+          "COMFY_DYNAMICCOMBO_V3",
+          {
+            "options": [
+              {
+                "key": "jev-latest",
+                "inputs": {
+                  "required": {}
+                }
+              },
+              {
+                "key": "jev-preview",
+                "inputs": {
+                  "required": {}
+                }
+              },
+              {
+                "key": "jev-1.13.0",
+                "inputs": {
+                  "required": {}
+                }
+              },
+              {
+                "key": "custom",
+                "inputs": {
+                  "required": {
+                    "model_id": [
+                      "STRING",
+                      {
+                        "default": "jev-1.13.0",
+                        "multiline": false
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "provider": [
+          "COMBO",
+          {
+            "default": "typesafe",
+            "multiselect": false,
+            "options": [
+              "typesafe",
+              "openrouter"
+            ]
+          }
+        ],
+        "api_key": [
+          "STRING",
+          {
+            "tooltip": "Empty uses the provider's environment variable. Entered keys are saved in workflows; remove before sharing.",
+            "default": "",
+            "multiline": false
+          }
+        ],
+        "refresh": [
+          "INT",
+          {
+            "tooltip": "Keep fixed to reuse results. Change to request a new judgment.",
+            "default": 0,
+            "min": 0,
+            "control_after_generate": "fixed"
+          }
+        ]
+      },
+      "optional": {
+        "candidates_json": [
+          "STRING",
+          {
+            "tooltip": "Connect OpenRouter Text in candidates mode, or supply a JSON array of text strings or description/content/value records.",
+            "forceInput": true,
+            "multiline": false
+          }
+        ],
+        "threshold": [
+          "FLOAT",
+          {
+            "tooltip": "Minimum yes probability for boolean/multi_choice or candidate fit in suggest mode.",
+            "advanced": true,
+            "default": 0.5,
+            "min": 0,
+            "max": 1,
+            "step": 0.01
+          }
+        ],
+        "shortlist_size": [
+          "INT",
+          {
+            "tooltip": "Suggest mode: how many candidates receive full-content verification.",
+            "advanced": true,
+            "default": 3,
+            "min": 1
+          }
+        ],
+        "max_selections": [
+          "INT",
+          {
+            "tooltip": "Suggest mode: maximum accepted candidates. May return none.",
+            "advanced": true,
+            "default": 1,
+            "min": 1
+          }
+        ],
+        "gate_threshold": [
+          "FLOAT",
+          {
+            "tooltip": "Suggest mode: minimum need for specialized guidance before full-content verification.",
+            "advanced": true,
+            "default": 0.3,
+            "min": 0,
+            "max": 1,
+            "step": 0.01
+          }
+        ]
+      }
+    },
+    "output": [
+      "STRING",
+      "DICT",
+      "STRING"
+    ]
+  }
+}

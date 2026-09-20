@@ -8,7 +8,7 @@ import sys
 from uuid import uuid4
 
 from .client import Client, save_request
-from .contracts import DEFAULT_BACKENDS, RESOLUTIONS, identifier, validate_request
+from .contracts import ASPECT_RATIOS, DEFAULT_BACKENDS, IMAGE_MODES, RESOLUTIONS, identifier, validate_request
 
 
 def positive(value):
@@ -38,6 +38,7 @@ def parser():
     generate.add_argument("--sound", required=True)
     generate.add_argument("--seed", type=int, default=42)
     generate.add_argument("--resolution", choices=list(RESOLUTIONS), default="preview")
+    generate.add_argument("--aspect-ratio", choices=list(ASPECT_RATIOS), default="9:16")
     generate.add_argument("--request-id", type=identifier)
     anchor = generate.add_mutually_exclusive_group()
     anchor.add_argument("--image", type=Path)
@@ -71,12 +72,15 @@ def main(argv=None, *, client=None):
                 "sound": args.sound,
                 "seed": args.seed,
                 "resolution": args.resolution,
+                "aspectRatio": args.aspect_ratio,
             }
             if args.parent_clip_id:
                 request["parentClipId"] = args.parent_clip_id
-            request = validate_request(request)
-            if args.image and args.mode != "h3":
+            if args.image and args.mode not in IMAGE_MODES:
                 raise ValueError("FastH3 Preview supports text-to-video-and-audio only")
+            # Reserve a syntactically valid ID for local validation; replace it
+            # with the upload result before saving or submitting the request.
+            request = validate_request({**request, **({"imageId": request["requestId"]} if args.image else {})})
         elif args.command == "submit":
             request = validate_request(json.loads(args.request_file.read_text()))
         client = client or Client.from_env()
