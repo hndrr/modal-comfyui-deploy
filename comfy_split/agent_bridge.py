@@ -20,6 +20,7 @@ from aiohttp import ClientError, WSMsgType, web
 
 from comfy_split.proxy import proxy
 from comfy_split.bridge_transport import HttpChannel, HttpSocket, TRANSPORT
+from comfy_split.state import ACTIVE
 
 PREFIX = "/agent_runtime/bridge"
 TOKEN_ENV = "AGENT_RUNTIME_BRIDGE_TOKEN"
@@ -96,6 +97,8 @@ class AgentBridge:
             return await proxy(request, self.controller.client, self.controller.cpu.url,
                                path=normalized_path(request))
         authorize(request, os.environ.get(TOKEN_ENV, ""))
+        if path == PREFIX + "/idle" and request.method == "POST":
+            return await self.idle()
         if path == PREFIX + "/messages" or path.startswith(PREFIX + "/messages/"):
             if self.channel is None:
                 raise web.HTTPConflict(text="Connect Bridge first")
@@ -107,6 +110,22 @@ class AgentBridge:
             raise web.HTTPNotFound(text="Bridge job is no longer active.")
         return await proxy(request, self.controller.client, self.url, self.token,
                            path=normalized_path(request))
+
+    async def idle(self):
+        # Share the submission lock: a graph either acquires this connection
+        # before it retires, or is rejected before acceptance. A separate queue
+        # read followed by disconnect can race a newly accepted Bridge graph.
+        async with self.controller.lock:
+            connection_id = self.connection_id
+            if self.jobs or (connection_id and any(
+                    record.get("agent_bridge") == connection_id and record["status"] in ACTIVE
+                    for record in self.controller.journal.data["jobs"].values())):
+                return web.json_response({"idle": False})
+            self.connection_id = None
+            socket = self.socket
+        if socket is not None:
+            await socket.close(code=1000, message=b"Bridge idle")
+        return web.json_response({"idle": True})
 
     async def websocket(self, request):
         if self.socket is not None:

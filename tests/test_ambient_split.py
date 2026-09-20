@@ -59,6 +59,8 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.upload = None
         self.tasks = []
         self.queued = asyncio.Event()
+        self.sampled = asyncio.Event()
+        self.progress_events = []
         self.req = request()
         self.generation_timeout = 5
 
@@ -118,7 +120,10 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         await self.control.client.close()
         await self.cpu_server.close()
 
-    def progress(self, stage):
+    def progress(self, stage, values=None):
+        self.progress_events.append((stage, values))
+        if stage == "Sampling":
+            self.sampled.set()
         if stage == "ComfyUI queued":
             self.queued.set()
 
@@ -153,6 +158,19 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.worker.spawn.aio.assert_not_awaited()
             self.assertFalse(socket.closed)
 
+    async def test_sampling_progress_is_scoped_to_the_accepted_prompt(self):
+        task, job = await self.start_generation()
+        client_id = job["body"]["client_id"]
+        for prompt_id, value in [("another-session", 1), (job["id"], -1), (job["id"], 4)]:
+            await self.control.broadcast({"type": "progress", "data": {
+                "prompt_id": prompt_id, "value": value, "max": 8}}, client_id)
+        await asyncio.wait_for(self.sampled.wait(), 2)
+        self.assertEqual([data for stage, data in self.progress_events if stage == "Sampling"],
+                         [{"value": 4, "max": 8}])
+        self.cancelled = True
+        await asyncio.wait_for(task, 3)
+        self.worker.spawn.aio.assert_not_awaited()
+
     async def test_workflow_bootstrap_apply_conflict_and_pinned_execution_without_gpu(self):
         from copy import deepcopy
         from ambient.h3 import workflow
@@ -164,6 +182,8 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         catalog = await response.json()
         self.assertEqual(catalog["revision"], 0)
         self.assertIn("h3", catalog["stages"])
+        self.assertIn("fasth3-8step-t2v", catalog["stages"])
+        self.assertIn("fasth3-8step-i2v", catalog["stages"])
         template = deepcopy(catalog["stages"]["h3"])
         template["bindings"]["seed"]["source"] = "workflow"
         template["graph"]["8"]["inputs"]["noise_seed"] = 123
@@ -204,6 +224,7 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.worker.spawn.aio.assert_not_awaited()
 
     async def test_bridge_templates_are_available_before_any_execution(self):
+        self.control.ambient_workflows.state["defaults"]["text"] = {"graph": {"old": "shipped template"}}
         objects = {**object_info(), **{kind: {} for kind in (
             "AgentRuntimeBridgeText", "AgentRuntimeBridgeMedia", "AgentRuntimeBridgeImageGen", "PreviewAny", "PreviewImage")}}
         with patch.object(self.control, "objects", AsyncMock(return_value=web.json_response(objects))):
@@ -238,6 +259,24 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(dispatcher, return_exceptions=True)
         self.assertEqual(self.destination.read_bytes(), b"generated video")
         self.worker.spawn.aio.assert_awaited_once()
+
+    async def test_eight_step_i2v_upload_dispatch_and_download(self):
+        self.req = request(mode="fasth3-8step-i2v", backend="comfyui")
+        record = await check_comfyui(self.base, {}, self.req["mode"])
+        self.assertFalse(record["gpuValidated"])
+        self.worker.spawn.aio.assert_not_awaited()
+        await self.test_anchor_generation_dispatches_once_and_downloads_while_ui_stays_open()
+        graph = next(iter(self.control.journal.data["jobs"].values()))["body"]["prompt"]
+        self.assertEqual(graph["2"]["inputs"]["selection"], "sol-attn")
+        self.assertEqual(graph["10"]["inputs"]["steps"], 8)
+
+    async def test_eight_step_i2v_without_image_rejects_before_queueing(self):
+        from uuid import uuid4
+        self.req = request(mode="fasth3-8step-i2v", sessionId=str(uuid4()), workflowRevision=0)
+        with self.assertRaisesRegex(RuntimeError, "requires a first-frame"):
+            await self.generate()
+        self.assertEqual(self.control.journal.data["jobs"], {})
+        self.worker.spawn.aio.assert_not_awaited()
 
     async def test_fast_comfy_dependency_failure_never_submits_a_gpu_job(self):
         self.req = request(mode="fasth3", backend="comfyui")

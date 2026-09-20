@@ -4,7 +4,7 @@ import io
 from pathlib import Path
 from uuid import uuid4
 
-from .contracts import RESOLUTIONS, identifier
+from .contracts import generation_size, identifier
 from .media import finalize
 
 
@@ -60,7 +60,7 @@ class AmbientStorage:
         # H3 stretches its first-frame input; crop to the output aspect before upload.
         fitted = directory / "fitted.png"
         with Image.open(anchor) as incoming:
-            ImageOps.fit(incoming.convert("RGB"), RESOLUTIONS[request["resolution"]]).save(fitted)
+            ImageOps.fit(incoming.convert("RGB"), generation_size(request)).save(fitted)
         return fitted
 
     def publish_clip(self, source: Path, job_id: str) -> dict:

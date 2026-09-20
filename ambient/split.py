@@ -1,10 +1,11 @@
 """Require the CPU gateway before using ComfyUI's native APIs."""
+from .contracts import FAST8_MODES
 
 SPLIT_HEADERS = {"X-Modal-Execution-Mode": "split"}
 
 
 def check_dependencies(state: dict, mode: str) -> None:
-    if mode != "fasth3":
+    if mode not in {"fasth3", *FAST8_MODES}:
         return
     kitchen = state.get("dependencies", {}).get("comfy-kitchen", {})
     if (not kitchen.get("version") or kitchen.get("version") != kitchen.get("expected")

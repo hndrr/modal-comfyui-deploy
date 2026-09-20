@@ -58,10 +58,12 @@ class Controller:
         self.bridge = AgentBridge(self)
         self.ambient_workflows = WorkflowRegistry(self.journal.data)
         self.ambient_templates_loaded = False
+        self.starting = False
+        self.startup_phase = "initializing"
 
     async def cleanup_storage(self):
         """Caller holds the controller lock; metadata reads never start a GPU."""
-        if self.background_work() or self.journal.data["mode"] != "split":
+        if self.starting or self.background_work() or self.journal.data["mode"] != "split":
             return
         if time.monotonic() < self.cleanup_due:
             return
@@ -126,6 +128,7 @@ class Controller:
         if self.ui_function is None:
             return
         async with self.cpu_scaling_lock:
+            needed = needed or self.starting
             if self.cpu_pinned == needed:
                 return
             await self.ui_function.update_autoscaler.aio(min_containers=int(needed))
@@ -200,14 +203,14 @@ class Controller:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
+        self.startup_phase = "updating_nodes"
         await self.refresh_ambient_nodes()
-        try:
-            async with self.lock:
-                await self.cleanup_storage()
-        except Exception:
-            log.exception("Storage cleanup deferred; preserving files")
+        self.startup_phase = "starting_comfy"
         if self.journal.data["mode"] == "split":
             await self.cpu.start(self.journal.data["environment"], cpu=True)
+        # Retention can remove large old environments. Let the UI and first
+        # requests finish before the dispatcher performs normal idle cleanup.
+        self.cleanup_due = time.monotonic() + 300
         self.task = asyncio.create_task(self.dispatch())
         if candidate and candidate["status"] == "validating" and session:
             self.apply_task = asyncio.create_task(self.apply_environment(resume=True))
@@ -227,6 +230,7 @@ class Controller:
                 if version is None:
                     return
                 # Validate imports without starting a GPU or running any node/API task.
+                self.startup_phase = "validating_nodes"
                 await self.candidate.start(version, cpu=True)
                 ambient_nodes.check_catalog(await self.candidate.catalog(self.client))
             except Exception:
@@ -806,6 +810,7 @@ class Controller:
                 if path == "/ambient/workflows" and request.method == "GET":
                     if not self.ambient_templates_loaded:
                         from ambient.h3 import workflow
+                        from ambient.contracts import DEFAULT_BACKENDS
                         from ambient.tagging import recipe
                         from comfy_split.ambient_workflows import h3_metadata
                         response = await self.objects("/object_info")
@@ -815,7 +820,7 @@ class Controller:
                                    "sessionId": "00000000-0000-4000-8000-000000000000",
                                    "workflowRevision": 0, "prompt": "A quiet natural scene",
                                    "sound": "Soft ambient sounds", "seed": 42, "resolution": "preview"}
-                            for mode in ("h3", "fasth3"):
+                            for mode in DEFAULT_BACKENDS:
                                 try:
                                     graph = workflow({**req, "mode": mode}, object_info=objects)
                                     self.ambient_workflows.prepare({"prompt": graph, "extra_data": {
@@ -827,7 +832,7 @@ class Controller:
                             templates = json.loads((Path(__file__).parent.parent / "ambient" / "bridge_templates.json").read_text())
                             for stage, template in templates.items():
                                 if all(node["class_type"] in objects for node in template["graph"].values()):
-                                    self.ambient_workflows.state["defaults"].setdefault(stage, template)
+                                    self.ambient_workflows.state["defaults"][stage] = template
                             await self.persist()
                             self.ambient_templates_loaded = True
                     return web.json_response(self.ambient_workflows.describe())
@@ -994,10 +999,13 @@ class Controller:
 
 
 def application(controller):
+    from comfy_split.startup import StartupGate
+
+    startup = StartupGate(controller)
     app = web.Application(client_max_size=1024 ** 3)
-    app.router.add_route("*", "/{path:.*}", controller.handle)
-    app.on_startup.append(controller.start)
-    app.on_cleanup.append(controller.close)
+    app.router.add_route("*", "/{path:.*}", startup.handle)
+    app.on_startup.append(startup.start)
+    app.on_cleanup.append(startup.close)
     return app
 
 

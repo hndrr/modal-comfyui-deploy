@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -189,24 +190,22 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(actual["prompt"]["10"]["inputs"]["cwd"], "current-job")
         self.assertEqual(actual["prompt"]["10"]["inputs"]["sandbox_mode"], "read-only")
 
-    def test_jev_schema_without_autogrow_connections_can_be_edited(self):
+    def test_current_jev_without_autogrow_connections_can_be_edited(self):
         body = recipe({"prompt": "Rainy forest"}, str(uuid4()), 0)
         self.registry.prepare(body)
         template = self.registry.describe()["stages"]["jev"]
-        objects = {
-            "JevInterpret": {"input": {"required": {
-                "state": ["STRING"], "state_format": [["text", "json"]], "schema_json": ["STRING"],
-                "refresh": ["INT"], "provider": [["typesafe", "openrouter"]], "api_key": ["STRING"],
-                "model": [["jev-latest"]], "schemas": ["COMFY_AUTOGROW_V3", {"template": {
-                    "prefix": "schema", "min": 0, "max": 100, "input": {"required": {"schema": ["JEV_SCHEMA"]}}}}]}}, "output": ["JEV_JUDGMENTS", "STRING"]},
-            "JevResolve": {"input": {"required": {"judgments": ["JEV_JUDGMENTS"], "bindings_json": ["STRING"]}}, "output": ["JEV_RESULT", "DICT", "STRING"]},
-            "PreviewAny": {"input": {"required": {"source": ["*"]}}, "output": []},
-        }
-        template["graph"]["1"]["inputs"]["provider"] = "openrouter"
+        objects = json.loads((Path(__file__).parent / "fixtures/jev_object_info.json").read_text())
+        for node in template["graph"].values():
+            if node["class_type"] == "JevInterpret":
+                node["inputs"]["provider"] = "openrouter"
         self.registry.apply("jev", template, 0, objects)
         actual = self.registry.prepare(recipe({"prompt": "New request"}, str(uuid4()), 1))
-        self.assertEqual(actual["prompt"]["1"]["inputs"]["provider"], "openrouter")
-        self.assertIn("New request", actual["prompt"]["1"]["inputs"]["state"])
+        for node in actual["prompt"].values():
+            if node["class_type"] == "JevInterpret":
+                self.assertEqual(node["inputs"]["provider"], "openrouter")
+                state_node = actual["prompt"][node["inputs"]["state"][0]]
+                self.assertIn("New request", state_node["inputs"]["value"])
+
 
 
 if __name__ == "__main__":

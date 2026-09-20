@@ -24,7 +24,8 @@ class BackendContractTest(unittest.TestCase):
     def test_supported_matrix_and_comfyui_defaults(self):
         for mode, backend in ROUTES:
             self.assertEqual(
-                validate_request(request(mode=mode, backend=backend))["backend"],
+                validate_request(request(mode=mode, backend=backend,
+                                         **({"imageId": request()["requestId"]} if mode == "fasth3-8step-i2v" else {})))["backend"],
                 backend,
             )
             if mode == "fasth3":

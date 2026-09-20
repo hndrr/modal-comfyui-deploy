@@ -7,8 +7,8 @@ validation and execution; no ComfyUI source or runtime method is patched here.
 from copy import deepcopy
 from dataclasses import dataclass
 
-from .contracts import FPS, FRAMES, RESOLUTIONS, prompt_text
-from .models import FAST_MODEL_FILES, MODEL_FILES
+from .contracts import DEFAULT_BACKENDS, FAST8_MODES, IMAGE_MODES, FPS, FRAMES, generation_size, prompt_text
+from .models import FAST8_MODEL_FILES, FAST_MODEL_FILES, MODEL_FILES
 
 FAST_SIGMAS = (1.0, 36 / 37, 12 / 13, 4 / 5, 0.0)
 
@@ -111,37 +111,43 @@ def workflow(
 ) -> dict:
     """Keep Ambient's creative settings while inheriting the server's node contracts."""
     mode = request.get("mode", "h3")
-    if mode not in ("h3", "fasth3"):
+    if mode not in DEFAULT_BACKENDS:
         raise ValueError("Unsupported ComfyUI generation mode")
     fast = mode == "fasth3"
-    if fast and (image_name or request.get("imageId") or request.get("parentClipId")):
+    fast8 = mode in FAST8_MODES
+    i2v = mode == "fasth3-8step-i2v"
+    if mode not in IMAGE_MODES and (image_name or request.get("imageId") or request.get("parentClipId")):
         raise ValueError("FastH3 Preview supports text-to-video-and-audio only")
-    files = FAST_MODEL_FILES if fast else MODEL_FILES
-    width, height = RESOLUTIONS[request["resolution"]]
+    if i2v and not image_name and not request.get("sessionId"):
+        raise ValueError("FastH3 8-step I2V requires a first-frame image")
+    files = FAST8_MODEL_FILES if fast8 else FAST_MODEL_FILES if fast else MODEL_FILES
+    width, height = generation_size(request)
     builder = Workflow(object_info)
     add = builder.add
     add("1", "UNETLoader", unet_name=files["unet"], weight_dtype="default")
-    if fast:
+    if fast or fast8:
         add(
             "17",
             "MiniMaxH3SigmaShift",
             model=Link("1"),
-            shift_video=12.0,
+            shift_video=10.0 if fast8 else 12.0,
             shift_audio=3.0,
         )
+        if fast8:
+            add("18", "ModelAttentionBackend", model=Link("17"), attention="comfy kitchen attention")
         add(
             "2",
             "BlockSparseAttention",
-            model=Link("17"),
-            selection="vsa",
-            **{"selection.keep_percent": 10.0},
-            start_percent=0.0,
+            model=Link("18" if fast8 else "17"),
+            selection="sol-attn" if i2v else "vsa",
+            **({"selection.tau": 1.3} if i2v else {"selection.keep_percent": 10.0}),
+            start_percent=0.2 if fast8 else 0.0,
             end_percent=1.0,
             dense_blocks="",
-            min_tokens=0,
-            extra_tokens=0,
+            min_tokens=12288 if fast8 else 0,
+            extra_tokens=256 if fast8 else 0,
             sink_conditioning="exact_kv_and_rows",
-            verbose=True,
+            verbose=not fast8,
         )
     else:
         add(
@@ -155,8 +161,10 @@ def workflow(
     add("4", "VAELoader", vae_name=files["video_vae"])
     add("5", "VAELoader", vae_name=files["audio_vae"])
     anchor = {}
-    if image_name:
-        add("16", "LoadImage", image=image_name)
+    if image_name or i2v:
+        # Empty only in an unapplied I2V template: the gateway must resolve a
+        # workflow-owned image before accepting it. Never fall back to T2V.
+        add("16", "LoadImage", image=image_name or "")
         anchor["first_frame"] = Link("16")
     add(
         "6",

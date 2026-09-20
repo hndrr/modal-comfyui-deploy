@@ -105,7 +105,8 @@ class RuntimeTest(unittest.TestCase):
                 self.subTest(mode=mode),
                 patch("ambient.storage.finalize", side_effect=self.encode),
             ):
-                job_id = self.submit(mode=mode, backend=backend)
+                job_id = self.submit(mode=mode, backend=backend,
+                                     **({"sessionId": request()["requestId"], "workflowRevision": 0} if mode == "fasth3-8step-i2v" else {}))
                 selected = Mock(side_effect=self.generate)
                 unused = Mock(side_effect=AssertionError("Wrong generation backend"))
                 generators = {**{route: unused for route in ROUTES}, (mode, backend): selected}
@@ -327,12 +328,14 @@ class ReadinessTest(unittest.TestCase):
                 "references": references("fasth3", "comfyui"), "gpuValidated": False},
         }
         modes = describe_modes(jobs, url)
-        for mode in modes.values():
+        for mode in (modes["h3"], modes["fasth3"]):
             self.assertTrue(mode["ready"])
             self.assertIsNone(mode["reason"])
             self.assertFalse(mode["validation"]["gpuValidated"])
         self.assertTrue(modes["h3"]["continuity"])
         self.assertFalse(modes["fasth3"]["imageInput"])
+        self.assertFalse(modes["fasth3-8step-t2v"]["ready"])
+        self.assertFalse(modes["fasth3-8step-i2v"]["ready"])
         for setting in ("", url + "/changed"):
             self.assertTrue(
                 all(not mode["ready"] for mode in describe_modes(jobs, setting).values())

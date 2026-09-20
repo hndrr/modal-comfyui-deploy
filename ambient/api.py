@@ -1,9 +1,10 @@
+import asyncio
 import json
 from pathlib import Path
 import tempfile
 import os
 
-from .contracts import DEFAULT_BACKENDS, FPS, FRAMES, RESOLUTIONS, identifier, validate_request
+from .contracts import ASPECT_RATIOS, DEFAULT_BACKENDS, FPS, FRAMES, RESOLUTIONS, identifier, validate_request
 from .service import Conflict
 from .storage import AmbientStorage
 
@@ -26,10 +27,22 @@ def create_api(service, modes, inputs, outputs, *, library=None):
         base = validate_endpoint(os.environ.get("AMBIENT_COMFYUI_URL", ""))
         headers = {"Modal-Key": os.environ.get("MODAL_PROXY_KEY", ""),
                    "Modal-Secret": os.environ.get("MODAL_PROXY_SECRET", "")}
-        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30),
-                                         trace_configs=[redirect_guard()]) as client:
-            async with client.get(base + "/ambient/workflows") as response:
-                return JSONResponse(await response.json(), status_code=response.status)
+        try:
+            async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30),
+                                             trace_configs=[redirect_guard()]) as client:
+                async with client.get(base + "/ambient/workflows") as response:
+                    if response.status in {401, 403}:
+                        return JSONResponse({"error": "ComfyUI authentication failed. Check the server credentials.",
+                                             "retryable": False}, status_code=502)
+                    data = await response.json()
+                    return JSONResponse(data, status_code=response.status,
+                                        headers={"Retry-After": response.headers.get("Retry-After", "2")}
+                                        if response.status == 503 else {})
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            # A cold CPU can outlive this request. It is not a failed generation:
+            # no job has been accepted yet, and clients may safely retry this GET.
+            return JSONResponse({"error": "Waiting for ComfyUI to become available.", "retryable": True},
+                                status_code=503, headers={"Retry-After": "2"})
 
     @app.get("/library")
     def list_library():
@@ -94,7 +107,8 @@ def create_api(service, modes, inputs, outputs, *, library=None):
 
     @app.get("/capabilities")
     def capabilities():
-        return {"modes": modes(), "resolutions": RESOLUTIONS, "frames": FRAMES, "fps": FPS}
+        return {"modes": modes(), "resolutions": RESOLUTIONS, "aspectRatios": ASPECT_RATIOS,
+                "frames": FRAMES, "fps": FPS}
 
     def submit_job(data):
         existing = service.existing(data)

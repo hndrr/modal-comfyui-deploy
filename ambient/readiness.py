@@ -1,9 +1,10 @@
 """Preparation records and native inventory checks, separate from GPU validation."""
 
 import time
+from itertools import product
 
 from .h3 import workflow
-from .contracts import DEFAULT_BACKENDS, RESOLUTIONS
+from .contracts import ASPECT_RATIOS, DEFAULT_BACKENDS, IMAGE_MODES, RESOLUTIONS
 from .models import references
 from .config import COMFYUI_REFERENCE
 from .split import SPLIT_HEADERS, check_dependencies, check_split
@@ -42,11 +43,13 @@ def describe_modes(jobs, comfy_url: str) -> dict:
             **backends[default],
             "defaultBackend": default,
             "backends": backends,
-            "imageInput": mode == "h3",
-            "camera": mode == "h3",
-            "continuity": mode == "h3",
+            "imageInput": mode in IMAGE_MODES,
+            "requiresImage": mode == "fasth3-8step-i2v",
+            "experimental": mode == "fasth3-8step-i2v",
+            "camera": mode in IMAGE_MODES,
+            "continuity": mode in IMAGE_MODES,
             "audio": True,
-            "steps": 8 if mode == "h3" else 4,
+            "steps": 4 if mode == "fasth3" else 8,
         }
     return modes
 
@@ -90,8 +93,9 @@ def validate_object_info(info, mode="h3"):
     """Bind each supported recipe against the live catalog; execution stays upstream."""
     if mode not in DEFAULT_BACKENDS:
         raise ValueError("Invalid ComfyUI generation mode")
-    for resolution in RESOLUTIONS:
-        for image in (None, "ambient/anchor.png") if mode == "h3" else (None,):
+    for resolution, aspect in product(RESOLUTIONS, ASPECT_RATIOS):
+        images = (None, "ambient/anchor.png") if mode == "h3" else ("ambient/anchor.png",) if mode in IMAGE_MODES else (None,)
+        for image in images:
             workflow(
                 {
                     "requestId": "00000000-0000-4000-8000-000000000001",
@@ -100,6 +104,7 @@ def validate_object_info(info, mode="h3"):
                     "sound": "test",
                     "seed": 1,
                     "resolution": resolution,
+                    "aspectRatio": aspect,
                 },
                 image,
                 object_info=info,

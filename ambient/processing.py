@@ -23,8 +23,8 @@ def run_job(
     def cancelled():
         return read_job(jobs, job_id)["status"] == "cancelled"
 
-    def progress(stage):
-        job.update(status="running", stage=stage)
+    def progress(stage, values=None):
+        job.update(status="running", stage=stage, progress=values)
         jobs.put(job_id, job)
 
     try:
@@ -46,14 +46,17 @@ def run_job(
             if cancelled():
                 return
             if request.get("saveToLibrary") and library:
+                progress("Saving to video library")
                 # Save the finalized bytes, not the generator's intermediate file.
                 saved = root / "library.mp4"
                 storage.download_clip(job_id, saved)
                 generation = effective or {"effective": {"prompt": request["prompt"], "sound": request["sound"]}}
                 generation = {**generation, "intent": request.get("intent", {
                     "prompt": request["prompt"], "sound": request["sound"]})}
+                if "generationContext" in request:
+                    generation["context"] = request["generationContext"]
                 library.publish(saved, clip, name=request["prompt"], generation=generation)
-            finish_job(jobs, job_id, status="completed", stage="Complete", clip=clip)
+            finish_job(jobs, job_id, status="completed", stage="Complete", clip=clip, progress=None)
             if request.get("saveToLibrary") and library and tag_dispatch:
                 try:
                     library.tags(job_id, {"status": "pending"})
