@@ -1,5 +1,6 @@
 import unittest
 
+from ambient.contracts import DEFAULT_BACKENDS
 from ambient.h3 import workflow
 from ambient.readiness import validate_object_info
 from ambient_fixtures import object_info
@@ -8,10 +9,13 @@ from test_ambient import request
 
 class UpstreamContractTest(unittest.TestCase):
     def test_video_decode_uses_fast_vae_and_requires_the_extension(self):
-        for mode in ("h3", "fasth3"):
+        for mode in DEFAULT_BACKENDS:
             with self.subTest(mode=mode):
                 info = object_info()
-                graph = workflow({**request(), "mode": mode}, object_info=info)
+                image = "ambient/anchor.png" if mode == "fasth3-8step-i2v" else None
+                graph = workflow({**request(), "mode": mode}, image, object_info=info)
+                self.assertEqual(graph["4"]["inputs"]["vae_name"], "minimax_h3_video_vae_int8_convrot.safetensors")
+                self.assertEqual(graph["5"]["inputs"]["vae_name"], "minimax_h3_audio_vae_fp32.safetensors")
                 self.assertEqual(graph["12"], {
                     "class_type": "MiniMaxH3FastVAEDecode",
                     "inputs": {"samples": ["11", 0], "vae": ["4", 0], "tile_batch_size": 4},

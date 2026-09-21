@@ -9,6 +9,8 @@
 
 **現在の構成（2026-09-16）：** 採用を取りやめたFastVideoワーカー（`FastH3.*`）、そのGPUイメージ、スナップショットをダウンロードする `prepare_fasth3` は削除済みです。専用スナップショットも削除済みです。ComfyUI版FastH3と、そのINT8モデル・VAEは引き続きSplitappで使えます。
 
+全H3 / FastH3モードの標準Video VAEは `minimax_h3_video_vae_int8_convrot.safetensors`、Audio VAEは `minimax_h3_audio_vae_fp32.safetensors` です。適用済みのカスタムワークフローは保存したモデル選択を維持します。
+
 H3とFastH3は、どちらも動画のデコードに `MiniMaxH3FastVAEDecode` を `tile_batch_size=4` で使います。提供元は [Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE) の `b719329e0ecf35f0ae08d241c363ed1e56adbb95` です。音声は引き続き `VAEDecodeAudio` を使い、MotionCacheは接続していません。このノードは、新しく作るSplit環境のテンプレートに含まれます。既存環境では、通常のカスタムノード更新手順で同じ拡張を導入・検証してから、新しいAmbientの生成レシピをデプロイしてください。`check_comfy` と生成処理は、デコーダーがなければGPUジョブの投入前に拒否します。Fast VAEは公開ノードのスキーマに加えてH3 VAEの内部実装にも依存するため、ComfyUIの更新時には再確認が必要です。後述の測定値は、このデコーダー変更前のものです。
 
 **Fast VAEの検証（2026-09-16）：** 使用中のSplit環境にノードを導入し、Ambientを再デプロイした後、両モードのプレビューでRTX PRO 6000による124フレームの音声付き動画を生成できました。ComfyUIの実行時間はFastH3（VSA）が39.27秒、H3が42.59秒でした。H3のデコーダーが記録した処理時間は5.34秒です。各1回の実行で、読み込み条件にも差があるため、デコーダー単体の高速化を示す測定ではありません。記録と出力クリップは `ambient/docs/validation/2026-09-16/fastvae/` にあります。
@@ -321,7 +323,7 @@ python -m ambient.cli submit ./ambient-output/JOB_UUID.request.json --output ./a
 - `/models/diffusion_models/minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors`
 - `/models/vae/minimax_h3_video_vae_int8_convrot.safetensors`
 
-両ファイルとも、共有モデルファイルを置き換える前にSHA-256を確認します。QwenテキストエンコーダーとFP32の**音声**VAEは、既存のバージョン固定済み `Comfy-Org/MiniMax-H3` から取得します。H3の生成レシピでは、FP16の動画VAEと8ステップ用LoRAを維持します。拡散モデルのファイル名にある `fastvideo` は配布元による命名の一部です。このファイルはComfyUIで読み込み、削除済みのFastVideoランタイムは必要としません。
+両ファイルとも、共有モデルファイルを置き換える前にSHA-256を確認します。QwenテキストエンコーダーとFP32の**音声**VAEは、既存のバージョン固定済み `Comfy-Org/MiniMax-H3` から取得します。H3の生成レシピも同じINT8動画VAEを使い、8ステップ用LoRAを維持します。拡散モデルのファイル名にある `fastvideo` は配布元による命名の一部です。このファイルはComfyUIで読み込み、削除済みのFastVideoランタイムは必要としません。
 
 FastH3の生成レシピは、Eulerの全4ステップで保持率10%の標準VSAを使います。CFG=1、動画・音声のシフト値は12/3、シフトを適用した5点のシグマスケジュールを使います。標準のDynamicComboの選択肢と入れ子のフィールドは、稼働中サーバーの `/object_info` に合わせて接続します。ComfyUIの実行コードはコピーも変更もしません。
 

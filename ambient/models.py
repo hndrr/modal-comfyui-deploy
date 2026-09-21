@@ -15,14 +15,13 @@ from .contracts import DEFAULT_BACKENDS, FAST8_MODES
 MODEL_FILES = {
     "unet": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
     "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-    "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+    "video_vae": "minimax_h3_video_vae_int8_convrot.safetensors",
     "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
     "lora": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
 }
 FAST_MODEL_FILES = {
     **{key: value for key, value in MODEL_FILES.items() if key != "lora"},
     "unet": "minimax_h3_fastvideo_vsa_datafree_1300step_4step_int8_convrot.safetensors",
-    "video_vae": "minimax_h3_video_vae_int8_convrot.safetensors",
 }
 FAST_CHECKSUMS = {
     "unet": "7221ae65d78780354d51e5048d29728d9f1f8fb9baf50b1dd3df85f5101413d3",
