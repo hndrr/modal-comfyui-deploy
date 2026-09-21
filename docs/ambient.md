@@ -73,8 +73,6 @@ flowchart LR
 
 **分離モード**では、ComfyUIのブラウザタブを開いたままにしても、稼働し続けるのはCPU側のUIだけです。画面からの生成とAmbientからのH3・FastH3生成は、splitappのジョブキューとGPUワーカーを共有します。キューの処理が終われば、画面が開いていてもGPUはゼロ台まで縮退できます。CPUとストレージの使用は続く場合があります。現在のSplitappは `min_containers=0` で、アイドル状態から30秒で縮退します。明示的に選ぶ従来モードはGPUセッションを維持するため、AmbientのComfyUI生成経路はどちらもこのモードを拒否します。環境検証など、ほかの明示的なGPU操作については[分離構成のデプロイガイド](comfyui-split.md)を参照してください。
 
-<a id="configuration"></a>
-
 ## 設定
 
 リポジトリの `.env` と、接続先を固定した `.modal-profile` を使います。認証情報を `NEXT_PUBLIC_*` 変数に入れないでください。
