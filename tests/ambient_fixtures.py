@@ -25,7 +25,7 @@ def object_info():
             ["CLIP"],
         ),
         "VAELoader": node(
-            {"vae_name": [MODEL_FILES["video_vae"], MODEL_FILES["audio_vae"], FAST_MODEL_FILES["video_vae"]]}, ["VAE"]
+            {"vae_name": list(dict.fromkeys((MODEL_FILES["video_vae"], MODEL_FILES["audio_vae"], FAST_MODEL_FILES["video_vae"])))}, ["VAE"]
         ),
         "LoadImage": node({"image": []}, ["IMAGE", "MASK"]),
         "MiniMaxH3ImageToVideo": node(

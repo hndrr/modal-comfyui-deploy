@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from ambient.contracts import ROUTES, fingerprint, validate_request
+from ambient.contracts import DEFAULT_BACKENDS, ROUTES, fingerprint, validate_request
 from ambient.h3 import workflow
 from ambient.models import FAST_MODEL_FILES, MODEL_FILES, comfy_assets, references
 from ambient.readiness import describe_modes, validate_object_info
@@ -162,7 +162,7 @@ class FastWorkflowTest(unittest.TestCase):
                 ]
             else:
                 info["VAELoader"]["input"]["required"]["vae_name"] = [
-                    [MODEL_FILES["video_vae"], MODEL_FILES["audio_vae"]]
+                    ["minimax_h3_video_vae_fp16.safetensors", MODEL_FILES["audio_vae"]]
                 ]
             with self.subTest(change=change), self.assertRaises(ValueError):
                 validate_object_info(info, "fasth3")
@@ -242,6 +242,16 @@ class PreparationTest(unittest.TestCase):
         self.assertFalse(any(asset["destination_subdir"] == "loras" for asset in fast))
         self.assertEqual(sum("expected_sha256" in asset for asset in fast), 2)
         self.assertTrue(all(len(asset["revision"]) == 40 for asset in fast + h3))
+        for mode in DEFAULT_BACKENDS:
+            video_vae = next(asset for asset in comfy_assets(mode)
+                             if asset["filename"].endswith("minimax_h3_video_vae_int8_convrot.safetensors"))
+            self.assertEqual(video_vae, {
+                "repo_id": "Kijai/MiniMax-H3-experimental",
+                "revision": "f4cac997f880e93cf6940af61ee8d58ef31ff7f3",
+                "filename": "minimax_h3_video_vae_int8_convrot.safetensors",
+                "destination_subdir": "vae",
+                "expected_sha256": "9bb2d96f218c76babd85e0611b85ca8fb330a90546c01a0005e8a58a59593410",
+            })
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "model"
             target.write_bytes(b"test model")
