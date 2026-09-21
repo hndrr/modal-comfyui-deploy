@@ -74,7 +74,7 @@ Worker は HTTP と WebSocket のどちらでも、次の順に設定を使う�
 
 JSON のキーは公開ドメインではなく、転送先の HTTPS オリジンである。パス・末尾のスラッシュを含めず、転送先一覧の値と一致させる。指定は URL 単位なので、B の別 app にも転送する場合は、そのオリジンも登録する。同じワークスペースだからといって自動では引き継がれない。現在の実装では、すべての接続先をこの表に登録しても、必須設定の `MODAL_KEY` / `MODAL_SECRET` は省略できない。
 
-Ambient 側で使う変数名は `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` である。接続先と同じワークスペースの Token ID / Token Secret をそれぞれ入れる。Worker の既定ペアを使う接続先なら `MODAL_KEY` / `MODAL_SECRET` と同じ値、接続先別のペアを使うなら該当する `key` / `secret` と同じ値になる。詳細は [Ambient の設定](ambient.md#configuration) を参照。
+Ambient 側で使う変数名は `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` である。接続先と同じワークスペースの Token ID / Token Secret をそれぞれ入れる。Worker の既定ペアを使う接続先なら `MODAL_KEY` / `MODAL_SECRET` と同じ値、接続先別のペアを使うなら該当する `key` / `secret` と同じ値になる。詳細は [Ambient の設定](ambient.md#設定) を参照。
 
 `modal-http: invalid credentials for proxy authorization` はModal側がこのトークンを
 拒否した状態である。接続先のワークスペースで発行したProxy Authトークンを使い、
