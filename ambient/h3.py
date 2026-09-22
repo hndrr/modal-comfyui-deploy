@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from .contracts import DEFAULT_BACKENDS, FAST8_MODES, H3_FOUR_STEP_MODES, IMAGE_MODES, FPS, FRAMES, generation_size, prompt_text
-from .models import FAST8_MODEL_FILES, FAST_MODEL_FILES, MODEL_FILES, MODE_MODEL_FILES
+from .models import FAST8_MODEL_FILES as FAST8_MODEL_FILES, FAST_MODEL_FILES as FAST_MODEL_FILES, MODEL_FILES as MODEL_FILES, MODE_MODEL_FILES
 
 FAST_SIGMAS = (1.0, 36 / 37, 12 / 13, 4 / 5, 0.0)
 
@@ -18,6 +18,17 @@ def input_fields(schema, values):
     required = dict(schema.get("required", {}))
     fields = {**required, **schema.get("optional", {})}
     for name, spec in list(fields.items()):
+        if spec[0] == "COMFY_AUTOGROW_V3":
+            required.pop(name, None)
+            fields.pop(name)
+            template = spec[1]["template"]
+            names = template.get("names", [f"{template.get('prefix')}{i}" for i in range(template.get("max", 0))])
+            child = next(value for section in template["input"].values() for value in section.values())
+            for index, child_name in enumerate(names):
+                fields[f"{name}.{child_name}"] = child
+                if index < template.get("min", 0) and template["input"].get("required"):
+                    required[f"{name}.{child_name}"] = child
+            continue
         if spec[0] != "COMFY_DYNAMICCOMBO_V3":
             continue
         if name not in values and name not in required:

@@ -227,3 +227,27 @@ split前のWebSocket圧縮・user_managerソースパッチは、この分離構
 - CPU再起動後の履歴・ジョブ詳細・画像の復元と、実行中ジョブが再投入されないことを確認する。
 - 実ブラウザで標準画面・GPU表示・生成履歴・画像表示を確認する。
 - Managerの応答、追加済みノードの保持、Image Browsingのファイル操作を確認する。
+
+
+## Studio の生成モードと秒数
+
+Split の `/ambient/workflows` は従来6モードに加えて、`h3-ref2v`、
+`fasth3-8step-i2v-vsa`、`fasth3-vsa-4step-i2v` を登録する。
+新レシピは `comfy_split/generation.py` に置き、旧 Ambient API のモードは増やさない。
+Ref2V は既存Volumeの Ref2VA INT8（prunedがあれば優先）を使う。
+モデルの自動ダウンロードは行わず、必要なモデルやノードがない場合は登録しない。
+8ステップはV2モデル＋SigmaShift 10/3＋BlockSparseAttention VSA、
+4ステップは同じモデル＋SigmaShift 12/3＋SolAttnMiniMax VSAとManualSigmasを使う。
+4ステップは実験用。SolAttnMiniMax v5は出典とSHA-256を記録して同梱し、
+CPU/GPU共通の追加ノードパスへ置く。既存Volume上のノードは書き換えない。
+
+全動画モードが `length` バインドを公開する。Studioが秒数を24fps・17k+5へ補正し、
+接続先ノードの範囲を検証する。省略時は従来の124フレーム。
+更新前に保存した既知のH3グラフでlengthバインドがない場合は、初回カタログ読み込みで
+現在版を新しい版へ移し、Ambient所有のlengthを追加する。グラフ、モデル、レイアウト、
+他の入力所有権、旧版、受付済みジョブは変更しない。
+明示的にワークフロー所有としたlengthはそのまま維持する。
+
+Ref2Vの `references` は順序付き1〜9枚の `ref_images.ref_image_0…` を一組として扱う。
+保存したレシピを再利用しても各ジョブの画像構成で置き換え、前の余剰画像を残さない。
+ComfyUIのAmbientパネルではlength／referencesも他の入力と同様に所有権を選択できる。

@@ -1,5 +1,6 @@
 """Versioned workflow registry owned by the single-writer CPU gateway."""
-from ambient.contracts import DEFAULT_BACKENDS, IMAGE_MODES, MUSIC_DIRECTION
+from ambient.contracts import MUSIC_DIRECTION
+from comfy_split.generation import MODES, IMAGE_MODES, I2V_MODES
 from copy import deepcopy
 import hashlib
 import json
@@ -7,7 +8,7 @@ import math
 from pathlib import Path, PurePosixPath
 import tempfile
 
-STAGES = {*DEFAULT_BACKENDS, "jev", "media", "text", "imagegen"}
+STAGES = {*MODES, "jev", "media", "text", "imagegen"}
 PROTECTED = {"cwd", "extra_args_json", "sandbox_mode", "ephemeral", "skip_git_repo_check",
              "output_schema_json", "cli_skill", "concurrency_count", "auto_save_to_output"}
 
@@ -185,8 +186,12 @@ def pin_references(template, volume):
             with volume.batch_upload(force=True) as batch:
                 batch.put_file(str(local), target)
         node["inputs"][key] = target
-    for binding in template["bindings"].values():
+    for name, binding in template["bindings"].items():
         if binding.get("source") == "workflow":
+            if name == "references":
+                for key, value in graph[binding["node"]]["inputs"].items():
+                    if key.startswith("ref_images.") and isinstance(value, list):
+                        visit(str(value[0]))
             visit(binding["node"])
     return template
 
@@ -222,6 +227,25 @@ class WorkflowRegistry:
         self.state["revision"] = revision
         return self.describe()
 
+    def upgrade_lengths(self):
+        """Add the newly supported input in a new version; never rewrite history."""
+        stages = self.snapshot()["stages"]
+        changed = False
+        for stage, template in stages.items():
+            if stage not in MODES or "length" in template["bindings"]:
+                continue
+            node_id = template["bindings"].get("prompt", {}).get("node")
+            node = template["graph"].get(node_id, {})
+            if node.get("class_type") not in {"MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo"} or "length" not in node.get("inputs", {}):
+                continue
+            template["bindings"]["length"] = {"node": node_id, "input": "length", "source": "ambient", "optional": True}
+            changed = True
+        if changed:
+            revision = self.state["revision"] + 1
+            self.state["versions"][str(revision)] = stages
+            self.state["revision"] = revision
+        return changed
+
     def prepare(self, body):
         body = deepcopy(body)
         meta = body.get("extra_data", {}).get("ambient")
@@ -236,7 +260,12 @@ class WorkflowRegistry:
                     "workflow": body.get("extra_data", {}).get("extra_pnginfo", {}).get("workflow")}
         # Refresh display templates with shipped schemas. Applied snapshots and
         # accepted execution graphs remain unchanged and keep their own version.
-        self.state["defaults"][stage] = deepcopy(baseline)
+        # The shipped catalog is registered before requests arrive. A replay of
+        # an older accepted graph must not remove newly supported catalog inputs.
+        if stage in MODES:
+            self.state["defaults"].setdefault(stage, deepcopy(baseline))
+        else:
+            self.state["defaults"][stage] = deepcopy(baseline)
         saved = self.snapshot(meta["revision"])["stages"].get(stage)
         if saved:
             graph = deepcopy(saved["graph"])
@@ -261,6 +290,17 @@ class WorkflowRegistry:
                 if binding.get("source", "ambient") == "ambient":
                     source = baseline["bindings"].get(name)
                     value = field_value(baseline["graph"], source) if source else None
+                    if name == "references" and stage == "h3-ref2v":
+                        if not source:
+                            raise ValueError("Ref2V requires reference image bindings")
+                        target = graph[binding["node"]]["inputs"]
+                        for key in list(target):
+                            if key.startswith("ref_images."):
+                                del target[key]
+                        for key, ref_value in baseline["graph"][source["node"]]["inputs"].items():
+                            if key.startswith("ref_images."):
+                                target[key] = live_value(ref_value)
+                        continue
                     if name == "reference" and stage in IMAGE_MODES:
                         if value is None:
                             graph.get(bindings["prompt"]["node"], {}).get("inputs", {}).pop("first_frame", None)
@@ -293,9 +333,15 @@ class WorkflowRegistry:
             body["extra_data"].pop("extra_pnginfo", None)
             meta["layout"] = saved.get("workflow")
         meta["effective"] = {name: field_value(body["prompt"], binding) for name, binding in meta["bindings"].items()}
-        if stage == "fasth3-8step-i2v" and not meta["effective"].get("reference"):
+        if stage in I2V_MODES and not meta["effective"].get("reference"):
             raise ValueError("FastH3 8-step I2V requires a first-frame image. Add an image in Ambient or fix the reference in its ComfyUI workflow.")
-        if stage in DEFAULT_BACKENDS:
+        if stage == "h3-ref2v":
+            binding = meta["bindings"].get("references")
+            inputs = body["prompt"].get(binding["node"], {}).get("inputs", {}) if binding else {}
+            names = [key for key in inputs if key.startswith("ref_images.")]
+            if not 1 <= len(names) <= 9 or set(names) != {f"ref_images.ref_image_{i}" for i in range(len(names))}:
+                raise ValueError("Ref2V requires 1–9 ordered images")
+        if stage in MODES:
             meta["effective"]["settings"] = {
                 node_id: {"class_type": node["class_type"], "inputs": deepcopy(node["inputs"])}
                 for node_id, node in body["prompt"].items()
@@ -304,12 +350,15 @@ class WorkflowRegistry:
 
 
 def h3_metadata(request, graph):
-    binding = lambda node, key, **extra: {"node": node, "input": key, "source": "ambient", **extra}
+    def binding(node, key, **extra):
+        return {"node": node, "input": key, "source": "ambient", **extra}
     bindings = {"prompt": binding("6", "prompt", part="prompt"),
                 "sound": binding("6", "prompt", part="sound"),
                 "seed": binding("8", "noise_seed"), "width": binding("6", "width"),
-                "height": binding("6", "height")}
+                "height": binding("6", "height"), "length": binding("6", "length", optional=True)}
     if request["mode"] in IMAGE_MODES:
-        bindings["reference"] = binding("16", "image", optional=request["mode"] != "fasth3-8step-i2v")
+        bindings["reference"] = binding("16", "image", optional=request["mode"] not in I2V_MODES)
+    if request["mode"] == "h3-ref2v":
+        bindings["references"] = binding("6", "ref_images.ref_image_0")
     return {"sessionId": request["sessionId"], "stage": request["mode"],
             "revision": request["workflowRevision"], "bindings": bindings, "outputs": {"video": "15"}}
