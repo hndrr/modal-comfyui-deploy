@@ -14,11 +14,11 @@ from pathlib import Path
 
 from aiohttp import ClientError, ClientSession
 
+from comfy_split import ambient_nodes
 from comfy_split.state import write_json
+from comfy_split.storage import ENVIRONMENTS, TEMP_ARCHIVE, USER
 
-ENVIRONMENTS = Path("/environments")
 TEMPLATE = Path("/opt/comfy-template")
-TEMP_ARCHIVE = Path("/data/output/.split-temp")
 
 
 def identifier(value):
@@ -39,6 +39,11 @@ def create_environment(source="base", *, restore_image_browsing=False):
     target.mkdir()
     shutil.copytree(origin / "comfy/custom_nodes", target / "comfy/custom_nodes", symlinks=True)
     shutil.copytree(origin / "venv", target / "venv", symlinks=True)
+    if (origin / ambient_nodes.DIRECTORY).is_dir():
+        shutil.copytree(origin / ambient_nodes.DIRECTORY, target / ambient_nodes.DIRECTORY,
+                        symlinks=True)
+    if (origin / ambient_nodes.MANIFEST).is_file():
+        shutil.copyfile(origin / ambient_nodes.MANIFEST, target / ambient_nodes.MANIFEST)
     if restore_image_browsing:
         node = "ComfyUI-Image-Browsing"
         destination = target / "comfy/custom_nodes" / node
@@ -62,7 +67,7 @@ def create_environment(source="base", *, restore_image_browsing=False):
 
 
 def initialize_environment():
-    user = Path("/data/user")
+    user = USER
     user.mkdir(parents=True, exist_ok=True)
     if not (user / ".split-seeded.json").exists():
         seed = Path("/seed/user")
@@ -74,7 +79,8 @@ def initialize_environment():
     if (target / "ready.json").exists():
         return
     target.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(TEMPLATE, target / "comfy", symlinks=True, dirs_exist_ok=True)
+    shutil.copytree(TEMPLATE / "custom_nodes", target / "comfy/custom_nodes",
+                    symlinks=True, dirs_exist_ok=True)
     # Existing user nodes are copied, not moved or updated in-place.
     existing = Path("/data/custom_nodes")
     if existing.exists():
@@ -111,14 +117,16 @@ def configure_manager(user, enabled):
 
 
 class ComfyProcess:
-    def __init__(self, role, port):
+    def __init__(self, role, port, *, user_directory=None):
         self.role, self.port = role, port
         self.process = None
         self.version = None
+        self.dependencies = {}
         self.root = Path("/tmp") / ("split-comfy-" + role)
         self.log = Path("/tmp") / ("split-comfy-" + role + ".log")
         self.temp_root = self.root / "temporary"
         self.temp_namespace = uuid.uuid4().hex
+        self.user_directory = user_directory
 
     def archive_temp(self, *, legacy_paths=False):
         source = self.temp_root / "temp"
@@ -155,6 +163,7 @@ class ComfyProcess:
                 await self.process.wait()
         self.process = None
         self.version = None
+        self.dependencies = {}
 
     async def start(self, version, *, cpu=False, manager=False):
         if self.version == version and self.process and self.process.returncode is None:
@@ -175,17 +184,19 @@ class ComfyProcess:
             elif destination.exists():
                 continue
             destination.symlink_to(path, target_is_directory=path.is_dir())
-        if self.role == "cpu":
-            user = Path("/data/user")
+        if self.user_directory is not None:
+            user = self.user_directory
+        elif self.role == "cpu":
+            user = USER
         elif self.role == "candidate":
             user = source / "manager-user"
             if not user.exists():
-                shutil.copytree("/data/user", user, dirs_exist_ok=True,
+                shutil.copytree(USER, user, dirs_exist_ok=True,
                                 ignore=shutil.ignore_patterns("*.db", "*.db-shm", "*.db-wal"))
         else:
             user = self.root / "user"
             shutil.rmtree(user, ignore_errors=True)
-            shutil.copytree("/data/user", user, dirs_exist_ok=True,
+            shutil.copytree(USER, user, dirs_exist_ok=True,
                             ignore=shutil.ignore_patterns("*.db", "*.db-shm", "*.db-wal"))
         user.mkdir(parents=True, exist_ok=True)
         configure_manager(user, manager)
@@ -202,6 +213,14 @@ class ComfyProcess:
         self.temp_namespace = uuid.uuid4().hex
         temporary = self.temp_root
         temporary.mkdir(parents=True, exist_ok=True)
+        extension_paths = Path(__file__).with_name("extension_paths.yaml")
+        if ambient_nodes.enabled() and (source / ambient_nodes.DIRECTORY).is_dir():
+            # JSON is valid YAML. Absolute Volume paths are identical on CPU/GPU.
+            extension_paths = self.root / "ambient-extension-paths.json"
+            write_json(extension_paths, {
+                "modal_control": {"custom_nodes": "/opt/comfy-extensions"},
+                "ambient": {"custom_nodes": str(source / ambient_nodes.DIRECTORY)},
+            })
         command = [str(source / "venv/bin/python"), str(self.root / "main.py"),
                    "--listen", "127.0.0.1", "--port", str(self.port),
                    "--base-directory", str(self.root),
@@ -210,12 +229,13 @@ class ComfyProcess:
                    "--temp-directory", str(temporary),
                    "--database-url", f"sqlite:////tmp/split-{self.role}.db",
                    "--enable-manager", "--preview-method", "auto",
-                   "--extra-model-paths-config", str(Path(__file__).with_name("extension_paths.yaml"))]
+                   "--extra-model-paths-config", str(extension_paths)]
         if cpu:
             command.append("--cpu")
         elif os.environ.get("COMFYUI_SAGE_ATTENTION", "on") == "on":
             command.append("--use-sage-attention")
         environment = dict(os.environ)
+        environment.pop(ambient_nodes.TOKEN_ENV, None)
         environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),
@@ -242,8 +262,9 @@ class ComfyProcess:
                                 if cpu and not metadata.get("cpu_guard"):
                                     raise RuntimeError("CPU execution guard did not load")
                             self.version = version
+                            self.dependencies = metadata.get("dependencies", {})
                             print(json.dumps({"event": "comfy_ready", "role": self.role,
-                                              "seconds": time.monotonic() - started}))
+                                              "seconds": time.monotonic() - started}), flush=True)
                             return
                 except (OSError, ClientError, asyncio.TimeoutError):
                     pass

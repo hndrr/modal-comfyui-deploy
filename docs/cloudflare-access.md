@@ -7,15 +7,19 @@ Modal 上の ComfyUI の手前に Cloudflare Access を置き、許可した利�
 
 **`worker/wrangler.jsonc` には環境固有の値を一切書かない。** リポジトリを公開しても、ワークスペース名・ドメイン・Team domain が漏れないようにするためである。
 
-そのため設定値は 5 つとも `wrangler secret put` で登録する。secret は Cloudflare 側に保存され、設定ファイルに書かれていなくてもデプロイで消えない（Cloudflare のドキュメントに *Secrets not included in the file are preserved from the previous version* と明記されている）。
+そのため、必須の 5 項目と、必要に応じて使う任意の 2 項目を Cloudflare の secret として登録する。secret は Cloudflare 側に保存され、設定ファイルに書かれていなくてもデプロイで消えない（Cloudflare のドキュメントに *Secrets not included in the file are preserved from the previous version* と明記されている）。以下のドメイン・ワークスペース名・トークンはすべて例示用で、実際の値は secret にのみ保存する。
 
-| 名前 | 例 / 形式 | 取得元 |
+| 名前 | 必須 / 任意 | 役割と値 |
 | --- | --- | --- |
-| `MODAL_ORIGINS` | ホスト名 → オリジンの JSON マップ（下記） | `uv run modal deploy ...` の出力。ワークスペース名は `uv run modal profile current` で確認できる |
-| `TEAM_DOMAIN` | `https://<team-name>.cloudflareaccess.com` | Zero Trust → Settings → Custom Pages の Team domain |
-| `POLICY_AUD` | 64 桁の 16 進文字列 | Access アプリの Overview にある Application Audience (AUD) Tag |
-| `MODAL_KEY` | `wk-` 始まり | Modal ダッシュボード → Settings → Proxy Auth Tokens の Token ID |
-| `MODAL_SECRET` | `ws-` 始まり | 同上の Token Secret（作成時のみ表示される） |
+| `MODAL_ORIGINS` | 必須 | 基本の転送先一覧。公開ホスト名 → Modal オリジンの JSON マップ。Modal URL はデプロイ出力で確認する |
+| `MODAL_ADDITIONAL_ORIGINS` | 任意 | 追加の転送先一覧。上と同じ形式で、既存ホストの上書きはできない |
+| `MODAL_KEY` | 必須 | 接続先別の指定がない場合に使う、特定の Modal ワークスペースの Proxy Auth Token ID（`wk-...`） |
+| `MODAL_SECRET` | 必須 | 上の Token ID と対になる Token Secret（`ws-...`）。作成時のみ表示される |
+| `MODAL_PROXY_CREDENTIALS` | 任意 | 接続先別の認証キー一覧。Modal オリジン → `{ "key": "wk-...", "secret": "ws-..." }` の JSON マップ |
+| `TEAM_DOMAIN` | 必須 | Access の Team domain。`https://<team-name>.cloudflareaccess.com`。Zero Trust → Settings → Custom Pages で確認する |
+| `POLICY_AUD` | 必須 | Access アプリの Application Audience (AUD) Tag。アプリの Overview で確認する |
+
+**Proxy Auth トークンは Modal ワークスペース単位で発行する。** `MODAL_KEY` / `MODAL_SECRET` は、そのうち 1 つのワークスペースのペアを既定値として置く設定であり、別ワークスペースにも通用するキーではない。同じワークスペース内の splitapp と ambientapp には同じペアを使える。
 
 `MODAL_ORIGINS` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」である。`wrangler dev` / `wrangler deploy` には `--var key:value` があるのでコマンドラインからも渡せるが、値がシェル履歴に残るうえ毎回指定が必要になるため、デプロイ用の値は secret に寄せている。
 
@@ -23,7 +27,7 @@ Modal 上の ComfyUI の手前に Cloudflare Access を置き、許可した利�
 
 `MODAL_ORIGINS` は**公開ホスト名から転送先 Modal オリジンへのマップ**である。ホスト名も Modal の URL も環境固有なので、両方まとめてこの secret に入れることでリポジトリから追い出している。
 
-URL の `<workspace>` はワークスペース名なので、**別の Modal アカウントでデプロイし直した場合は `MODAL_ORIGINS` と Proxy Auth トークン（`MODAL_KEY` / `MODAL_SECRET`）を入れ直す**必要がある。アカウントの切り替え自体は [modal-profiles.md](modal-profiles.md) を参照。
+URL の `<workspace>` はワークスペース名なので、別ワークスペースへ切り替える場合は転送先 URL と認証キーの両方を合わせる。転送先一覧を更新し、新しい接続先に `MODAL_PROXY_CREDENTIALS` でキーを指定するか、既定の `MODAL_KEY` / `MODAL_SECRET` をペアで更新する。既定のペアを更新すると、接続先別の指定がないすべての URL に影響する。アカウントの切り替え自体は [modal-profiles.md](modal-profiles.md) を参照。
 
 ```json
 {
@@ -49,19 +53,28 @@ Worker はリクエストの `Host` を見て転送先を決める。app を増�
 切り戻す場合は検証ホストのCustom Domain割り当てを外す。
 Accessの保護は、公開経路を外してから削除する。既存の認証用secretは変更しない。
 
-接続先ごとに異なるProxy Authトークンを使う場合は、任意のsecret
-`MODAL_PROXY_CREDENTIALS` に次のJSONを登録する。キーは末尾のスラッシュを含まない
-HTTPS originとする。HTTPとWebSocketの両方に適用され、登録のない接続先は既存の
-`MODAL_KEY` / `MODAL_SECRET` を使う。実際のトークンはリポジトリへ保存しない。
+### 認証キーの選び方
+
+Worker は HTTP と WebSocket のどちらでも、次の順に設定を使う。
+
+1. `MODAL_ORIGINS` と `MODAL_ADDITIONAL_ORIGINS` を合わせた一覧から、公開ホスト名に対応する Modal オリジンを選ぶ。
+2. そのオリジンが `MODAL_PROXY_CREDENTIALS` にあれば、登録された `key` / `secret` を使う。
+3. 登録がなければ `MODAL_KEY` / `MODAL_SECRET` を使う。接続先のワークスペースとキーが合わなければ認証に失敗する。
+
+例えば既定のペアがワークスペース A のもので、追加の接続先がワークスペース B の場合、`MODAL_PROXY_CREDENTIALS` に B のペアを登録する。以下の値はすべてプレースホルダーである。
 
 ```json
 {
-  "https://<workspace>--comfyui-split-ui.modal.run": {
-    "key": "wk-REPLACE_ME",
-    "secret": "ws-REPLACE_ME"
+  "https://<workspace-b>--comfyui-split-ui.modal.run": {
+    "key": "wk-WORKSPACE_B_EXAMPLE",
+    "secret": "ws-WORKSPACE_B_EXAMPLE"
   }
 }
 ```
+
+JSON のキーは公開ドメインではなく、転送先の HTTPS オリジンである。パス・末尾のスラッシュを含めず、転送先一覧の値と一致させる。指定は URL 単位なので、B の別 app にも転送する場合は、そのオリジンも登録する。同じワークスペースだからといって自動では引き継がれない。現在の実装では、すべての接続先をこの表に登録しても、必須設定の `MODAL_KEY` / `MODAL_SECRET` は省略できない。
+
+Ambient 側で使う変数名は `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` である。接続先と同じワークスペースの Token ID / Token Secret をそれぞれ入れる。Worker の既定ペアを使う接続先なら `MODAL_KEY` / `MODAL_SECRET` と同じ値、接続先別のペアを使うなら該当する `key` / `secret` と同じ値になる。詳細は [Ambient の設定](ambient.md#設定) を参照。
 
 `modal-http: invalid credentials for proxy authorization` はModal側がこのトークンを
 拒否した状態である。接続先のワークスペースで発行したProxy Authトークンを使い、
@@ -75,7 +88,7 @@ Cloudflare Accessのログイン情報やModal CLIのAPIトークンと混同し
 
 接続先ホスト名（`comfy.example.com`）も `wrangler.jsonc` に書かず、Cloudflare ダッシュボードで Custom Domain として登録する。Cloudflare のドキュメントは *To manage routes via the Cloudflare dashboard only, remove any route and routes keys from your Wrangler configuration file* としており、`routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
 
-ローカルで `wrangler dev` を動かす場合は、同じ 5 つを `worker/.dev.vars`（gitignore 済み）に書く。`worker/.dev.vars.example` をコピーして使う。
+ローカルで `wrangler dev` を動かす場合は、必須の 5 項目と使用する任意項目を `worker/.dev.vars`（gitignore 済み）に書く。`worker/.dev.vars.example` をコピーして使う。
 
 ```bash
 cd worker
@@ -243,11 +256,15 @@ ComfyUI は `min_containers=0` でゼロ台まで縮退するため、縮退後�
 
 なお `startup_timeout=60`（[comfyapp.py:349](../comfyapp.py#L349)）は **Modal がコンテナ内の Web サーバーの起動を待つ上限**であり、Cloudflare のタイムアウトとは別物である。両者は独立して効く。
 
-その場合はページを再読み込みすればよい。2 回目はコンテナが起動済みなので通常どおり表示される。
+分離構成の `splitapp.py` はHTTPの入口を先に起動し、追加ノード更新・環境複製・ComfyUIの
+読み込み中は起動状況のページを返す。`/split/startup` を短いHTTPリクエストで確認し、
+準備完了後に自動でComfyUIを表示する。古い環境の整理も画面の起動を待たせない。
+Modal自体のコンテナ割当・イメージ取得はこのページの表示より前に行われるため、
+その段階のタイムアウトは残る。起動状況ページに到達する前に `524` になった場合は再読み込みする。
 
 ## 認証情報のローテーション
 
-Modal の Proxy Auth トークンを作り直した場合、`MODAL_KEY` と `MODAL_SECRET` は **必ず 1 回のデプロイでまとめて更新する**。
+既定の Modal Proxy Auth トークンを作り直した場合、`MODAL_KEY` と `MODAL_SECRET` は **必ず 1 回のデプロイでまとめて更新する**。
 
 `wrangler secret put` は実行ごとに新しいバージョンをデプロイするため、1 つずつ入れると「新しい Key と古い Secret」の組み合わせでデプロイされる瞬間が生まれ、その間 Modal が 401 を返す。
 
@@ -262,7 +279,9 @@ rm /tmp/modal-secrets.json
 
 `wrangler secret bulk` は複数の secret を 1 リクエストで更新する。`wrangler deploy --secrets-file <file>` でも同じことができる。Modal 側の再デプロイは不要である。
 
-Modal の URL が変わった場合（ワークスペース名の変更など）は、単独の値なので `npx wrangler secret put MODAL_ORIGINS` で JSON ごと入れ直せばよい。
+接続先別のトークンを作り直した場合は、`MODAL_PROXY_CREDENTIALS` の該当する `key` / `secret` をペアで更新する。同じトークンを複数のオリジンに登録している場合は、該当するすべての項目を更新し、ほかの接続先の値は保持する。
+
+Modal の URL が変わった場合は、`MODAL_ORIGINS` または `MODAL_ADDITIONAL_ORIGINS` の転送先を更新する。接続先別のキーを指定していた場合は `MODAL_PROXY_CREDENTIALS` のオリジンも合わせる。別ワークスペースへの移行なら、そのワークスペースで発行したトークンも必要になる。
 
 ## トラブルシューティング
 

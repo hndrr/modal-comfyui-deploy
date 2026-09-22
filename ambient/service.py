@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+import time
+from .contracts import fingerprint, public_job, stored_backend, validate_request
+from .job_state import finish_job, read_job
+
+
+class Conflict(ValueError):
+    pass
+
+
+class JobService:
+    """Injectable store/dispatcher. Modal Dict.put(skip_if_exists) is the atomic claim."""
+
+    def __init__(self, store, spawn, now=time.time, reconcile=None, reference=None):
+        self.store, self.spawn, self.now = store, spawn, now
+        self.reconcile = reconcile
+        self.reference = reference
+
+    def existing(self, raw):
+        """Check retries before readiness or parent checks can reject an accepted job."""
+        request = validate_request(raw)
+        existing = self.store.get(request["requestId"])
+        if existing is None:
+            return None
+        # Normalize legacy requests too: their stored hash predates backend selection.
+        previous = {**existing["request"], "backend": stored_backend(existing["request"])}
+        if previous["backend"] != request["backend"] or fingerprint(validate_request(previous)) != fingerprint(request):
+            raise Conflict("requestId already belongs to a different request")
+        return self.get(request["requestId"])
+
+    def submit(self, raw):
+        request = validate_request(raw)
+        existing = self.existing(request)
+        if existing is not None:
+            return existing
+        job_id = request["requestId"]
+        job = {
+            "id": job_id,
+            "status": "queued",
+            "stage": "Queued",
+            "request": request,
+            "fingerprint": fingerprint(request),
+            "createdAt": self.now(),
+        }
+        if self.reference:
+            job["references"] = self.reference(request)
+        if not self.store.put(job_id, job, skip_if_exists=True):
+            return self.existing(request)
+        try:
+            call = self.spawn(job_id)
+            # Separate keys prevent dispatch and worker status writes overwriting each other.
+            self.store.put("call:" + job_id, str(call))
+        except Exception:
+            finish_job(
+                self.store, job_id,
+                status="failed",
+                stage="Dispatch failed",
+                error="Job dispatch failed; create a new request to retry.",
+            )
+            raise
+        return self.get(job_id)
+
+    def get(self, job_id):
+        job = read_job(self.store, job_id)
+        if not job:
+            raise KeyError(job_id)
+        # A missing acknowledgement cannot prove that dispatch failed. Keep polling
+        # for a delayed worker; never overwrite its state or dispatch a second call.
+        if (
+            job["status"] == "queued"
+            and self.now() - job["createdAt"] > 300
+            and not self.store.get("call:" + job_id)
+        ):
+            job = {
+                **job,
+                "stage": "Dispatch unconfirmed; inspect Modal before retrying",
+            }
+        if (
+            job["status"] in ("queued", "running")
+            and self.reconcile
+            and self.now() - job["createdAt"] > 10
+        ):
+            call_id = self.store.get("call:" + job_id)
+            if call_id:
+                reason = self.reconcile(call_id)
+                if reason:
+                    job = finish_job(
+                        self.store, job_id, status="failed",
+                        stage="Worker stopped", error=reason,
+                    )
+        return public_job(job)
+
+    def cancel(self, job_id):
+        job = self.get(job_id)
+        if job["status"] not in ("queued", "running"):
+            return job
+        return public_job(finish_job(
+            self.store, job_id, status="cancelled", stage="Cancelled",
+        ))

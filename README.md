@@ -18,11 +18,12 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 GitHub Actionsで、push・pull request時に以下を並列実行します。Actions画面からの手動実行にも対応しています。
 
-- Python: `uv sync --locked` → `uv run --locked python -m unittest discover -s tests -v`
+- Python: `uv sync --locked --extra ambient-test` → `uv run --locked --extra ambient-test python -m unittest discover -s tests -v`
 - 管理画面（`web/`）: `npm ci` → `npm test` → `npm run build`
 - 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
 
 CIはPython 3.12・Node.js 22を使用し、認証情報なしで実行します。
+Ambientの音声・最終フレーム検証に必要な`ffmpeg`（`ffprobe`を含む）もCIでインストールします。ローカルで同じ検証を行う場合も必要です。
 Modal上での実生成・GPU停止・ブラウザ操作の検証はCIの対象外です。
 
 ## セットアップ
@@ -130,3 +131,9 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 - [modal-idle-scale-to-zero.md](docs/design/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
 - [modal-power-control.md](docs/design/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
 - [pytorch-cu130-upgrade.md](docs/design/pytorch-cu130-upgrade.md): PyTorch / CUDA のアップグレード検討
+
+## Ambient Studio
+
+独立した [Ambient Studio](https://github.com/hndrr/ambient-studio) 向けに、生成job API、H3の最終フレーム継承、FastH3専用workerを提供します。画面・再生・FX・MIDIはフロント側が担当します。バックエンドの責務分担、設定、明示的なモデル準備、検証手順は [docs/ambient.md](docs/ambient.md) を参照してください。
+
+`splitapp.py` と `ambient_app.py` を組み合わせ、ComfyUIの接続先にはsplitappのCPU UIエンドポイントを指定します。splitモードではComfyUI画面を開いたままでも、生成終了後にGPUを自動停止できます。FastH3はComfyUIと専用FastVideo workerの両方に対応します。`python -m ambient.cli` からモデル・実行エンジンを指定して生成、状態確認、キャンセル、結果取得ができ、ブラウザ画面は不要です。

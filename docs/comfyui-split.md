@@ -15,6 +15,21 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ./scripts/modal.sh deploy splitapp.py
 ```
 
+`ambient_app.py` 向けにAgentRuntime / Skills Loader / GeminiTools / Jevを使う場合は、
+`COMFYUI_AMBIENT_MODE=on` とGitHub取得用Modal Secretを設定する。
+デプロイ後の最初のアイドル起動でprivateリポジトリの最新HEADを確認し、変更されたものだけ取得する。
+確認結果は保存し、以降の通常起動はGitHubにアクセスせず保存済みノードを再利用する。
+追加ノードの更新を取り込むときは `./scripts/modal.sh deploy splitapp.py` を再実行する。
+取得・検証に失敗しても有効な旧環境があれば再利用し、同じデプロイでは毎回更新を再試行しない。
+CPU/GPUは引き続きジョブに固定した同じ環境を使う。
+HTTPの入口は更新処理より先に起動する。ComfyUIの準備中はルートに起動段階と経過時間を表示し、
+完了後に自動で画面を開く。`GET /split/startup` は準備状態を返す。
+APIは短い起動待ちを最大20秒待ち、それ以上は `503` と `Retry-After: 2` を返す。
+この間の生成リクエストは受け付けず、更新や表示だけでGPUを起動しない。
+起動処理中だけCPUを維持し、完了後は通常の自動停止条件に戻す。
+旧環境の期限切れ整理は画面の起動完了から5分後以降のアイドル処理へ回す。
+[設定と更新・復帰の動作](ambient.md#ambient用comfyuiの追加ノード)。既定はoff。
+
 検証用URLはModal Proxy Authを必須とする。Cloudflare Workerの既存
 `MODAL_ORIGINS` で新しいホスト名をこのURLへ向ければ、既存のAccess認証を使える。
 本番ホスト名の接続先は受け入れ検証後に切り替える。
@@ -22,15 +37,26 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ## 保存先
 
 - モデル・入力・出力は既存のVolumeを利用。
-- ユーザーデータは初回に `comfy-user-data` から `comfy-split-user-data` へ複製。
+- ユーザーデータは初回に `comfy-user-data` から `comfy-split-data/user/` へ複製。
   以後は独立して保存する。検証中の設定変更で従来環境を変更しない。
 - 既存custom nodeを初回に環境Volumeへコピーし、依存を復元する。
 - `comfy-split-environments`: ノード、仮想環境、検証したノード定義。
-- `comfy-split-state`: CPUが書くジョブ受付・状態・環境選択。
-- `comfy-split-results`: GPUが書くジョブごとの実行結果。
+- `comfy-split-data/state/`: CPUが書くジョブ受付・状態・環境選択。
+- `comfy-split-data/jobs/`: GPUが書くジョブごとの実行結果。
+
+Split専用Volumeは環境用とデータ用の2つ。過去の環境は保管せず、利用中・編集中・未完了処理が
+参照する環境と初期環境を残す。終了済みジョブの詳細は7日、一時ファイルは更新から24時間以上
+経過し、履歴や処理から参照されていなければ清掃する。通常の生成物・入力・保存済みワークフローは自動削除しない。
+清掃は起動中に行い、そのためにCPU/GPUを起動しない。[詳細と移行手順](../ambient/docs/split-storage.md)。
 
 GPUは入力のreload後に実行し、出力のcommit後に結果を保存する。
 CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを共有しない。
+`execution_success`・エラー通知も、出力の公開と履歴の保存が済むまで保留する。
+固定版フロントエンドのTotal表示は `executed` で完了数を数えるため、
+`progress_state` で完了した出力なしのノードにも空のUI結果を1回通知する。
+実際の画像・動画を含むUI結果は出力の公開後に通知する。
+待機・実行中・過去の履歴には受付日時を付け、旧形式の失敗履歴の不足項目も補う。
+これにより、失敗ジョブ1件によってMedia Assetsの一覧全体が読めなくなるのを防ぐ。
 一時出力は通常のローカル作業領域で生成し、外部側が出力Volumeの `.split-temp/<起動ID>/` へコピーする。
 履歴と完了イベントの参照を永続出力へ変換してから公開する。
 従来の `.split-temp/temp` に保存済みの一時出力も引き続き閲覧できる。
@@ -58,6 +84,12 @@ ComfyUI本体を変更せず、追加のcustom_nodes検索パスから読み込�
   「ノード更新を検証・反映」で依存確認、CPU起動、GPU検証を行い、有効環境を切り替える。
   失敗時は旧環境を維持し、「未反映の更新を破棄」で戻せる。
 
+Ambient StudioのMac Bridgeは未使用時に接続を解放します。認証付きの
+`POST /agent_runtime/bridge/idle` は、同じ接続を使う受付済みジョブや未返却の結果が
+あれば `idle: false` を返します。空なら投入処理と同じロック内で接続を無効化し、
+WebSocketを閉じます。これにより確認と切断の間に受け付けたジョブを失うことを防ぎます。
+通常の動画生成は継続し、CPUは既存のジョブ保持・アイドル時30秒停止の設定に従います。
+
 生成・待機ジョブがある場合はモード切替とノード更新を拒否する。
 ManagerからのComfyUI本体更新は提供せず、固定バージョンを再デプロイで更新する。
 主要CUDAパッケージ・フロントエンド・Managerの制約を依存インストールにも適用する。
@@ -68,19 +100,41 @@ ComfyUIの `/prompt`, `/queue`, `/history`, `/ws` と `/api/` プレフィック
 ジョブ一覧APIは外部キューのスナップショットを標準拡張へ渡して整形する。
 ComfyUI内部のキュー・履歴メソッドは差し替えない。
 
+Modal 1.1.4の標準Webサーバー中継は、ASGIのデコード済みパスを転送するため、
+`/userdata/workflows%2Fname.json` の保存・読み込みに失敗する。
+CPU入口は認証付きASGIアプリとし、`comfy_split/modal_proxy.py` でファイルパスを再エンコードして
+固定版ModalのHTTP/WebSocket中継へ渡す。`raw_path` が提供される環境ではそれを優先する。
+SDK更新時は `tests/test_modal_proxy.py` と
+公開URL経由のワークフロー保存・読み込みを確認する。
+
 追加API:
 
 - `GET /split/status`: モード、環境更新、結果不明ジョブ。
+- `GET /modal-control/v1/status`: 同じ状態を返すバージョン付きAPI。`api_version: 1`。
 - `POST /split/mode`: `{"mode":"split"}` または `{"mode":"legacy"}`。
 - `POST /split/environment/apply`: 候補環境を作成・検証して反映。
 - `POST /split/environment/discard`: 未反映の候補を破棄。
 - `/prompt` の `Idempotency-Key` ヘッダー: 同一キー・同一内容の再送を重複受付しない。
+- `POST /jobs/<id>/cancel`: 指定ジョブの待機キャンセル、またはそのGPU workerへの中断指示。
+
+[Ambient](ambient.md)はCPUの `ui` URLを接続先にする。モデル確認、WebSocket接続、
+結果取得はCPU側で処理し、H3とComfyUI版FastH3の生成をこのキューへ投入する。
+`X-Modal-Execution-Mode: split` を付けたリクエストは、従来モードでは409を返す。
+事前の状態確認後にモードが変わっても、Ambientのリクエストを従来モードのGPUへ転送しない。
+通常のComfyUI画面はこのヘッダーを送らず、従来どおりモードを切り替えて使える。
+
+`/modal-control/v1/status` の `dependencies` は実行中のCPU ComfyUI環境の
+comfy-kitchen版、固定版、必要APIの不足を返す。GPUカーネルの動作検証とは区別する。
+comfy-kitchenは上流ComfyUIの指定版を固定依存に含め、イメージ構築時と仮想環境の
+適用時に検査する。古いVolume上の仮想環境が別版を優先している場合はCPU側の
+レポートに反映し、AmbientのFastH3生成前に検出する。修復は既存の環境更新手順で行う。
 
 GPU呼び出し前にdispatch intentを保存し、呼び出しIDを取得後に保存する。
 CPUが間で停止してIDを記録できなかった場合は `unknown` とし、結果記録を待つ。
 結果不明のジョブは自動再実行せず、後続投入の実行も停止する。
-管理者はModalのGPU呼び出しとresults Volumeを確認してから復旧する。
+管理者はModalのGPU呼び出しと`comfy-split-data/jobs/`を確認してから復旧する。
 ネットワークエラーだけを根拠に再投入しない。
+GPU関数の実行タイムアウトは失敗として確定し、結果待ちのポーリングタイムアウトと区別する。
 
 GPU側も実行前に開始記録をcommitする。[Modalのプリエンプション](https://modal.com/docs/guide/preemption)
 では同じ入力が再開されるため、開始記録のみ残っている場合は `unknown` とし、再実行しない。
@@ -141,11 +195,10 @@ GPU状態は標準ツールバー内の独立したボタンにも常時表示�
 
 台数表示は `GPU(0)` の形式とし、稼働中は赤、取得失敗時は `GPU(?)` とする。
 
-
 ## 本体への介入の削減
 
 | 処理 | 変更前 | 現在 |
-|---|---|---|
+| --- | --- | --- |
 | 起動 | 独自bootからmainをimportして起動 | 通常の `python main.py` |
 | CPU生成スレッド | `main.prompt_worker` を無効化 | 標準のスレッドを使用、投入されないため待機 |
 | キュー読み取り | 3メソッドを上書き | 上書きなし。外部ゲートウェイと拡張ルートで提供 |
@@ -174,3 +227,27 @@ split前のWebSocket圧縮・user_managerソースパッチは、この分離構
 - CPU再起動後の履歴・ジョブ詳細・画像の復元と、実行中ジョブが再投入されないことを確認する。
 - 実ブラウザで標準画面・GPU表示・生成履歴・画像表示を確認する。
 - Managerの応答、追加済みノードの保持、Image Browsingのファイル操作を確認する。
+
+
+## Studio の生成モードと秒数
+
+Split の `/ambient/workflows` は従来6モードに加えて、`h3-ref2v`、
+`fasth3-8step-i2v-vsa`、`fasth3-vsa-4step-i2v` を登録する。
+新レシピは `comfy_split/generation.py` に置き、旧 Ambient API のモードは増やさない。
+Ref2V は既存Volumeの Ref2VA INT8（prunedがあれば優先）を使う。
+モデルの自動ダウンロードは行わず、必要なモデルやノードがない場合は登録しない。
+8ステップはV2モデル＋SigmaShift 10/3＋BlockSparseAttention VSA、
+4ステップは同じモデル＋SigmaShift 12/3＋SolAttnMiniMax VSAとManualSigmasを使う。
+4ステップは実験用。SolAttnMiniMax v5は出典とSHA-256を記録して同梱し、
+CPU/GPU共通の追加ノードパスへ置く。既存Volume上のノードは書き換えない。
+
+全動画モードが `length` バインドを公開する。Studioが秒数を24fps・17k+5へ補正し、
+接続先ノードの範囲を検証する。省略時は従来の124フレーム。
+更新前に保存した既知のH3グラフでlengthバインドがない場合は、初回カタログ読み込みで
+現在版を新しい版へ移し、Ambient所有のlengthを追加する。グラフ、モデル、レイアウト、
+他の入力所有権、旧版、受付済みジョブは変更しない。
+明示的にワークフロー所有としたlengthはそのまま維持する。
+
+Ref2Vの `references` は順序付き1〜9枚の `ref_images.ref_image_0…` を一組として扱う。
+保存したレシピを再利用しても各ジョブの画像構成で置き換え、前の余剰画像を残さない。
+ComfyUIのAmbientパネルではlength／referencesも他の入力と同様に所有権を選択できる。

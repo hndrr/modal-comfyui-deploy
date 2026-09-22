@@ -15,10 +15,14 @@ import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
+from comfy_split import storage
+from comfy_split import ambient_nodes
+from comfy_split.ambient_workflows import WorkflowRegistry, validate_template, pin_references
+from comfy_split.agent_bridge import AgentBridge, PREFIX as BRIDGE_PREFIX, requires_bridge
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
-from comfy_split.state import ACTIVE, Journal, write_json
+from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
 
@@ -33,11 +37,12 @@ def manager_path(path):
 
 
 class Controller:
-    def __init__(self, worker, events, commands, volumes, root=Path("/state"), *, ui_function=None):
+    def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
+                 warmed_cpu=None):
         self.worker, self.events, self.commands, self.volumes = worker, events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
-        self.cpu = ComfyProcess("cpu", 8187)
+        self.cpu = warmed_cpu or ComfyProcess("cpu", 8187)
         self.candidate = ComfyProcess("candidate", 8190)
         self.sockets = {}
         self.task = None
@@ -50,6 +55,70 @@ class Controller:
         self.ui_function = ui_function
         self.cpu_pinned = None
         self.cpu_scaling_lock = asyncio.Lock()
+        self.cleanup_due = 0.0
+        self.bridge = AgentBridge(self)
+        self.ambient_workflows = WorkflowRegistry(self.journal.data)
+        self.ambient_templates_loaded = False
+        self.starting = False
+        self.startup_phase = "initializing"
+        self.snapshot_status = None
+
+    async def cleanup_storage(self):
+        """Caller holds the controller lock; metadata reads never start a GPU."""
+        if self.starting or self.background_work() or self.journal.data["mode"] != "split":
+            return
+        if time.monotonic() < self.cleanup_due:
+            return
+        self.cleanup_due = time.monotonic() + 5
+        stats = await self.worker.get_current_stats.aio()
+        if stats.num_total_runners or stats.backlog:
+            return
+        data = self.journal.data
+        environment_volume = self.volumes["environment"]
+        environments = [Path(entry.path).name async for entry in
+                        environment_volume.iterdir.aio("/", recursive=False)]
+        receipts = await storage.remote_receipts(self.volumes["data"])
+        temporary = await storage.remote_files(self.volumes["output"], "/.split-temp")
+        live = ["temp"] if self.cpu.process and self.cpu.process.returncode is None else []
+        plan = storage.cleanup_plan(data, environments, receipts, temporary,
+                                    live_temp_namespaces=live,
+                                    snapshot_environments=await storage.snapshot_environments(environment_volume))
+        # A durable tombstone precedes every receipt deletion, including old
+        # validation/legacy sessions that no longer appear in the main journal.
+        self.journal.retire(plan["expired_jobs"])
+        result_statuses = {entry["path"]: entry["result"].get("status") for entry in receipts}
+        for name in plan["receipts"]:
+            job_id = name.removesuffix(".started.json") if name.endswith(".started.json") else name[:-5]
+            data["retired_jobs"].setdefault(job_id, {"id": job_id,
+                "status": result_statuses.get(job_id + ".json") or "failed"})
+        await self.persist()
+        for name in plan["receipts"]:
+            with contextlib.suppress(FileNotFoundError):
+                await self.volumes["data"].remove_file.aio("/jobs/" + name)
+        for version in plan["environments"]:
+            with contextlib.suppress(FileNotFoundError):
+                await environment_volume.remove_file.aio("/" + version, recursive=True)
+        if not data.get("core_copy_pruned") and not plan["unresolved_receipts"]:
+            async for entry in environment_volume.iterdir.aio("/base/comfy", recursive=False):
+                if Path(entry.path).name != "custom_nodes":
+                    await environment_volume.remove_file.aio(entry.path, recursive=True)
+            data["core_copy_pruned"] = True
+            await self.persist()
+        for relative in plan["temporary_files"]:
+            with contextlib.suppress(FileNotFoundError):
+                await self.volumes["output"].remove_file.aio("/.split-temp/" + relative)
+        parents = {parent for relative in plan["temporary_files"] for parent in Path(relative).parents
+                   if parent != Path(".")}
+        for parent in sorted(parents, key=lambda path: len(path.parts), reverse=True):
+            path = "/.split-temp/" + parent.as_posix()
+            with contextlib.suppress(FileNotFoundError):
+                entries = [entry async for entry in self.volumes["output"].iterdir.aio(path, recursive=False)]
+                if not entries:
+                    await self.volumes["output"].remove_file.aio(path, recursive=True)
+        self.cleanup_due = time.monotonic() + 300
+        if any(plan[key] for key in ("expired_jobs", "receipts", "environments", "temporary_files")):
+            log.info("Storage cleanup: %s", {key: len(plan[key]) for key in (
+                "expired_jobs", "receipts", "environments", "temporary_files")})
 
     def background_work(self):
         data = self.journal.data
@@ -62,6 +131,7 @@ class Controller:
         if self.ui_function is None:
             return
         async with self.cpu_scaling_lock:
+            needed = needed or self.starting
             if self.cpu_pinned == needed:
                 return
             await self.ui_function.update_autoscaler.aio(min_containers=int(needed))
@@ -122,13 +192,13 @@ class Controller:
         if self.background_work():
             await self.pin_cpu(True)
         self.journal.save()
-        await self.volumes["state"].commit.aio()
+        await self.volumes["data"].commit.aio()
 
     async def start(self, app):
         self.client = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
         await asyncio.to_thread(initialize_environment)
         await self.volumes["environment"].commit.aio()
-        await self.volumes["user"].commit.aio()
+        await self.volumes["data"].commit.aio()
         self.journal.recover()
         candidate = self.journal.data["candidate"]
         session = self.journal.data["session"]
@@ -136,13 +206,78 @@ class Controller:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
+        await self.refresh_ambient_nodes()
+        self.startup_phase = "starting_comfy"
+        warm_process = self.cpu.process
         if self.journal.data["mode"] == "split":
             await self.cpu.start(self.journal.data["environment"], cpu=True)
+        else:
+            await self.cpu.stop()
+        if self.snapshot_status is not None:
+            self.snapshot_status["reused"] = (warm_process is not None and
+                self.cpu.process is warm_process and self.cpu.version is not None and
+                self.cpu.version == self.snapshot_status.get("environment"))
+        # Retention can remove large old environments. Let the UI and first
+        # requests finish before the dispatcher performs normal idle cleanup.
+        self.cleanup_due = time.monotonic() + 300
         self.task = asyncio.create_task(self.dispatch())
         if candidate and candidate["status"] == "validating" and session:
             self.apply_task = asyncio.create_task(self.apply_environment(resume=True))
 
+    async def refresh_ambient_nodes(self):
+        if not ambient_nodes.enabled():
+            return
+        data = self.journal.data
+        if data["mode"] != "split" or self.journal.busy() or data["candidate"] or data["session"]:
+            log.info("Ambient node refresh deferred until an idle CPU startup")
+            return
+        previous = data["environment"]
+        deployment = os.environ.get(ambient_nodes.DEPLOYMENT_ENV, "unversioned")
+        revisions = await asyncio.to_thread(ambient_nodes.snapshot_revisions, previous)
+        last_refresh = data.get(ambient_nodes.REFRESH_KEY) or {}
+        if (revisions and last_refresh.get("deployment") == deployment
+                and last_refresh.get("revisions") == revisions):
+            log.info("Ambient nodes reused without GitHub access: %s (last update: %s)",
+                     previous, last_refresh.get("status"))
+            return
+        started = time.monotonic()
+        self.startup_phase = "updating_nodes"
+        await self.pin_cpu(True)
+        try:
+            try:
+                version = await asyncio.to_thread(ambient_nodes.prepare_environment, previous)
+                if version is not None:
+                    # Validate imports without starting a GPU or running any node/API task.
+                    self.startup_phase = "validating_nodes"
+                    await self.candidate.start(version, cpu=True)
+                    ambient_nodes.check_catalog(await self.candidate.catalog(self.client))
+            except Exception:
+                log.exception("Ambient node refresh failed; keeping environment %s", previous)
+                if revisions:
+                    # A valid previous snapshot remains usable. Do not delay every
+                    # cold start with the same failed update; redeploy to retry.
+                    data[ambient_nodes.REFRESH_KEY] = {"deployment": deployment,
+                        "revisions": revisions, "status": "failed", "checked_at": time.time()}
+                    await self.persist()
+                return
+            finally:
+                await self.candidate.stop()
+            # Commit the complete snapshot before any new job can reference it.
+            if version is not None:
+                await self.volumes["environment"].commit.aio()
+                data["environment"] = version
+            data[ambient_nodes.REFRESH_KEY] = {"deployment": deployment,
+                "revisions": await asyncio.to_thread(ambient_nodes.snapshot_revisions,
+                                                     data["environment"]),
+                "status": "updated" if version else "unchanged", "checked_at": time.time()}
+            await self.persist()
+            log.info("Ambient nodes checked for deployment: %s -> %s (%.2fs)",
+                     previous, data["environment"], time.monotonic() - started)
+        finally:
+            await self.pin_cpu(False)
+
     async def close(self, app):
+        await self.bridge.close()
         await self.close_candidate_relays()
         for task in (self.task, self.apply_task):
             if task:
@@ -155,6 +290,15 @@ class Controller:
             await self.client.close()
 
     async def broadcast(self, event, client_id=None):
+        # Mirror events are namespaced and correlated to a prompt, never injected
+        # into unrelated browser sessions' native execution state.
+        if client_id and isinstance(event, dict) and event.get("data", {}).get("prompt_id"):
+            job = self.journal.data["jobs"].get(event["data"]["prompt_id"])
+            meta = job and job.get("body", {}).get("extra_data", {}).get("ambient")
+            if meta:
+                job["ambient_event"] = event
+                await self.broadcast({"type": "ambient_execution", "data": {
+                    "sessionId": meta["sessionId"], "stage": meta["stage"], "event": event}})
         targets = list(self.sockets.items())
         for sid, sockets in targets:
             if client_id and sid != client_id:
@@ -177,13 +321,20 @@ class Controller:
         await self.commands.put.aio({"type": type_}, partition=session_id)
 
     async def spawn(self, record, operation):
+        if record.get("agent_bridge"):
+            try:
+                if record["agent_bridge"] != self.bridge.identity():
+                    raise ValueError("Mac Bridgeの接続が変わりました。再実行してください。")
+            except ValueError as error:
+                await self.finish(record, {"status": "failed", "error": str(error)})
+                return
         # Persist intent BEFORE spawn. A crash between spawn and call-id commit
         # leaves an unknown job, which recovery must never blindly resubmit.
         record["status"] = "dispatching"
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
                 "environment": record["environment"]}
-        for key in ("body", "token"):
+        for key in ("body", "token", "agent_bridge"):
             if key in record:
                 spec[key] = record[key]
         call = await self.worker.spawn.aio(spec)
@@ -192,59 +343,113 @@ class Controller:
         await self.persist()
 
     async def read_result(self, record):
-        await self.volumes["results"].reload.aio()
-        path = Path("/results") / (record["id"] + ".json")
-        if path.exists():
-            return json.loads(path.read_text())
+        try:
+            return await storage.read_json(self.volumes["data"], "jobs/" + record["id"] + ".json")
+        except FileNotFoundError:
+            pass
         if not record.get("call_id"):
             return None
         call = modal.FunctionCall.from_id(record["call_id"])
         try:
             return await call.get.aio(timeout=0)
+        except modal.exception.FunctionTimeoutError as error:
+            # This is a terminal worker failure, unlike a poll with no result yet.
+            return {"status": "failed", "error": str(error)}
         except (TimeoutError, modal.exception.TimeoutError):
             return None
         except Exception as error:
             # FunctionCall failure is terminal; a network failure is not.
-            if isinstance(error, (modal.exception.FunctionTimeoutError,
-                                  modal.exception.RemoteError)) or any(
+            if isinstance(error, modal.exception.RemoteError) or any(
                     frame.filename.startswith("<ta-") for frame in traceback.extract_tb(error.__traceback__)):
                 return {"status": "failed", "error": str(error)}
             raise
 
-    async def drain_events(self, record):
-        for event in await self.events.get_many.aio(100, block=False, partition=record["id"]):
-            if event["type"] == "legacy_ready":
-                record["url"] = event["url"]
-                await self.persist()
-            elif event["type"] in {"event", "preview"}:
-                data = event.get("event", event.get("data"))
-                # Files referenced in executed events may not be committed yet.
-                if isinstance(data, dict) and data.get("type") == "executed":
-                    record.setdefault("deferred_events", []).append(data)
-                else:
-                    await self.broadcast(data, record.get("body", {}).get("client_id"))
+    async def drain_events(self, record, *, all_pending=False):
+        while True:
+            events = await self.events.get_many.aio(100, block=False, partition=record["id"])
+            for event in events:
+                await self.relay_event(record, event)
+            if not all_pending or len(events) < 100:
+                break
+
+    async def relay_event(self, record, event):
+        if event["type"] == "legacy_ready":
+            record["url"] = event["url"]
+            await self.persist()
+        elif event["type"] == "agent_bridge_ready":
+            try:
+                await self.bridge.attach(record, event)
+            except Exception:
+                # Do not persist/log the tunnel bearer token from the event.
+                log.warning("AgentRuntime Bridge connection failed for %s", record["id"])
+                await self.command(record["id"], "agent_bridge_error")
+            else:
+                await self.command(record["id"], "agent_bridge_connected")
+        elif event["type"] in {"event", "preview"}:
+            data = event.get("event", event.get("data"))
+            kind = data.get("type") if isinstance(data, dict) else None
+            # Terminal notifications are reconstructed from durable history
+            # in finish(), after output reload and journal persistence.
+            if kind in {"execution_success", "execution_error", "execution_interrupted"}:
+                return
+            # Files referenced in executed events may not be committed yet.
+            if kind == "executed":
+                record.setdefault("deferred_events", []).append(data)
+            else:
+                await self.broadcast(data, record.get("body", {}).get("client_id"))
+            # Frontend 1.52 counts `executed`/`execution_cached` for Total,
+            # while core reports non-output node completion in progress_state.
+            # Emit one empty UI result only for those genuinely finished
+            # prompt nodes; leave real UI results and expanded child IDs alone.
+            if kind in {"executed", "execution_cached", "progress_state"}:
+                detail = data.get("data", {})
+                notified = record.setdefault("completed_nodes", [])
+                if kind == "executed":
+                    notified.append(str(detail["node"]))
+                elif kind == "execution_cached":
+                    notified.extend(str(node) for node in detail.get("nodes", []))
+                elif detail.get("prompt_id") == record["id"]:
+                    prompt = record.get("body", {}).get("prompt", {})
+                    for node_id, node in detail.get("nodes", {}).items():
+                        if node.get("state") != "finished" or node_id not in prompt or node_id in notified:
+                            continue
+                        notified.append(node_id)
+                        await self.broadcast({"type": "executed", "data": {
+                            "prompt_id": record["id"], "node": node_id,
+                            "display_node": node.get("display_node_id", node_id), "output": {},
+                        }}, record.get("body", {}).get("client_id"))
 
     async def finish(self, record, result):
+        # A result can arrive while more than one dispatch batch remains queued.
+        await self.drain_events(record, all_pending=True)
+        await self.bridge.detach(record["id"])
         await self.volumes["output"].reload.aio()
         record.update({key: value for key, value in result.items()
                        if key in {"status", "error", "history", "seconds"}})
         record["finished_at"] = time.time()
-        if not record.get("history"):
-            record["history"] = {
-                "prompt": [record.get("number", 0), record["id"], record.get("body", {}).get("prompt", {}), {}, []],
-                "outputs": {}, "status": {"status_str": "error", "completed": False,
-                "messages": [["execution_error", {"prompt_id": record["id"],
-                               "exception_message": str(record.get("error", "Execution failed"))}]]},
-            }
+        record["history"] = job_history(record)
+        deferred = record.pop("deferred_events", [])
+        record.pop("completed_nodes", None)
         await self.persist()
-        for event in record.pop("deferred_events", []):
+        self.cleanup_due = 0
+        delivered = set()
+        for event in deferred:
             await self.broadcast(event, record.get("body", {}).get("client_id"))
-        if record["status"] == "failed":
-            await self.broadcast({"type": "execution_error", "data": {
-                "prompt_id": record["id"], "node_id": "", "node_type": "",
-                "executed": [], "exception_type": "RemoteExecutionError",
-                "exception_message": str(record.get("error", "生成に失敗しました")),
-                "traceback": []}}, record.get("body", {}).get("client_id"))
+            delivered.add(str(event["data"]["node"]))
+        # Queue overflow/disconnection must not lose saved node previews.
+        for node_id, output in record["history"]["outputs"].items():
+            if node_id not in delivered:
+                meta = record["history"].get("meta", {}).get(node_id, {})
+                await self.broadcast({"type": "executed", "data": {
+                    "prompt_id": record["id"], "node": node_id,
+                    "display_node": meta.get("display_node", node_id), "output": output,
+                }}, record.get("body", {}).get("client_id"))
+        terminal = {"completed": "execution_success", "cancelled": "execution_interrupted"}.get(
+            record["status"], "execution_error")
+        messages = record["history"].get("status", {}).get("messages", [])
+        detail = next((data for kind, data in reversed(messages) if kind == terminal),
+                      {"prompt_id": record["id"], "timestamp": int(record["finished_at"] * 1000)})
+        await self.broadcast({"type": terminal, "data": detail}, record.get("body", {}).get("client_id"))
         await self.broadcast({"type": "executing", "data": {"node": None, "prompt_id": record["id"]}})
         await self.status()
 
@@ -281,6 +486,7 @@ class Controller:
                                 await self.volumes["models"].reload.aio()
                                 await self.spawn(job, "generate")
                                 await self.status()
+                    await self.cleanup_storage()
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
                 raise
@@ -290,13 +496,13 @@ class Controller:
 
     async def end_legacy(self, result):
         await self.volumes["output"].reload.aio()
-        await self.volumes["user"].reload.aio()
+        await self.volumes["data"].reload.aio()
         for job_id, history in result.get("legacy_history", {}).items():
             if job_id not in self.journal.data["jobs"]:
                 self.journal.data["jobs"][job_id] = {
                     "id": job_id, "number": history["prompt"][0],
                     "body": {"prompt": history["prompt"][2]}, "status": "completed",
-                    "history": history, "created_at": time.time(), "error": None}
+                    "history": history, "created_at": time.time(), "finished_at": time.time(), "error": None}
         await self.cpu.start(self.journal.data["environment"], cpu=True)
         self.journal.data.update(mode="split", session=None)
         await self.persist()
@@ -343,6 +549,7 @@ class Controller:
                 continue
             if job["status"] == "queued":
                 job["status"] = "cancelled"
+                job["finished_at"] = time.time()
             elif job["status"] in {"dispatching", "running"}:
                 await self.command(job_id, "interrupt")
         await self.persist()
@@ -354,9 +561,11 @@ class Controller:
             if desired == self.journal.data["mode"]:
                 return web.json_response({"mode": desired})
             if desired == "legacy":
+                if self.bridge.socket is not None:
+                    raise ValueError("Mac Bridgeを切断してからモードを切り替えてください。")
                 self.journal.assert_idle()
                 await self.volumes["input"].commit.aio()
-                await self.volumes["user"].commit.aio()
+                await self.volumes["data"].commit.aio()
                 await self.cpu.stop()
                 session = {"id": str(uuid.uuid4()), "operation": "legacy",
                            "environment": self.journal.data["environment"],
@@ -476,6 +685,7 @@ class Controller:
             async with self.lock:
                 self.journal.data.update(environment=version, candidate=None, session=None)
                 await self.persist()
+                self.cleanup_due = 0
             await self.broadcast({"type": "split_environment", "data": {"status": "ready"}})
         except Exception as error:
             log.exception("Environment validation failed")
@@ -540,10 +750,16 @@ class Controller:
         try:
             if path.startswith("/_split/"):
                 raise web.HTTPNotFound()
+            if path.startswith(BRIDGE_PREFIX + "/"):
+                if not ambient_nodes.enabled():
+                    raise web.HTTPNotFound()
+                if self.journal.data["mode"] != "split" or self.journal.data["candidate"]:
+                    raise ValueError("Bridgeは環境更新が完了した分離モードで接続してください。")
+                return await self.bridge.handle(request)
             if path == "/view" and request.query.get("type") == "temp":
                 # Previously persisted temp references remain readable after the
                 # normal ComfyUI startup cleanup has been restored.
-                root = Path("/data/output/.split-temp/temp").resolve()
+                root = (storage.TEMP_ARCHIVE / "temp").resolve()
                 file = (root / request.query.get("subfolder", "") / request.query.get("filename", "")).resolve()
                 if not file.is_relative_to(root):
                     raise web.HTTPForbidden()
@@ -552,6 +768,7 @@ class Controller:
             if path in {"/split/status", "/modal-control/v1/status"}:
                 data = self.journal.data
                 return web.json_response({"api_version": 1, "mode": data["mode"], "environment": data["environment"],
+                    "dependencies": getattr(self.cpu, "dependencies", {}),
                     "gpu": await self.gpu_status(),
                     "candidate": data["candidate"], "busy": self.journal.busy(),
                     "transitioning": bool(data["session"] and (
@@ -567,6 +784,7 @@ class Controller:
                     await self.candidate.stop()
                     self.journal.data["candidate"] = None
                     await self.persist()
+                    self.cleanup_due = 0
                 return web.json_response({"status": "discarded"})
             if path == "/split/environment/apply" and request.method == "POST":
                 async with self.lock:
@@ -577,6 +795,8 @@ class Controller:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
             if self.journal.data["mode"] == "legacy":
+                if request.headers.get("X-Modal-Execution-Mode") == "split":
+                    return web.json_response({"error": "This client requires split mode."}, status=409)
                 session = self.journal.data["session"]
                 if not session or not session.get("url") or session.get("stopping"):
                     return web.json_response({"error": "GPUの起動・モード切替中です。"}, status=503,
@@ -601,11 +821,85 @@ class Controller:
             if path == "/prompt" and request.method == "POST":
                 body = await request.json()
                 async with self.lock:
-                    job = self.journal.enqueue(body, request.headers.get("Idempotency-Key"))
+                    # Mode may have changed while the request body was being read.
+                    if self.journal.data["mode"] != "split":
+                        raise ValueError("This client requires split mode.")
+                    request_id = request.headers.get("Idempotency-Key")
+                    existing = request_id and any(j.get("request_id") == request_id for j in (
+                        *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
+                    bridge_id = self.bridge.identity() if requires_bridge(body) and not existing else None
+                    body = self.ambient_workflows.prepare(body)
+                    job = self.journal.enqueue(body, request_id)
+                    if bridge_id and job["status"] == "queued":
+                        job.setdefault("agent_bridge", bridge_id)
                     await self.volumes["input"].commit.aio()
                     await self.persist()
                 await self.status()
                 return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
+            if path.startswith("/ambient/"):
+                if path == "/ambient/workflows" and request.method == "GET":
+                    if not self.ambient_templates_loaded:
+                        from comfy_split.generation import workflow, MODES
+                        from ambient.tagging import recipe
+                        from comfy_split.ambient_workflows import h3_metadata
+                        response = await self.objects("/object_info")
+                        objects = json.loads(response.body)
+                        async with self.lock:
+                            req = {"requestId": "00000000-0000-4000-8000-000000000000",
+                                   "sessionId": "00000000-0000-4000-8000-000000000000",
+                                   "workflowRevision": 0, "prompt": "A quiet natural scene",
+                                   "sound": "Soft ambient sounds", "seed": 42, "resolution": "preview"}
+                            for mode in MODES:
+                                try:
+                                    graph = workflow({**req, "mode": mode}, object_info=objects)
+                                    metadata = h3_metadata({**req, "mode": mode}, graph)
+                                    self.ambient_workflows.state["defaults"][mode] = {
+                                        "graph": graph, "bindings": metadata["bindings"], "outputs": metadata["outputs"], "workflow": None}
+                                except ValueError:
+                                    pass  # Missing models/nodes are reported by normal readiness checks.
+                            if "JevInterpret" in objects:
+                                self.ambient_workflows.prepare(recipe({}, req["sessionId"], 0))
+                            templates = json.loads((Path(__file__).parent.parent / "ambient" / "bridge_templates.json").read_text())
+                            for stage, template in templates.items():
+                                if all(node["class_type"] in objects for node in template["graph"].values()):
+                                    self.ambient_workflows.state["defaults"][stage] = template
+                            self.ambient_workflows.upgrade_lengths()
+                            await self.persist()
+                            self.ambient_templates_loaded = True
+                    return web.json_response(self.ambient_workflows.describe())
+                if path.startswith("/ambient/workflows/") and request.method == "GET":
+                    return web.json_response(self.ambient_workflows.describe(int(path.rsplit("/", 1)[-1])))
+                if path in {"/ambient/workflows/apply", "/ambient/workflows/validate"} and request.method == "POST":
+                    payload = await request.json()
+                    response = await self.objects("/object_info")
+                    objects = json.loads(response.body)
+                    async with self.lock:
+                        if path.endswith("/validate"):
+                            validate_template(payload["template"], self.ambient_workflows.state["defaults"][payload["stage"]], objects)
+                            return web.json_response({"valid": True})
+                        if payload["expectedRevision"] != self.ambient_workflows.state["revision"]:
+                            raise ValueError("Workflow changed on another device. Reload before applying.")
+                        validate_template(payload["template"], self.ambient_workflows.state["defaults"][payload["stage"]], objects)
+                        template = await asyncio.to_thread(pin_references, payload["template"], self.volumes["input"])
+                        result = self.ambient_workflows.apply(payload["stage"], template, payload["expectedRevision"], objects)
+                        await self.persist()
+                    await self.broadcast({"type": "ambient_workflows", "data": {"revision": result["revision"]}})
+                    return web.json_response(result)
+                if path.startswith("/ambient/executions") and request.method == "GET":
+                    records = []
+                    for job in self.journal.data["jobs"].values():
+                        meta = job.get("body", {}).get("extra_data", {}).get("ambient")
+                        if not meta or (request.query.get("sessionId") and meta["sessionId"] != request.query["sessionId"]):
+                            continue
+                        if path != "/ambient/executions" and job["id"] != path.rsplit("/", 1)[-1]:
+                            continue
+                        records.append({"id": job["id"], "status": job["status"], "createdAt": job["created_at"],
+                                        "graph": job["body"]["prompt"], "meta": meta,
+                                        "workflow": meta.get("layout") or job["body"].get("extra_data", {}).get("extra_pnginfo", {}).get("workflow"),
+                                        "event": job.get("ambient_event"), "outputs": (job.get("history") or {}).get("outputs", {})})
+                    records.sort(key=lambda item: item["createdAt"], reverse=True)
+                    return web.json_response({"executions": records[:100]})
+                return web.json_response({"error": "Unknown Ambient route"}, status=404)
             if (path == "/jobs" or path.startswith("/jobs/")) and request.method == "GET":
                 async with self.client.post(self.cpu.url + "/_split/jobs", json={
                     "queue": self.journal.queue(), "history": self.journal.history(),
@@ -661,7 +955,7 @@ class Controller:
             # local and can return unsupported, rather than triggering inference.
             async def commit_files():
                 await asyncio.to_thread(self.cpu.archive_temp, legacy_paths=True)
-                for name in ("input", "user", "output"):
+                for name in ("input", "data", "output"):
                     await self.volumes[name].commit.aio()
             return await proxy(request, self.client, self.cpu.url,
                 before_response=commit_files if request.method in {"POST", "PUT", "DELETE"} else None)
@@ -675,9 +969,13 @@ class Controller:
         catalog_path = environment_path(self.journal.data["environment"]) / "catalog.json"
         if catalog_path.exists():
             catalog = json.loads(catalog_path.read_text())
+            # Ambient packs are CPU-importable and always use live definitions.
+            # Old GPU catalogs must not resurrect removed or disabled node IDs.
+            catalog["objects"] = {name: definition for name, definition in catalog["objects"].items()
+                                  if not ambient_nodes.is_ambient_node(definition)}
             # Live CPU definitions take precedence so model/file choices stay fresh.
             for name, sections in catalog.get("choice_sources", {}).items():
-                if name in objects:
+                if name in objects or name not in catalog["objects"]:
                     continue
                 for section, fields in sections.items():
                     for field, folder in fields.items():
@@ -732,20 +1030,26 @@ class Controller:
 
 
 def application(controller):
+    from comfy_split.startup import StartupGate
+
+    startup = StartupGate(controller)
     app = web.Application(client_max_size=1024 ** 3)
-    app.router.add_route("*", "/{path:.*}", controller.handle)
-    app.on_startup.append(controller.start)
-    app.on_cleanup.append(controller.close)
+    app.router.add_route("*", "/{path:.*}", startup.handle)
+    app.on_startup.append(startup.start)
+    app.on_cleanup.append(startup.close)
     return app
+
+
+def make_controller(volumes=None, *, warmed_cpu=None):
+    names = json.loads(os.environ["SPLIT_VOLUMES"])
+    volumes = volumes or {key: modal.Volume.from_name(name) for key, name in names.items()}
+    app_name = os.environ["SPLIT_APP"]
+    return Controller(modal.Function.from_name(app_name, "gpu_worker"),
+        modal.Queue.from_name(app_name + "-events", create_if_missing=True),
+        modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
+        ui_function=modal.Function.from_name(app_name, "ui"), warmed_cpu=warmed_cpu)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    names = json.loads(os.environ["SPLIT_VOLUMES"])
-    volumes = {key: modal.Volume.from_name(name) for key, name in names.items()}
-    app_name = os.environ["SPLIT_APP"]
-    controller = Controller(modal.Function.from_name(app_name, "gpu_worker"),
-        modal.Queue.from_name(app_name + "-events", create_if_missing=True),
-        modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
-        ui_function=modal.Function.from_name(app_name, "ui"))
-    web.run_app(application(controller), host="0.0.0.0", port=8000)
+    web.run_app(application(make_controller()), host="0.0.0.0", port=8000)
