@@ -15,10 +15,10 @@
 
 Managerで環境を変更した後も正しい環境で実行するが、古いSnapshotしかない実行先では通常起動になる。新しい環境の起動時間も短縮するには`splitapp.py`を再デプロイし、Snapshotを更新する。環境Volumeの変更だけでModalのSnapshotを作り直すことはできない。古い環境の保護は、そのデプロイへのロールバックも不要になり、対応するSnapshotを復元しないことを確認してから解除する。
 
-読み取り専用の実機確認は次のコマンドで行う。起動間にはCPUが0台になるまで待ち、生成を投入せずにAPI・WebSocket・ノード定義・内部ルートの遮断を確認する。
+読み取り専用の実機確認は次のコマンドで行う。`<profile>`は検証対象のModalプロファイル名に置き換える。起動間にはCPUが0台になるまで待ち、生成を投入せずにAPI・WebSocket・ノード定義・内部ルートの遮断を確認する。
 
 ```sh
-MODAL_PROFILE=tarotieee .venv/bin/python scripts/verify_cpu_snapshot.py \
+MODAL_PROFILE="<profile>" .venv/bin/python scripts/verify_cpu_snapshot.py \
   --output /private/tmp/cpu-snapshot-boots.json --boots 2
 ```
 
@@ -85,7 +85,7 @@ Modalは実行先のワーカーの種類ごとにSnapshotを作成するため�
 
 ```sh
 scripts/modal.sh deploy scripts/probe_cpu_snapshot.py
-MODAL_PROFILE=tarotieee .venv/bin/python scripts/probe_cpu_snapshot.py \
+MODAL_PROFILE="<profile>" .venv/bin/python scripts/probe_cpu_snapshot.py \
   --output /private/tmp/comfy-cpu-snapshot-results
 scripts/modal.sh app stop comfyui-cpu-snapshot-probe
 ```
