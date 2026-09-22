@@ -158,6 +158,43 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.worker.spawn.aio.assert_not_awaited()
             self.assertFalse(socket.closed)
 
+    async def test_catalog_upgrades_saved_length_and_accepts_new_split_recipes(self):
+        from copy import deepcopy
+        from test_split_generation import objects
+        from comfy_split.generation import workflow, MODES
+        from comfy_split.ambient_workflows import h3_metadata
+
+        info = objects()
+        req = request(mode="h3-turbo-4step", sessionId="00000000-0000-4000-8000-000000000000", workflowRevision=0)
+        graph = workflow(req, object_info=info)
+        meta = h3_metadata(req, graph)
+        del meta["bindings"]["length"]
+        registry = self.control.ambient_workflows
+        registry.prepare({"prompt": graph, "extra_data": {"ambient": meta}})
+        old = deepcopy(registry.describe()["stages"][req["mode"]])
+        old["graph"]["4"]["inputs"]["vae_name"] = "custom-video-vae.safetensors"
+        info["VAELoader"]["input"]["required"]["vae_name"][0].append("custom-video-vae.safetensors")
+        registry.apply(req["mode"], old, 0, info)
+        with patch("test_ambient_split.object_info", return_value=info):
+            response = await self.client.get("/ambient/workflows")
+            self.assertEqual(response.status, 200)
+            catalog = await response.json()
+            self.assertTrue(set(MODES) <= set(catalog["stages"]))
+            self.assertEqual(catalog["revision"], 2)
+            upgraded = catalog["stages"][req["mode"]]
+            self.assertEqual(upgraded["bindings"]["length"]["source"], "ambient")
+            self.assertEqual(upgraded["graph"], old["graph"])
+            self.assertNotIn("length", registry.snapshot(1)["stages"][req["mode"]]["bindings"])
+            req.update(mode="h3-ref2v", workflowRevision=2, frames=243, referenceNames=["b.png", "a.png"])
+            graph = workflow(req, object_info=info)
+            response = await self.client.post("/prompt", json={"prompt": graph,
+                "extra_data": {"ambient": h3_metadata(req, graph)}})
+            self.assertEqual(response.status, 200, await response.text())
+            job = self.control.journal.data["jobs"][(await response.json())["prompt_id"]]
+            self.assertEqual(job["body"]["prompt"]["6"]["inputs"]["length"], 243)
+            self.assertEqual(job["body"]["prompt"]["ambient_ref_0"]["inputs"]["image"], "b.png")
+        self.worker.spawn.aio.assert_not_awaited()
+
     async def test_sampling_progress_is_scoped_to_the_accepted_prompt(self):
         task, job = await self.start_generation()
         client_id = job["body"]["client_id"]

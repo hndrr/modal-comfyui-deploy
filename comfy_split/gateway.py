@@ -839,8 +839,7 @@ class Controller:
             if path.startswith("/ambient/"):
                 if path == "/ambient/workflows" and request.method == "GET":
                     if not self.ambient_templates_loaded:
-                        from ambient.h3 import workflow
-                        from ambient.contracts import DEFAULT_BACKENDS
+                        from comfy_split.generation import workflow, MODES
                         from ambient.tagging import recipe
                         from comfy_split.ambient_workflows import h3_metadata
                         response = await self.objects("/object_info")
@@ -850,11 +849,12 @@ class Controller:
                                    "sessionId": "00000000-0000-4000-8000-000000000000",
                                    "workflowRevision": 0, "prompt": "A quiet natural scene",
                                    "sound": "Soft ambient sounds", "seed": 42, "resolution": "preview"}
-                            for mode in DEFAULT_BACKENDS:
+                            for mode in MODES:
                                 try:
                                     graph = workflow({**req, "mode": mode}, object_info=objects)
-                                    self.ambient_workflows.prepare({"prompt": graph, "extra_data": {
-                                        "ambient": h3_metadata({**req, "mode": mode}, graph)}})
+                                    metadata = h3_metadata({**req, "mode": mode}, graph)
+                                    self.ambient_workflows.state["defaults"][mode] = {
+                                        "graph": graph, "bindings": metadata["bindings"], "outputs": metadata["outputs"], "workflow": None}
                                 except ValueError:
                                     pass  # Missing models/nodes are reported by normal readiness checks.
                             if "JevInterpret" in objects:
@@ -863,6 +863,7 @@ class Controller:
                             for stage, template in templates.items():
                                 if all(node["class_type"] in objects for node in template["graph"].values()):
                                     self.ambient_workflows.state["defaults"][stage] = template
+                            self.ambient_workflows.upgrade_lengths()
                             await self.persist()
                             self.ambient_templates_loaded = True
                     return web.json_response(self.ambient_workflows.describe())
