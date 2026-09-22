@@ -1,4 +1,4 @@
-"""Preserve encoded ComfyUI file paths at the Modal ASGI boundary."""
+"""Preserve ComfyUI paths and normalize HTTP framing at the Modal ASGI boundary."""
 
 from urllib.parse import quote
 
@@ -31,6 +31,14 @@ def web_server_proxy(host, port):
     upstream = modal_proxy(host, port)
 
     async def app(scope, receive, send):
+        if scope["type"] == "http":
+            # ASGI has already decoded the incoming chunk framing. aiohttp
+            # chooses framing for the outgoing body stream; forwarding this
+            # hop's Transfer-Encoding makes it reject chunked artifact uploads.
+            scope = {**scope, "headers": [
+                (key, value) for key, value in scope.get("headers", [])
+                if key.lower() != b"transfer-encoding"
+            ]}
         if scope["type"] in {"http", "websocket"}:
             has_body = False
             if (not scope.get("raw_path") and scope.get("method") == "POST"

@@ -1,6 +1,7 @@
 """Exercise the real pinned Modal proxy against ComfyUI-style file routes."""
 
 import asyncio
+import hashlib
 import json
 import unittest
 from types import SimpleNamespace
@@ -41,10 +42,17 @@ class ModalProxyTests(unittest.IsolatedAsyncioTestCase):
                 await ws.send_str(message.data)
             return ws
 
-        app = web.Application()
+        async def artifact(request):
+            content = await request.read()
+            return web.json_response({"size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+                                      "name": request.query.get("name"),
+                                      "authorization": request.headers.get("Authorization")})
+
+        app = web.Application(client_max_size=8 * 1024 * 1024)
         app.router.add_route("*", "/api/userdata/{file}", userdata)
         app.router.add_post("/api/userdata/{file}/move/{dest}", move)
         app.router.add_get("/ws/{file}", socket)
+        app.router.add_post("/agent_runtime/bridge/jobs/{id}/artifacts", artifact)
         self.server = TestServer(app)
         await self.server.start_server()
         self.session = ClientSession(str(self.server.make_url("/")), auto_decompress=False)
@@ -59,17 +67,19 @@ class ModalProxyTests(unittest.IsolatedAsyncioTestCase):
         await self.session.close()
         await self.server.close()
 
-    async def request(self, method, url, body=b"", *, modal_wire=False):
+    async def request(self, method, url, body=b"", *, modal_wire=False, headers=(), chunk_size=None):
         parts = urlsplit(url)
         incoming, outgoing = asyncio.Queue(), []
-        await incoming.put({"type": "http.request", "body": body, "more_body": False})
+        chunks = [body] if not chunk_size else [body[i:i + chunk_size] for i in range(0, len(body), chunk_size)]
+        for index, chunk in enumerate(chunks):
+            await incoming.put({"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1})
 
         async def send(message):
             outgoing.append(message)
 
         scope = {"type": "http", "method": method, "path": unquote(parts.path),
                  "raw_path": parts.path.encode("ascii"), "query_string": parts.query.encode(),
-                 "headers": [(b"content-type", b"application/json")],
+                 "headers": [(b"content-type", b"application/json"), *headers],
                  "http_version": "1.1", "scheme": "https"}
         if modal_wire:
             from modal._serialization import _deserialize_asgi, _serialize_asgi
@@ -77,6 +87,17 @@ class ModalProxyTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.app(scope, incoming.get, send), 5)
         content = b"".join(message.get("body", b"") for message in outgoing)
         return SimpleNamespace(status_code=outgoing[0]["status"], json=lambda: json.loads(content))
+
+    async def test_bridge_artifacts_stream_through_modals_actual_proxy(self):
+        image = bytes(range(256)) * 12000
+        for framing in ([(b"Transfer-Encoding", b"chunked")], [(b"content-length", str(len(image)).encode())]):
+            with self.subTest(framing=framing):
+                response = await self.request("POST", "/agent_runtime/bridge/jobs/native-job/artifacts?name=grid.png",
+                    image, modal_wire=True, chunk_size=65536,
+                    headers=[*framing, (b"authorization", b"Bearer fixture-token")])
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {"size": len(image), "sha256": hashlib.sha256(image).hexdigest(),
+                                                   "name": "grid.png", "authorization": "Bearer fixture-token"})
 
     async def test_workflow_save_open_rename_and_delete(self):
         await self.check_workflow_operations(modal_wire=False)
