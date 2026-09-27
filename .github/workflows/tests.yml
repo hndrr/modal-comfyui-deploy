@@ -46,9 +46,6 @@ jobs:
               - 'uv.lock'
               - '.python-version'
               - 'comfy_split/extension_paths.yaml'
-              - 'vendor/ambient-comfyui.json'
-              - 'vendor/*.whl'
-              - 'bundled_packages.py'
               - 'extensions/**/web/**'
               - 'scripts/modal.sh'
             web:
@@ -88,10 +85,21 @@ jobs:
         run: |
           uv sync --locked --extra split-test
           uv run --locked --extra split-test python -m unittest discover -s tests -p 'test_split_standalone.py' -v
-      - name: Install dependencies
-        run: uv sync --locked --extra ambient-test
-      - name: Run unit and regression tests
-        run: uv run --locked --extra ambient-test python -m unittest discover -s tests -v
+      - name: Run standard unit and regression tests
+        run: uv run --locked --extra split-test python scripts/test_standalone.py
+      - name: Private Ambient integration tests
+        env:
+          GH_TOKEN: ${{ secrets.AMBIENT_REPO_TOKEN }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: "!gh auth git-credential"
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'Ambient integration was not run: set AMBIENT_REPO_TOKEN with read access to hndrr/ComfyUI-Ambient.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          uv sync --locked --extra ambient-test
+          uv run --locked --extra ambient-test python -m unittest discover -s tests -v
 
   web:
     name: Asset manager tests and build

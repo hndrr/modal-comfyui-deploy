@@ -10,8 +10,8 @@ Modal側で`SPLIT_EXTENSIONS=ambient`を設定し、Studioの`ambient-targets.js
 追加ノードとMac Bridgeは独立した設定です。[任意拡張](split-integrations.md)を参照してください。
 Ambientを使わないsplitには、パッケージ・Secret・専用ノードは不要です。
 
-共有レシピとパネルの正本はStudioの`extensions/ComfyUI-Ambient`です。
-ModalはバージョンとSHA-256を固定したwheelを使います。LocalとModalのモデル既定値は別プロファイルで、保存済みグラフ・revisionは維持します。
+共有レシピとパネルの正本は、非公開の[ComfyUI-Ambient](https://github.com/hndrr/ComfyUI-Ambient) repoです。
+Modalは固定コミットをデプロイ時に取得します。LocalとModalのモデル既定値は別プロファイルで、保存済みグラフ・revisionは維持します。
 
 ## モデルの明示的な準備
 

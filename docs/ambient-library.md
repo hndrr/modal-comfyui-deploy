@@ -25,6 +25,6 @@ StudioでModal targetを設定し、**Browse existing Modal library**で一覧�
 
 ## ワークフロー
 
-Local・Modalの生成レシピ、編集、Bridgeテンプレート、パネルはStudioの共通パッケージが提供します。
+Local・Modalの生成レシピ、編集、Bridgeテンプレート、パネルは独立したComfyUI-Ambientパッケージが提供します。
 任意拡張の`/ambient/workflows`、`/ambient/executions`とイベント形式は維持します。
 保存済みのrevisionと固定したグラフ・参照画像を引き継ぎ、通常のComfyUIキューはsplit自身が管理します。

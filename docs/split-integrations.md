@@ -25,7 +25,9 @@ Codex準備を使う場合は`agent-runtime,skills-loader`とBridgeを、Jevタ�
 GeminiToolsだけ使う場合は`SPLIT_NODE_PACKS=gemini`で、Ambient拡張もBridgeも不要です。
 モデルやユーザー管理のcustom nodesは既存の配置を使います。これらの設定はモデルを取得しません。
 
-選択したprivate追加ノードの取得にだけ`GITHUB_SECRET_NAME`（既定`github-secret`）を使います。
+選択したprivate追加ノード、またはAmbient拡張の取得に`GITHUB_SECRET_NAME`（既定`github-secret`）を使います。
+Ambient拡張だけを有効にした構成では、このSecretはイメージ作成時だけに渡し、実行中のCPU/GPUへは渡しません。
+トークンには非公開repo `hndrr/ComfyUI-Ambient` のContents読み取り権限を付けてください。
 Geminiには`GEMINI_SECRET_NAME`、Jevには使用する`TYPESAFE_SECRET_NAME`／`OPENROUTER_SECRET_NAME`、
 Bridgeには`AGENT_RUNTIME_SECRET_NAME`を渡します。未使用機能にはSecret依存を付けません。
 Bridgeノードを手動導入している場合も、中継は`SPLIT_AGENT_BRIDGE`で独立して有効化できます。
@@ -46,13 +48,23 @@ LocalとModalのモデル既定値は別プロファイルです。保存済み�
 
 ## コードの所有と配布
 
-共有レシピ、ワークフロー編集、Bridgeテンプレート、パネル、split用アダプターはStudioの
-`extensions/ComfyUI-Ambient`が正本です。LocalはNativeキュー、splitアダプターはsplitのJournalを利用します。
+共有レシピ、ワークフロー編集、Bridgeテンプレート、パネル、split用アダプターは、
+非公開の[ComfyUI-Ambient](https://github.com/hndrr/ComfyUI-Ambient) repoが正本です。
+Studioは拡張のHTTP APIを使い、拡張のソースや梱包処理を持ちません。
+LocalはNativeキュー、splitアダプターはsplitのJournalを利用します。
 Native用の受付処理をsplitのCPU/GPUプロセスへ登録することはありません。
 
-Modalは`vendor/ambient-comfyui.json`でバージョンとSHA-256を固定したPython wheelを使います。
-隣接するStudioのチェックアウトも、起動時のパッケージ取得も不要です。
-配布物の更新手順は[vendorの説明](../vendor/README.md)を参照してください。
+Modalは`comfy_split/extension_sources.py`の固定コミットをGitHubから取得し、標準のPythonパッケージとしてイメージにインストールします。
+隣接repoのチェックアウト、wheelの手作り、repo間のコピー、Release公開は不要です。
+通常のデプロイは次のとおりです。この操作は実際のModalデプロイを行います。
+
+```sh
+SPLIT_EXTENSIONS=ambient ./scripts/modal.sh deploy splitapp.py
+```
+
+更新時は`comfy_split/extension_sources.py`と`pyproject.toml`を同じ拡張コミットへ変更し、
+GitHubの認証がある環境で`uv lock --upgrade-package ambient-comfyui`を実行します。
+テスト後に通常のデプロイを行ってください。既存のVolumeや保存済みグラフの移動は不要です。
 
 旧`ambient_app.py`のAPI・CLI・専用workerは廃止し、StudioのCoordinatorへ統合しました。
 保存済み動画は、拡張の`GET /ambient/library`と`GET /ambient/library/:id/video`から読み出せます。
@@ -70,7 +82,9 @@ uv sync --locked --extra ambient-test
 uv run --locked --extra ambient-test python -m unittest discover -s tests -v
 ```
 
-最初の検証はAmbient配布物をインストールしません。次の検証で任意拡張・保存済みワークフローの互換性も確認します。
+最初の検証はAmbient拡張を取得・インストールしません。
+任意拡張のテストには非公開repoへのGit読み取り権限が必要です。GitHub CLIを使う場合は、`gh auth setup-git`でGitの認証を設定できます。
+GitHub Actionsでは`AMBIENT_REPO_TOKEN` Secretを設定します。未設定時も標準splitのテストは実行し、任意拡張のテスト未実施をサマリーに表示します。次の検証で任意拡張・保存済みワークフローの互換性も確認します。
 模擬ComfyUI／Modalとローカル素材を使用し、実デプロイ・モデル取得・GPU実生成は行いません。
 
 2026-09-28の分離時には、Ambient未インストールかつimport禁止の環境で通常生成・起動・CPU復元を確認しました。

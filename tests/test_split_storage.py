@@ -109,7 +109,7 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
         self.volumes = {key: Volume(self.root / key, self.events) for key in ("data", "environment", "output")}
         self.stats = SimpleNamespace(num_total_runners=0, backlog=0)
         self.worker = SimpleNamespace(get_current_stats=SimpleNamespace(aio=AsyncMock(return_value=self.stats)))
-        self.control = Controller(self.worker, None, None, self.volumes, self.root / "data/state")
+        self.control = Controller(self.worker, None, None, self.volumes, self.root / "data/state", extensions=())
         self.control.cpu = SimpleNamespace(process=None)
         self.control.journal.data["environment"] = "env-active"
         for name in ("base/comfy/custom_nodes/node", "env-active", "env-old"):

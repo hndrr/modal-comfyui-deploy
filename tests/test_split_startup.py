@@ -105,7 +105,7 @@ class StartupLifecycleTests(unittest.IsolatedAsyncioTestCase):
         volumes = {key: SimpleNamespace(commit=SimpleNamespace(aio=AsyncMock()))
                    for key in ("data", "environment")}
         self.controller = Controller(Mock(), None, None, volumes, Path(self.directory.name),
-                                     ui_function=self.ui)
+                                     ui_function=self.ui, extensions=())
 
     async def test_node_refresh_cannot_release_cpu_during_remaining_initialization(self):
         self.controller.starting = True
