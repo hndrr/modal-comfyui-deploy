@@ -48,7 +48,7 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
         cpu = SimpleNamespace(version=None, user_directory="captured", temp_namespace="captured")
         worker = Mock()
         def make(volumes, warmed_cpu):
-            return Controller(worker, None, None, volumes, state, warmed_cpu=warmed_cpu)
+            return Controller(worker, None, None, volumes, state, warmed_cpu=warmed_cpu, extensions=())
         with patch("comfy_split.gateway.make_controller", side_effect=make), \
              patch.object(cpu_snapshot, "USER_LINK", self.root / "user-link"), \
              patch.object(storage, "USER", self.root / "live-user"):
@@ -68,7 +68,7 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.volumes["data"].commit.aio.assert_not_awaited()
 
     async def test_new_environment_replaces_warm_runtime_before_dispatch(self):
-        controller = Controller(Mock(), None, None, self.volumes, self.root)
+        controller = Controller(Mock(), None, None, self.volumes, self.root, extensions=())
         controller.journal.data["environment"] = "env-new"
         controller.snapshot_status = {"environment": "env-old"}
         controller.cpu.version = "env-old"

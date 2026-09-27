@@ -230,7 +230,7 @@ split前のWebSocket圧縮・user_managerソースパッチは、この分離構
 
 Split の `/ambient/workflows` は従来6モードに加えて、`h3-ref2v`、
 `fasth3-8step-i2v-vsa`、`fasth3-vsa-4step-i2v` を登録する。
-レシピはStudio所有の `ambient-comfyui` 配布物で管理する。`SPLIT_EXTENSIONS=ambient` の場合だけ公開し、旧Ambient APIの対応モードは増やさない。
+レシピは非公開の `hndrr/ComfyUI-Ambient` repoで管理し、固定コミットからインストールする。`SPLIT_EXTENSIONS=ambient` の場合だけ公開する。旧Ambient APIは廃止済み。
 Ref2V は既存Volumeの Ref2VA INT8（prunedがあれば優先）を使う。
 モデルの自動ダウンロードは行わず、必要なモデルやノードがない場合は登録しない。
 8ステップはV2モデル＋SigmaShift 10/3＋BlockSparseAttention VSA、

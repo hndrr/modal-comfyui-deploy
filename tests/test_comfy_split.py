@@ -150,7 +150,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             yield b""
         self.volumes["data"].read_file = SimpleNamespace(aio=missing_file)
         self.control = Controller(self.worker, self.events, self.commands, self.volumes,
-                                  Path(self.temp.name))
+                                  Path(self.temp.name), extensions=())
 
         async def cpu_handler(request):
             if request.path == "/ws":

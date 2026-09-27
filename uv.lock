@@ -91,9 +91,9 @@ wheels = [
 [[package]]
 name = "ambient-comfyui"
 version = "0.1.0"
-source = { path = "vendor/ambient_comfyui-0.1.0-py3-none-any.whl" }
-wheels = [
-    { filename = "ambient_comfyui-0.1.0-py3-none-any.whl", hash = "sha256:1655194fc80bda022bab33fc8c9a295d9591999a1c37ede02f1fec611e74cf51" },
+source = { git = "https://github.com/hndrr/ComfyUI-Ambient?rev=c40aa0d4cbde7ab570a04afe91590f03ba62d56f#c40aa0d4cbde7ab570a04afe91590f03ba62d56f" }
+dependencies = [
+    { name = "aiohttp" },
 ]
 
 [[package]]
@@ -732,8 +732,8 @@ split-test = [
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'ambient-test'", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'split-test'", specifier = ">=3.12.15" },
-    { name = "ambient-comfyui", marker = "extra == 'ambient'", path = "vendor/ambient_comfyui-0.1.0-py3-none-any.whl" },
-    { name = "ambient-comfyui", marker = "extra == 'ambient-test'", path = "vendor/ambient_comfyui-0.1.0-py3-none-any.whl" },
+    { name = "ambient-comfyui", marker = "extra == 'ambient'", git = "https://github.com/hndrr/ComfyUI-Ambient?rev=c40aa0d4cbde7ab570a04afe91590f03ba62d56f" },
+    { name = "ambient-comfyui", marker = "extra == 'ambient-test'", git = "https://github.com/hndrr/ComfyUI-Ambient?rev=c40aa0d4cbde7ab570a04afe91590f03ba62d56f" },
     { name = "gradio", specifier = ">=5.47.2" },
     { name = "modal", specifier = ">=1.1.4" },
     { name = "pillow", specifier = ">=11.0.0" },

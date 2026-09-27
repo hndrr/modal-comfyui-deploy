@@ -18,7 +18,7 @@ class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
         self.ui = SimpleNamespace(update_autoscaler=remote())
         self.volumes = {key: SimpleNamespace(commit=remote()) for key in ('data', 'environment')}
         self.control = Controller(None, None, None, self.volumes, Path(self.directory.name),
-                                  ui_function=self.ui)
+                                  ui_function=self.ui, extensions=())
 
     async def test_queue_pins_before_commit_and_completion_releases(self):
         order = []
@@ -51,7 +51,7 @@ class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
         job.update(status='running', call_id='fc-existing')
         self.control.journal.save()
         restored = Controller(None, None, None, self.volumes, Path(self.directory.name),
-                              ui_function=self.ui)
+                              ui_function=self.ui, extensions=())
         restored.journal.recover()
         await restored.reconcile_cpu_scaling()
         self.ui.update_autoscaler.aio.assert_awaited_once_with(min_containers=1)

@@ -209,7 +209,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         self.volumes = {key: SimpleNamespace(commit=SimpleNamespace(aio=AsyncMock()))
                         for key in ("environment", "data")}
         self.worker = Mock()
-        self.control = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
+        self.control = Controller(self.worker, None, None, self.volumes, Path(self.directory.name), extensions=())
         self.catalog = {"objects": {name: {"python_module": "custom_nodes." + name}
                                     for name in node_packs.NODE_NAMES}}
         self.control.candidate = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(),
@@ -260,7 +260,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_cold_restart_reuses_persisted_snapshot_without_github_access(self):
         self.prepare.return_value = None
         await self.control.refresh_node_packs()
-        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
+        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name), extensions=())
         self.prepare.reset_mock()
         self.prepare.side_effect = AssertionError("ordinary startup must not use GitHub")
         with patch.dict(os.environ, {node_packs.TOKEN_ENV: ""}):
@@ -284,7 +284,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("comfy_split.gateway", level="ERROR"):
             await self.control.refresh_node_packs()
         self.assertEqual(self.control.journal.data[node_packs.REFRESH_KEY]["status"], "failed")
-        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
+        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name), extensions=())
         await restarted.refresh_node_packs()
         self.prepare.assert_called_once()
         self.prepare.side_effect = None

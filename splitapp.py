@@ -36,10 +36,13 @@ secret_names = {name: value for name, _, value in provider_settings}
 provider_secrets = [modal.Secret.from_name(value, required_keys=[key])
                     for _, key, value in provider_settings]
 github_secrets = []
-if settings.node_packs:
+github_build_secret = None
+if settings.node_packs or "ambient" in settings.extensions:
     secret_names["GITHUB_SECRET_NAME"] = os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret"
-    github_secrets = [modal.Secret.from_name(secret_names["GITHUB_SECRET_NAME"],
-                                           required_keys=[node_packs.TOKEN_ENV])]
+    github_build_secret = modal.Secret.from_name(secret_names["GITHUB_SECRET_NAME"],
+                                                required_keys=[node_packs.TOKEN_ENV])
+    if settings.node_packs:
+        github_secrets = [github_build_secret]
 COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
 FRONTEND_VERSION = "1.52.7"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
@@ -138,9 +141,8 @@ image = (
     )
 )
 if "ambient" in settings.extensions:
-    from bundled_packages import ambient_wheel
+    from comfy_split.extension_sources import AMBIENT
 
-    wheel = ambient_wheel()
     frontend_init = 'NODE_CLASS_MAPPINGS = {}\nWEB_DIRECTORY = "./web"\n'
     frontend_setup = (
         'import ambient_comfyui, shutil; from pathlib import Path; '
@@ -148,11 +150,14 @@ if "ambient" in settings.extensions:
         'shutil.copytree(Path(ambient_comfyui.__file__).parent/"web",p/"web"); '
         f'p.joinpath("__init__.py").write_text({frontend_init!r})'
     )
-    image = image.add_local_file("bundled_packages.py", "/root/bundled_packages.py", copy=True)
-    image = image.add_local_file("vendor/ambient-comfyui.json", "/opt/wheels/ambient-comfyui.json", copy=True)
-    image = image.add_local_file(wheel, "/opt/wheels/" + wheel.name, copy=True).run_commands(
-        "python -m pip install --no-deps /opt/wheels/" + wheel.name,
-        "python -c " + shlex.quote(frontend_setup),
+    image = image.pip_install_private_repos(
+        f"github.com/{AMBIENT['repository']}@{AMBIENT['revision']}",
+        git_user="x-access-token", secrets=[github_build_secret], extra_options="--no-deps",
+    ).run_commands(
+        "python -c " + shlex.quote(
+            "from importlib.metadata import version; "
+            f"assert version('ambient-comfyui') == {AMBIENT['version']!r}"
+        ), "python -c " + shlex.quote(frontend_setup),
     )
 # Deployment-only layer last, so source and dependency builds remain cached.
 image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
