@@ -1,26 +1,18 @@
-"""8-step routes and workflow ownership, without model downloads or GPU execution."""
 from copy import deepcopy
 from uuid import uuid4
 import unittest
-from unittest.mock import Mock
-
-from ambient.contracts import FAST8_MODES, validate_request
-from ambient.h3 import workflow
-from ambient.models import FAST8_MODEL_FILES, FAST8_SHA256, comfy_assets, references
-from ambient.readiness import describe_modes, validate_object_info
-from ambient.service import Conflict, JobService
-from comfy_split.ambient_workflows import WorkflowRegistry, h3_metadata
-from ambient_fixtures import object_info
-from test_ambient import Store, request
+from ambient_fixtures import workflow, validate_object_info, object_info, request
+from ambient_comfyui.workflows import WorkflowRegistry, h3_metadata
+from model_manifests import FAST8_MODEL_FILES, FAST8_MODES
 
 T2V, I2V = "fasth3-8step-t2v", "fasth3-8step-i2v"
-
 
 class FastEightTest(unittest.TestCase):
     def body(self, mode=I2V, image="anchor.png", revision=0):
         req = request(mode=mode, sessionId=str(uuid4()), workflowRevision=revision)
         graph = workflow(req, image, object_info=object_info())
         return {"prompt": graph, "extra_data": {"ambient": h3_metadata(req, graph)}}
+
 
     def test_t2v_and_i2v_bind_distinct_attention_to_the_same_eight_step_model(self):
         for mode in FAST8_MODES:
@@ -43,43 +35,6 @@ class FastEightTest(unittest.TestCase):
                 self.assertNotIn("LoraLoaderModelOnly", {n["class_type"] for n in graph.values()})
                 self.assertTrue(validate_object_info(object_info(), mode))
 
-    def test_image_requirements_and_idempotence_preserve_mode(self):
-        for mode in ("fasth3", T2V):
-            for key in ("imageId", "parentClipId"):
-                with self.assertRaisesRegex(ValueError, "text-to-video"):
-                    validate_request(request(mode=mode, **{key: str(uuid4())}))
-        with self.assertRaisesRegex(ValueError, "requires a first-frame"):
-            validate_request(request(mode=I2V))
-        for key in ("imageId", "parentClipId"):
-            req = request(mode=I2V, **{key: str(uuid4())})
-            dispatch = Mock(return_value="mock")
-            service = JobService(Store(), dispatch)
-            service.submit(req)
-            service.submit(req)
-            dispatch.assert_called_once()
-            with self.assertRaises(Conflict):
-                service.submit({**req, "mode": "h3"})
-
-    def test_readiness_requires_own_inventory_record_and_pinned_assets(self):
-        url = "https://comfy.example"
-        jobs = {}
-        for mode in FAST8_MODES:
-            asset = comfy_assets(mode)[0]
-            self.assertEqual(asset["repo_id"], "FastVideo/FastVideo-FastH3-Comfy")
-            self.assertEqual(asset["expected_sha256"], FAST8_SHA256)
-            self.assertEqual(len(comfy_assets(mode)), 4)
-            jobs[f"prepared:{mode}:comfyui"] = {"url": url, "backend": "split", "references": references(mode, "comfyui")}
-        modes = describe_modes(jobs, url)
-        self.assertTrue(modes[T2V]["ready"] and modes[I2V]["ready"])
-        self.assertFalse(modes["fasth3"]["ready"])
-        self.assertTrue(modes[I2V]["requiresImage"] and modes[I2V]["continuity"])
-        self.assertFalse(modes[T2V]["imageInput"])
-        self.assertEqual(modes[T2V]["steps"], 8)
-        for kind in ("ModelAttentionBackend", "BlockSparseAttention"):
-            info = object_info()
-            del info[kind]
-            with self.assertRaisesRegex(ValueError, "missing node"):
-                validate_object_info(info, I2V)
 
     def test_fixed_reference_live_reference_revision_and_stage_isolation(self):
         registry = WorkflowRegistry({})
@@ -110,7 +65,3 @@ class FastEightTest(unittest.TestCase):
         del broken["bindings"]["reference"]
         with self.assertRaisesRegex(ValueError, "Keep all Ambient input bindings"):
             registry.apply(I2V, broken, 2, object_info())
-
-
-if __name__ == "__main__":
-    unittest.main()

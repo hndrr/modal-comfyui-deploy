@@ -1,0 +1,8 @@
+{
+  "name": "ambient-comfyui",
+  "version": "0.1.0",
+  "file": "ambient_comfyui-0.1.0-py3-none-any.whl",
+  "sha256": "1655194fc80bda022bab33fc8c9a295d9591999a1c37ede02f1fec611e74cf51",
+  "source": "https://github.com/hndrr/ambient-studio",
+  "sourceDirectory": "extensions/ComfyUI-Ambient"
+}

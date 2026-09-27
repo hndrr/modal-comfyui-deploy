@@ -2,13 +2,21 @@
 from copy import deepcopy
 from uuid import uuid4
 import unittest
+import hashlib
+import json
+from pathlib import Path
+from functools import partial
 
-from ambient.contracts import DEFAULT_BACKENDS, validate_request
-from ambient.h3 import workflow as old_workflow
+from ambient_fixtures import DEFAULT_BACKENDS, request
 from ambient_fixtures import object_info
-from comfy_split.ambient_workflows import WorkflowRegistry, h3_metadata, validate_template
-from comfy_split.generation import MODES, NEW_MODES, REF_MODELS, workflow
-from test_ambient import request
+from ambient_comfyui.workflows import WorkflowRegistry, h3_metadata, validate_template
+from ambient_comfyui.contracts import DEFAULT_BACKENDS as SHARED_BACKENDS
+from ambient_comfyui.models import REF_MODELS
+from ambient_comfyui.h3 import workflow as shared_workflow
+
+MODES = tuple(SHARED_BACKENDS)
+NEW_MODES = tuple(mode for mode in MODES if mode not in DEFAULT_BACKENDS)
+workflow = partial(shared_workflow, profile="modal")
 
 
 def objects():
@@ -40,13 +48,17 @@ class SplitGenerationTest(unittest.TestCase):
         graph = workflow(req, image, object_info=self.info)
         return {"prompt": graph, "extra_data": {"ambient": h3_metadata(req, graph)}}
 
-    def test_old_recipes_and_api_modes_are_preserved(self):
-        for mode in DEFAULT_BACKENDS:
-            req = request(mode=mode, sessionId=str(uuid4()), workflowRevision=0)
-            self.assertEqual(workflow(req, object_info=self.info), old_workflow(req, object_info=self.info))
-        for mode in NEW_MODES:
-            with self.assertRaisesRegex(ValueError, "Invalid generation mode"):
-                validate_request(request(mode=mode))
+    def test_graphs_match_the_pre_separation_modal_baseline(self):
+        expected = json.loads((Path(__file__).parent / "fixtures/modal-recipe-hashes.json").read_text())
+        for key, digest in expected.items():
+            mode, image = key.split(":")
+            req = dict(requestId="00000000-0000-4000-8000-000000000001",
+                sessionId="00000000-0000-4000-8000-000000000002", workflowRevision=0,
+                mode=mode, prompt="A quiet room", sound="Soft breeze", seed=42, resolution="preview")
+            graph = workflow(req, None if image == "None" else image, object_info=self.info)
+            with self.subTest(key=key):
+                self.assertEqual(hashlib.sha256(json.dumps(graph, sort_keys=True).encode()).hexdigest(), digest)
+
 
     def test_frame_boundaries_all_modes_and_optional_default(self):
         for mode in MODES:

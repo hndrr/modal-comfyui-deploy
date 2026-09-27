@@ -1,7 +1,24 @@
-"""Small /object_info double for adapter tests; not a GPU compatibility claim."""
+"""Shared Modal recipe fixtures; no legacy application import."""
+from functools import partial
+from uuid import uuid4
+from ambient_comfyui.h3 import workflow as shared_workflow
+from ambient_comfyui.models import MODAL_MODE_MODEL_FILES
+from model_manifests import PREPARATION_MODES
 
-from ambient.h3 import FAST8_MODEL_FILES, FAST_MODEL_FILES, MODEL_FILES
-from ambient.models import FUSED_MODEL_FILES
+DEFAULT_BACKENDS = PREPARATION_MODES
+MODEL_FILES = MODAL_MODE_MODEL_FILES['h3']
+FAST_MODEL_FILES = MODAL_MODE_MODEL_FILES['fasth3']
+FAST8_MODEL_FILES = MODAL_MODE_MODEL_FILES['fasth3-8step-t2v']
+FUSED_MODEL_FILES = MODAL_MODE_MODEL_FILES['h3-fused-4step']
+workflow = partial(shared_workflow, profile='modal')
+
+def request(**changes):
+    return {'requestId': str(uuid4()), 'mode': 'h3', 'prompt': 'A quiet room',
+            'sound': 'Soft breeze', 'seed': 42, 'resolution': 'preview', **changes}
+
+def validate_object_info(info, mode='h3'):
+    return workflow(request(mode=mode, sessionId=str(uuid4())),
+                    'anchor.png' if mode not in {'fasth3', 'fasth3-8step-t2v'} else None, object_info=info)
 
 
 def object_info():

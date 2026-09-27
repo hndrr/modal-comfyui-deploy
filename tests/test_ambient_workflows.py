@@ -1,104 +1,11 @@
 from copy import deepcopy
+from uuid import uuid4
+import unittest
 import json
 from pathlib import Path
-import tempfile
-import unittest
-from uuid import uuid4
-
-from ambient.library import Library
-from ambient.api import create_api
-from ambient.processing import run_job
-from ambient.service import JobService
-from ambient.tagging import recipe
-from ambient.h3 import workflow
-from fastapi.testclient import TestClient
-from types import SimpleNamespace
-from unittest.mock import Mock
-from comfy_split.ambient_workflows import WorkflowRegistry, h3_metadata, validate_template
-from ambient_fixtures import object_info
-from test_ambient import Store, request
-
-
-class MemoryVolume:
-    def __init__(self):
-        self.files = {}
-
-    def batch_upload(self):
-        return self
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-    def put_file(self, source, target):
-        self.files[target] = Path(source).read_bytes()
-
-    def remove_file(self, target):
-        self.files.pop(target, None)
-
-    def read_file_into_fileobj(self, source, target):
-        target.write(self.files[source])
-
-
-class LibraryTest(unittest.TestCase):
-    def test_api_ranges_and_restarting_service_keep_library_separate_from_job_retention(self):
-        records, volume = Store(), MemoryVolume()
-        library = Library(records, volume)
-        clip = {"id": str(uuid4()), "bytes": 10, "hasAudio": True}
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "video.mp4"
-            source.write_bytes(b"0123456789")
-            library.publish(source, clip)
-            jobs = Store()
-            service = JobService(jobs, lambda _: None)
-            with TestClient(create_api(service, lambda: {}, volume, volume, library=Library(records, volume))) as client:
-                self.assertEqual(client.get("/library").json()["count"], 1)
-                response = client.get(f"/library/{clip['id']}/video", headers={"Range": "bytes=2-5"})
-                self.assertEqual(response.status_code, 206)
-                self.assertEqual(response.content, b"2345")
-                self.assertEqual(client.get(f"/clips/{clip['id']}").status_code, 404)
-                self.assertEqual(client.delete(f"/library/{clip['id']}").status_code, 200)
-                self.assertEqual(client.get(f"/library/{clip['id']}/video").status_code, 404)
-
-    def test_tag_dispatch_failure_does_not_undo_completed_video(self):
-        jobs, volume = Store(), MemoryVolume()
-        library = Library(Store(), volume)
-        service = JobService(jobs, lambda _: None)
-        req = request(saveToLibrary=True)
-        service.submit(req)
-        def generate(request, image, source, cancelled, progress):
-            source.write_bytes(b"video")
-            return {"effective": {"prompt": "Edited in ComfyUI", "sound": "Rain"}}
-        storage = SimpleNamespace(prepare_anchor=lambda *_: None,
-            publish_clip=lambda _source, id: {"id": id, "bytes": 5},
-            download_clip=lambda _id, path: path.write_bytes(b"video"))
-        run_job(req["requestId"], jobs, storage, {("h3", "comfyui"): generate},
-                library=library, tag_dispatch=Mock(side_effect=RuntimeError("Tagger unavailable")))
-        self.assertEqual(service.get(req["requestId"])["status"], "completed")
-        clip = library.get(req["requestId"])
-        self.assertEqual(clip["tagging"]["status"], "failed")
-        self.assertEqual(clip["generation"]["effective"]["prompt"], "Edited in ComfyUI")
-
-    def test_duplicate_publication_and_deleted_clip_cannot_be_resurrected_by_tagger(self):
-        volume, records = MemoryVolume(), Store()
-        library = Library(records, volume)
-        clip = {"id": str(uuid4()), "bytes": 4, "hasAudio": False}
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "video.mp4"
-            source.write_bytes(b"test")
-            library.publish(source, clip)
-            library.publish(source, clip)
-            library.tags(clip["id"], {"status": "completed", "tags": ["scene:forest"]})
-            self.assertEqual(library.list()["count"], 1)
-            self.assertEqual(library.list()["bytes"], 4)
-            library.delete(clip["id"])
-            with self.assertRaises(KeyError):
-                library.tags(clip["id"], {"status": "completed"})
-            self.assertEqual(library.list()["count"], 0)
-            self.assertEqual(volume.files, {})
-
+from ambient_fixtures import workflow, object_info, request
+from ambient_comfyui.workflows import WorkflowRegistry, h3_metadata, validate_template
+from ambient_comfyui.tagging import recipe
 
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
@@ -106,10 +13,12 @@ class WorkflowTest(unittest.TestCase):
         self.registry = WorkflowRegistry({})
         self.req = request(sessionId=str(uuid4()), workflowRevision=0)
 
+
     def body(self, **patch):
         req = {**self.req, **patch}
         graph = workflow(req, object_info=self.objects)
         return {"prompt": graph, "extra_data": {"ambient": h3_metadata(req, graph)}}
+
 
     def test_versions_are_pinned_and_fixed_and_live_inputs_do_not_overwrite_each_other(self):
         original = self.registry.prepare(self.body())
@@ -129,6 +38,7 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "another device"):
             self.registry.apply("h3", template, 0, self.objects)
 
+
     def test_deleted_output_broken_connection_and_secret_are_rejected(self):
         self.registry.prepare(self.body())
         baseline = self.registry.describe()["stages"]["h3"]
@@ -139,6 +49,7 @@ class WorkflowTest(unittest.TestCase):
             mutate(template)
             with self.assertRaises(ValueError):
                 validate_template(template, baseline, self.objects)
+
 
     def test_text_first_template_accepts_later_parent_frame_and_then_text_again(self):
         self.registry.prepare(self.body())
@@ -151,6 +62,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(actual["prompt"]["6"]["inputs"]["first_frame"], ["16", 0])
         actual = self.registry.prepare(self.body(workflowRevision=1))
         self.assertNotIn("first_frame", actual["prompt"]["6"]["inputs"])
+
 
     def test_history_restore_is_a_new_revision(self):
         self.registry.prepare(self.body())
@@ -165,6 +77,7 @@ class WorkflowTest(unittest.TestCase):
         initial = self.registry.describe(0)["stages"]["h3"]
         self.registry.apply("h3", initial, 3, self.objects)
         self.assertEqual(self.registry.describe()["stages"]["h3"], initial)
+
 
     def test_replaced_bridge_node_keeps_current_job_constraints(self):
         def bridge_body(timeout, revision):
@@ -190,6 +103,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(actual["prompt"]["10"]["inputs"]["cwd"], "current-job")
         self.assertEqual(actual["prompt"]["10"]["inputs"]["sandbox_mode"], "read-only")
 
+
     def test_current_jev_without_autogrow_connections_can_be_edited(self):
         body = recipe({"prompt": "Rainy forest"}, str(uuid4()), 0)
         self.registry.prepare(body)
@@ -205,8 +119,3 @@ class WorkflowTest(unittest.TestCase):
                 self.assertEqual(node["inputs"]["provider"], "openrouter")
                 state_node = actual["prompt"][node["inputs"]["state"][0]]
                 self.assertIn("New request", state_node["inputs"]["value"])
-
-
-
-if __name__ == "__main__":
-    unittest.main()

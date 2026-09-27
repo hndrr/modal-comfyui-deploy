@@ -18,6 +18,7 @@ import time
 import uuid
 
 from comfy_split import storage
+from comfy_split.config import DEPLOYMENT_ENV
 from comfy_split.runtime import ComfyProcess, configure_manager, environment_path
 from comfy_split.state import write_json
 
@@ -144,7 +145,7 @@ async def bootstrap():
             try:
                 await cpu.start(version, cpu=True)
                 info["environment"] = version
-                deployment = os.environ["SPLIT_AMBIENT_DEPLOYMENT"]
+                deployment = os.environ[DEPLOYMENT_ENV]
                 write_json(storage.ENVIRONMENTS / ".cpu-snapshots" /
                            f"{deployment}-{version}.json",
                            {"deployment": deployment, "environment": version, "created_at": time.time()})

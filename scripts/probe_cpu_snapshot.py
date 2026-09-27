@@ -28,15 +28,8 @@ READY_FILE = Path("/tmp/comfy-snapshot-probe-ready.json")
 HELPER_LOG = Path("/tmp/comfy-snapshot-probe-helper.log")
 COMFY_LOG = Path("/tmp/split-comfy-cpu.log")
 ORIGIN = "http://127.0.0.1:8187"
-REQUIRED_CLASSES = {
-    "AgentRuntimeBridgeImageGen", "AgentRuntimeBridgeMedia", "AgentRuntimeBridgeText",
-    "BasicGuider", "BasicScheduler", "BlockSparseAttention", "CLIPLoader", "CreateVideo",
-    "JevInterpret", "KSamplerSelect", "LoadImage", "LoraLoaderModelOnly", "ManualSigmas",
-    "MiniMaxH3FastVAEDecode", "MiniMaxH3ImageToVideo", "MiniMaxH3SigmaShift",
-    "ModelAttentionBackend", "PreviewAny", "PreviewImage", "PrimitiveStringMultiline",
-    "RandomNoise", "SamplerCustomAdvanced", "SaveVideo", "UNETLoader", "VAEDecodeAudio",
-    "VAELoader",
-}
+REQUIRED_CLASSES = {"LoadImage", "SaveImage", "KSampler"}
+
 
 # Keep the same ComfyUI subprocess and interpreter as production, with an
 # isolated user directory. The helper has no Controller, dispatcher or Queue.

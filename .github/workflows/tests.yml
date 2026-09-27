@@ -46,6 +46,9 @@ jobs:
               - 'uv.lock'
               - '.python-version'
               - 'comfy_split/extension_paths.yaml'
+              - 'vendor/ambient-comfyui.json'
+              - 'vendor/*.whl'
+              - 'bundled_packages.py'
               - 'extensions/**/web/**'
               - 'scripts/modal.sh'
             web:
@@ -81,10 +84,10 @@ jobs:
           version: "0.11.26"
           python-version: "3.12"
           enable-cache: true
-      - name: Install media test dependencies
+      - name: Verify split without the Ambient distribution
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          uv sync --locked --extra split-test
+          uv run --locked --extra split-test python -m unittest discover -s tests -p 'test_split_standalone.py' -v
       - name: Install dependencies
         run: uv sync --locked --extra ambient-test
       - name: Run unit and regression tests

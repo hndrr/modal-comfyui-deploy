@@ -82,7 +82,7 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
             order.append(("dispatch", controller.cpu.version))
         controller.cpu.start = AsyncMock(side_effect=start)
         controller.cpu.stop = AsyncMock()
-        controller.refresh_ambient_nodes = AsyncMock()
+        controller.refresh_node_packs = AsyncMock()
         controller.dispatch = AsyncMock(side_effect=dispatch)
         with patch("comfy_split.gateway.initialize_environment"):
             await controller.start(None)

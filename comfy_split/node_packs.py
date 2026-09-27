@@ -1,4 +1,4 @@
-"""Refresh Ambient's private node packs without mutating an active environment."""
+"""Optional managed node packs, independent of any gateway extension."""
 
 import json
 import os
@@ -9,39 +9,45 @@ from pathlib import Path
 
 from comfy_split.state import write_json
 
-MODE_ENV = "COMFYUI_AMBIENT_MODE"
+from comfy_split.config import Settings, NODE_PACKS, DEPLOYMENT_ENV
+
 TOKEN_ENV = "GITHUB_TOKEN"
-DEPLOYMENT_ENV = "SPLIT_AMBIENT_DEPLOYMENT"
-REFRESH_KEY = "ambient_nodes_refresh"
-REPOSITORIES = (
-    "hndrr/ComfyUI-AgentRuntime",
-    "hndrr/ComfyUI-Skills-Loader",
-    "hndrr/ComfyUI-GeminiTools",
-    "hndrr/ComfyUI-Jev",
-)
+REFRESH_KEY = "node_packs_refresh"
+REPOSITORIES = tuple(NODE_PACKS.values())
 NODE_NAMES = frozenset(repo.split("/")[1] for repo in REPOSITORIES)
-DIRECTORY = "ambient_nodes"
-MANIFEST = "ambient-nodes.json"
+DIRECTORY = "node_packs"
+MANIFEST = "node-packs.json"
+LEGACY_DIRECTORY = "ambient_nodes"
+LEGACY_MANIFEST = "ambient-nodes.json"
 
 
-def enabled(environ=None):
-    environ = os.environ if environ is None else environ
-    value = environ.get(MODE_ENV, "off").strip().lower()
-    if value not in {"on", "off"}:
-        raise ValueError(f"{MODE_ENV} must be on or off")
-    return value == "on"
+def enabled():
+    return bool(Settings.read().node_packs)
 
 
-def is_ambient_node(definition):
+def repositories():
+    return tuple(NODE_PACKS[name] for name in Settings.read().node_packs)
+
+
+def node_names():
+    return frozenset(repo.split("/")[1] for repo in repositories())
+
+
+def node_path(origin, name):
+    current = origin / DIRECTORY / name
+    return current if current.is_dir() else origin / LEGACY_DIRECTORY / name
+
+
+def is_managed_node(definition):
     return definition.get("python_module", "").removeprefix("custom_nodes.") in NODE_NAMES
 
 
 def check_catalog(catalog):
     loaded = {definition.get("python_module", "").removeprefix("custom_nodes.")
               for definition in catalog["objects"].values()}
-    missing = NODE_NAMES - loaded
+    missing = node_names() - loaded
     if missing:
-        raise RuntimeError("Ambient nodes failed to load: " + ", ".join(sorted(missing)))
+        raise RuntimeError("Managed nodes failed to load: " + ", ".join(sorted(missing)))
 
 
 def snapshot_revisions(source):
@@ -50,17 +56,20 @@ def snapshot_revisions(source):
 
     origin = environment_path(source)
     try:
-        revisions = json.loads((origin / MANIFEST).read_text())
+        manifest = origin / MANIFEST
+        if not manifest.exists():
+            manifest = origin / LEGACY_MANIFEST
+        revisions = json.loads(manifest.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
-    if (not isinstance(revisions, dict) or set(revisions) != NODE_NAMES
+    if (not isinstance(revisions, dict) or not node_names() <= set(revisions)
             or any(not isinstance(sha, str) or len(sha) != 40
                    or any(c not in "0123456789abcdef" for c in sha)
                    for sha in revisions.values())
-            or not all((origin / DIRECTORY / name / "__init__.py").is_file()
-                       for name in NODE_NAMES)):
+            or not all((node_path(origin, name) / "__init__.py").is_file()
+                       for name in node_names())):
         return None
-    return revisions
+    return {name: revisions[name] for name in node_names()}
 
 
 def prepare_environment(source):
@@ -74,16 +83,16 @@ def prepare_environment(source):
     from comfy_split.runtime import create_environment, environment_path
 
     if not os.environ.get(TOKEN_ENV):
-        raise RuntimeError(f"Modal Secret must supply {TOKEN_ENV} for private Ambient repositories")
+        raise RuntimeError(f"Modal Secret must supply {TOKEN_ENV} for private managed node repositories")
     origin = environment_path(source)
     previous = snapshot_revisions(source) or {}
     # Preserve user-installed duplicates instead of silently changing precedence.
-    duplicates = [name for name in NODE_NAMES
+    duplicates = [name for name in node_names()
                   if (origin / "comfy/custom_nodes" / name).exists()]
     if duplicates:
-        raise RuntimeError("Ambient nodes already installed in custom_nodes: "
+        raise RuntimeError("Managed nodes already installed in custom_nodes: "
                            + ", ".join(sorted(duplicates)))
-    with tempfile.TemporaryDirectory(prefix="ambient-nodes-") as directory:
+    with tempfile.TemporaryDirectory(prefix="split-nodes-") as directory:
         staging = Path(directory)
         askpass = staging / "askpass"
         askpass.write_text(
@@ -99,7 +108,7 @@ def prepare_environment(source):
             if key.startswith("GIT_TRACE") or key == "GIT_CURL_VERBOSE":
                 git_env.pop(key)
         revisions = {}
-        for repo in REPOSITORIES:
+        for repo in repositories():
             name = repo.split("/")[1]
             head = subprocess.check_output(
                 ["git", "-c", "credential.helper=", "ls-remote", "--exit-code",
@@ -113,7 +122,7 @@ def prepare_environment(source):
         if previous == revisions:
             return None
         changed = {name for name in revisions if previous.get(name) != revisions[name]}
-        for repo in REPOSITORIES:
+        for repo in repositories():
             name = repo.split("/")[1]
             if name not in changed:
                 continue
@@ -135,12 +144,15 @@ def prepare_environment(source):
         target = environment_path(version)
         nodes = target / DIRECTORY
         nodes.mkdir(exist_ok=True)
+        for name in revisions.keys() - changed:
+            if not (nodes / name).is_dir():
+                shutil.copytree(node_path(origin, name), nodes / name, symlinks=True)
         for name in changed:
             if (nodes / name).exists():
                 shutil.rmtree(nodes / name)
             shutil.move(str(staging / name), nodes / name)
         python = str(target / "venv/bin/python")
-        requirements = [node / "requirements.txt" for node in sorted(nodes.iterdir())
+        requirements = [node / "requirements.txt" for node in sorted(nodes / name for name in revisions)
                         if (node / "requirements.txt").is_file()]
         # The GitHub token is not needed by pip or ComfyUI's dependency checker.
         dependency_env = dict(os.environ)
@@ -154,7 +166,7 @@ def prepare_environment(source):
         subprocess.run([python, "-m", "comfy_split.check_environment"],
                        env=dependency_env, check=True, timeout=60)
         write_json(target / MANIFEST, revisions)
-        # Only Ambient changed. Preserve definitions of unrelated GPU-only nodes.
+        # Only managed packs changed. Preserve definitions of unrelated GPU-only nodes.
         if (origin / "catalog.json").is_file():
             shutil.copyfile(origin / "catalog.json", target / "catalog.json")
         return version

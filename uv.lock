@@ -89,6 +89,14 @@ wheels = [
 ]
 
 [[package]]
+name = "ambient-comfyui"
+version = "0.1.0"
+source = { path = "vendor/ambient_comfyui-0.1.0-py3-none-any.whl" }
+wheels = [
+    { filename = "ambient_comfyui-0.1.0-py3-none-any.whl", hash = "sha256:1655194fc80bda022bab33fc8c9a295d9591999a1c37ede02f1fec611e74cf51" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -709,25 +717,29 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+ambient = [
+    { name = "ambient-comfyui" },
+]
 ambient-test = [
     { name = "aiohttp" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "python-multipart" },
+    { name = "ambient-comfyui" },
+]
+split-test = [
+    { name = "aiohttp" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'ambient-test'", specifier = ">=3.12.15" },
-    { name = "fastapi", marker = "extra == 'ambient-test'", specifier = ">=0.115.14" },
+    { name = "aiohttp", marker = "extra == 'split-test'", specifier = ">=3.12.15" },
+    { name = "ambient-comfyui", marker = "extra == 'ambient'", path = "vendor/ambient_comfyui-0.1.0-py3-none-any.whl" },
+    { name = "ambient-comfyui", marker = "extra == 'ambient-test'", path = "vendor/ambient_comfyui-0.1.0-py3-none-any.whl" },
     { name = "gradio", specifier = ">=5.47.2" },
-    { name = "httpx", marker = "extra == 'ambient-test'", specifier = ">=0.28.1" },
     { name = "modal", specifier = ">=1.1.4" },
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "python-multipart", marker = "extra == 'ambient-test'", specifier = ">=0.0.22" },
 ]
-provides-extras = ["ambient-test"]
+provides-extras = ["ambient", "split-test", "ambient-test"]
 
 [[package]]
 name = "multidict"

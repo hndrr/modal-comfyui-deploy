@@ -68,7 +68,7 @@ class NativeBridge:
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.env = patch.dict(os.environ, {TOKEN_ENV: "shared-test-token", "COMFYUI_AMBIENT_MODE": "on"})
+        self.env = patch.dict(os.environ, {TOKEN_ENV: "shared-test-token", "SPLIT_AGENT_BRIDGE": "on", "SPLIT_EXTENSIONS": "", "SPLIT_NODE_PACKS": ""})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.temp = tempfile.TemporaryDirectory()

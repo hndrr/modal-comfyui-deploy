@@ -16,8 +16,9 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
 from comfy_split import storage
-from comfy_split import ambient_nodes
-from comfy_split.ambient_workflows import WorkflowRegistry, validate_template, pin_references
+from comfy_split import node_packs
+from comfy_split.config import Settings
+from comfy_split.extensions import load_extensions
 from comfy_split.agent_bridge import AgentBridge, PREFIX as BRIDGE_PREFIX, requires_bridge
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
@@ -38,7 +39,7 @@ def manager_path(path):
 
 class Controller:
     def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
-                 warmed_cpu=None):
+                 warmed_cpu=None, extensions=None):
         self.worker, self.events, self.commands, self.volumes = worker, events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
@@ -57,8 +58,8 @@ class Controller:
         self.cpu_scaling_lock = asyncio.Lock()
         self.cleanup_due = 0.0
         self.bridge = AgentBridge(self)
-        self.ambient_workflows = WorkflowRegistry(self.journal.data)
-        self.ambient_templates_loaded = False
+        self.plugins = load_extensions(self) if extensions is None else [factory(self) for factory in extensions]
+        self.bridge_enabled = Settings.read().bridge
         self.starting = False
         self.startup_phase = "initializing"
         self.snapshot_status = None
@@ -206,7 +207,7 @@ class Controller:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
         await self.persist()
-        await self.refresh_ambient_nodes()
+        await self.refresh_node_packs()
         self.startup_phase = "starting_comfy"
         warm_process = self.cpu.process
         if self.journal.data["mode"] == "split":
@@ -220,24 +221,26 @@ class Controller:
         # Retention can remove large old environments. Let the UI and first
         # requests finish before the dispatcher performs normal idle cleanup.
         self.cleanup_due = time.monotonic() + 300
+        for extension in self.plugins:
+            await extension.start()
         self.task = asyncio.create_task(self.dispatch())
         if candidate and candidate["status"] == "validating" and session:
             self.apply_task = asyncio.create_task(self.apply_environment(resume=True))
 
-    async def refresh_ambient_nodes(self):
-        if not ambient_nodes.enabled():
+    async def refresh_node_packs(self):
+        if not node_packs.enabled():
             return
         data = self.journal.data
         if data["mode"] != "split" or self.journal.busy() or data["candidate"] or data["session"]:
-            log.info("Ambient node refresh deferred until an idle CPU startup")
+            log.info("Managed node refresh deferred until an idle CPU startup")
             return
         previous = data["environment"]
-        deployment = os.environ.get(ambient_nodes.DEPLOYMENT_ENV, "unversioned")
-        revisions = await asyncio.to_thread(ambient_nodes.snapshot_revisions, previous)
-        last_refresh = data.get(ambient_nodes.REFRESH_KEY) or {}
+        deployment = os.environ.get(node_packs.DEPLOYMENT_ENV, "unversioned")
+        revisions = await asyncio.to_thread(node_packs.snapshot_revisions, previous)
+        last_refresh = data.get(node_packs.REFRESH_KEY) or {}
         if (revisions and last_refresh.get("deployment") == deployment
                 and last_refresh.get("revisions") == revisions):
-            log.info("Ambient nodes reused without GitHub access: %s (last update: %s)",
+            log.info("Managed nodes reused without GitHub access: %s (last update: %s)",
                      previous, last_refresh.get("status"))
             return
         started = time.monotonic()
@@ -245,18 +248,18 @@ class Controller:
         await self.pin_cpu(True)
         try:
             try:
-                version = await asyncio.to_thread(ambient_nodes.prepare_environment, previous)
+                version = await asyncio.to_thread(node_packs.prepare_environment, previous)
                 if version is not None:
                     # Validate imports without starting a GPU or running any node/API task.
                     self.startup_phase = "validating_nodes"
                     await self.candidate.start(version, cpu=True)
-                    ambient_nodes.check_catalog(await self.candidate.catalog(self.client))
+                    node_packs.check_catalog(await self.candidate.catalog(self.client))
             except Exception:
-                log.exception("Ambient node refresh failed; keeping environment %s", previous)
+                log.exception("Managed node refresh failed; keeping environment %s", previous)
                 if revisions:
                     # A valid previous snapshot remains usable. Do not delay every
                     # cold start with the same failed update; redeploy to retry.
-                    data[ambient_nodes.REFRESH_KEY] = {"deployment": deployment,
+                    data[node_packs.REFRESH_KEY] = {"deployment": deployment,
                         "revisions": revisions, "status": "failed", "checked_at": time.time()}
                     await self.persist()
                 return
@@ -266,17 +269,19 @@ class Controller:
             if version is not None:
                 await self.volumes["environment"].commit.aio()
                 data["environment"] = version
-            data[ambient_nodes.REFRESH_KEY] = {"deployment": deployment,
-                "revisions": await asyncio.to_thread(ambient_nodes.snapshot_revisions,
+            data[node_packs.REFRESH_KEY] = {"deployment": deployment,
+                "revisions": await asyncio.to_thread(node_packs.snapshot_revisions,
                                                      data["environment"]),
                 "status": "updated" if version else "unchanged", "checked_at": time.time()}
             await self.persist()
-            log.info("Ambient nodes checked for deployment: %s -> %s (%.2fs)",
+            log.info("Managed nodes checked for deployment: %s -> %s (%.2fs)",
                      previous, data["environment"], time.monotonic() - started)
         finally:
             await self.pin_cpu(False)
 
     async def close(self, app):
+        for extension in self.plugins:
+            await extension.close()
         await self.bridge.close()
         await self.close_candidate_relays()
         for task in (self.task, self.apply_task):
@@ -290,15 +295,14 @@ class Controller:
             await self.client.close()
 
     async def broadcast(self, event, client_id=None):
-        # Mirror events are namespaced and correlated to a prompt, never injected
-        # into unrelated browser sessions' native execution state.
-        if client_id and isinstance(event, dict) and event.get("data", {}).get("prompt_id"):
-            job = self.journal.data["jobs"].get(event["data"]["prompt_id"])
-            meta = job and job.get("body", {}).get("extra_data", {}).get("ambient")
-            if meta:
-                job["ambient_event"] = event
-                await self.broadcast({"type": "ambient_execution", "data": {
-                    "sessionId": meta["sessionId"], "stage": meta["stage"], "event": event}})
+        for extension in self.plugins:
+            try:
+                additional = tuple(extension.event(event))
+            except Exception:
+                log.exception("Extension event observer failed")
+                continue
+            for extra in additional:
+                await self.broadcast(extra)
         targets = list(self.sockets.items())
         for sid, sockets in targets:
             if client_id and sid != client_id:
@@ -751,7 +755,7 @@ class Controller:
             if path.startswith("/_split/"):
                 raise web.HTTPNotFound()
             if path.startswith(BRIDGE_PREFIX + "/"):
-                if not ambient_nodes.enabled():
+                if not self.bridge_enabled:
                     raise web.HTTPNotFound()
                 if self.journal.data["mode"] != "split" or self.journal.data["candidate"]:
                     raise ValueError("Bridgeは環境更新が完了した分離モードで接続してください。")
@@ -827,8 +831,11 @@ class Controller:
                     request_id = request.headers.get("Idempotency-Key")
                     existing = request_id and any(j.get("request_id") == request_id for j in (
                         *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
+                    if requires_bridge(body) and not self.bridge_enabled:
+                        raise ValueError("Enable SPLIT_AGENT_BRIDGE before submitting Bridge nodes.")
                     bridge_id = self.bridge.identity() if requires_bridge(body) and not existing else None
-                    body = self.ambient_workflows.prepare(body)
+                    for extension in self.plugins:
+                        body = extension.prepare(body)
                     job = self.journal.enqueue(body, request_id)
                     if bridge_id and job["status"] == "queued":
                         job.setdefault("agent_bridge", bridge_id)
@@ -836,70 +843,10 @@ class Controller:
                     await self.persist()
                 await self.status()
                 return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
-            if path.startswith("/ambient/"):
-                if path == "/ambient/workflows" and request.method == "GET":
-                    if not self.ambient_templates_loaded:
-                        from comfy_split.generation import workflow, MODES
-                        from ambient.tagging import recipe
-                        from comfy_split.ambient_workflows import h3_metadata
-                        response = await self.objects("/object_info")
-                        objects = json.loads(response.body)
-                        async with self.lock:
-                            req = {"requestId": "00000000-0000-4000-8000-000000000000",
-                                   "sessionId": "00000000-0000-4000-8000-000000000000",
-                                   "workflowRevision": 0, "prompt": "A quiet natural scene",
-                                   "sound": "Soft ambient sounds", "seed": 42, "resolution": "preview"}
-                            for mode in MODES:
-                                try:
-                                    graph = workflow({**req, "mode": mode}, object_info=objects)
-                                    metadata = h3_metadata({**req, "mode": mode}, graph)
-                                    self.ambient_workflows.state["defaults"][mode] = {
-                                        "graph": graph, "bindings": metadata["bindings"], "outputs": metadata["outputs"], "workflow": None}
-                                except ValueError:
-                                    pass  # Missing models/nodes are reported by normal readiness checks.
-                            if "JevInterpret" in objects:
-                                self.ambient_workflows.prepare(recipe({}, req["sessionId"], 0))
-                            templates = json.loads((Path(__file__).parent.parent / "ambient" / "bridge_templates.json").read_text())
-                            for stage, template in templates.items():
-                                if all(node["class_type"] in objects for node in template["graph"].values()):
-                                    self.ambient_workflows.state["defaults"][stage] = template
-                            self.ambient_workflows.upgrade_lengths()
-                            await self.persist()
-                            self.ambient_templates_loaded = True
-                    return web.json_response(self.ambient_workflows.describe())
-                if path.startswith("/ambient/workflows/") and request.method == "GET":
-                    return web.json_response(self.ambient_workflows.describe(int(path.rsplit("/", 1)[-1])))
-                if path in {"/ambient/workflows/apply", "/ambient/workflows/validate"} and request.method == "POST":
-                    payload = await request.json()
-                    response = await self.objects("/object_info")
-                    objects = json.loads(response.body)
-                    async with self.lock:
-                        if path.endswith("/validate"):
-                            validate_template(payload["template"], self.ambient_workflows.state["defaults"][payload["stage"]], objects)
-                            return web.json_response({"valid": True})
-                        if payload["expectedRevision"] != self.ambient_workflows.state["revision"]:
-                            raise ValueError("Workflow changed on another device. Reload before applying.")
-                        validate_template(payload["template"], self.ambient_workflows.state["defaults"][payload["stage"]], objects)
-                        template = await asyncio.to_thread(pin_references, payload["template"], self.volumes["input"])
-                        result = self.ambient_workflows.apply(payload["stage"], template, payload["expectedRevision"], objects)
-                        await self.persist()
-                    await self.broadcast({"type": "ambient_workflows", "data": {"revision": result["revision"]}})
-                    return web.json_response(result)
-                if path.startswith("/ambient/executions") and request.method == "GET":
-                    records = []
-                    for job in self.journal.data["jobs"].values():
-                        meta = job.get("body", {}).get("extra_data", {}).get("ambient")
-                        if not meta or (request.query.get("sessionId") and meta["sessionId"] != request.query["sessionId"]):
-                            continue
-                        if path != "/ambient/executions" and job["id"] != path.rsplit("/", 1)[-1]:
-                            continue
-                        records.append({"id": job["id"], "status": job["status"], "createdAt": job["created_at"],
-                                        "graph": job["body"]["prompt"], "meta": meta,
-                                        "workflow": meta.get("layout") or job["body"].get("extra_data", {}).get("extra_pnginfo", {}).get("workflow"),
-                                        "event": job.get("ambient_event"), "outputs": (job.get("history") or {}).get("outputs", {})})
-                    records.sort(key=lambda item: item["createdAt"], reverse=True)
-                    return web.json_response({"executions": records[:100]})
-                return web.json_response({"error": "Unknown Ambient route"}, status=404)
+            for extension in self.plugins:
+                response = await extension.handle(request, path)
+                if response is not None:
+                    return response
             if (path == "/jobs" or path.startswith("/jobs/")) and request.method == "GET":
                 async with self.client.post(self.cpu.url + "/_split/jobs", json={
                     "queue": self.journal.queue(), "history": self.journal.history(),
@@ -969,10 +916,10 @@ class Controller:
         catalog_path = environment_path(self.journal.data["environment"]) / "catalog.json"
         if catalog_path.exists():
             catalog = json.loads(catalog_path.read_text())
-            # Ambient packs are CPU-importable and always use live definitions.
+            # Managed packs are CPU-importable and always use live definitions.
             # Old GPU catalogs must not resurrect removed or disabled node IDs.
             catalog["objects"] = {name: definition for name, definition in catalog["objects"].items()
-                                  if not ambient_nodes.is_ambient_node(definition)}
+                                  if not node_packs.is_managed_node(definition)}
             # Live CPU definitions take precedence so model/file choices stay fresh.
             for name, sections in catalog.get("choice_sources", {}).items():
                 if name in objects or name not in catalog["objects"]:

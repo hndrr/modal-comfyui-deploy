@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from preserve_model import app, preserve_model
-from ambient.models import comfy_assets
+from model_manifests import comfy_assets
 
 @app.local_entrypoint()
 def prepare(mode: str = "h3"):

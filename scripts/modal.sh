@@ -18,6 +18,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE_FILE="$REPO_ROOT/.modal-profile"
 CONFIG_PATH="${MODAL_CONFIG_PATH:-$HOME/.modal.toml}"
 
+# Model preparation uses the optional shared recipe distribution.
+UV_ARGS=(run)
+for argument in "$@"; do
+  case "$argument" in
+    *prepare_ambient_h3.py*) UV_ARGS+=(--extra ambient); break ;;
+  esac
+done
+
 usage() {
   cat >&2 <<'EOF'
 Usage:
@@ -54,7 +62,7 @@ require_known_profile() {
   if ! grep -qF "[$profile]" "$CONFIG_PATH"; then
     echo "error: profile '$profile' is not in $CONFIG_PATH." >&2
     echo "Configured profiles:" >&2
-    uv run modal profile list >&2
+    uv "${UV_ARGS[@]}" modal profile list >&2
     exit 1
   fi
 }
@@ -90,7 +98,7 @@ case "$1" in
   --list | -l)
     pin="$(read_pin)"
     echo "pinned profile: ${pin:-(なし: ~/.modal.toml の既定を使用)}" >&2
-    exec uv run modal profile list
+    exec uv "${UV_ARGS[@]}" modal profile list
     ;;
   --profile)
     shift
@@ -103,22 +111,22 @@ case "$1" in
     shift
     require_known_profile "$profile"
     echo "modal: using profile '$profile' (--profile)" >&2
-    MODAL_PROFILE="$profile" exec uv run modal "$@"
+    MODAL_PROFILE="$profile" exec uv "${UV_ARGS[@]}" modal "$@"
     ;;
 esac
 
 # No subcommand of ours: run the Modal CLI with the pin applied.
 if [ -n "${MODAL_PROFILE:-}" ]; then
   echo "modal: using profile '$MODAL_PROFILE' (MODAL_PROFILE)" >&2
-  exec uv run modal "$@"
+  exec uv "${UV_ARGS[@]}" modal "$@"
 fi
 
 pin="$(read_pin)"
 if [ -n "$pin" ]; then
   require_known_profile "$pin"
   echo "modal: using profile '$pin' (.modal-profile)" >&2
-  MODAL_PROFILE="$pin" exec uv run modal "$@"
+  MODAL_PROFILE="$pin" exec uv "${UV_ARGS[@]}" modal "$@"
 fi
 
 echo "modal: using the active profile in $CONFIG_PATH" >&2
-exec uv run modal "$@"
+exec uv "${UV_ARGS[@]}" modal "$@"

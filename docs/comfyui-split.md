@@ -15,20 +15,17 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ./scripts/modal.sh deploy splitapp.py
 ```
 
-`ambient_app.py` 向けにAgentRuntime / Skills Loader / GeminiTools / Jevを使う場合は、
-`COMFYUI_AMBIENT_MODE=on` とGitHub取得用Modal Secretを設定する。
-デプロイ後の最初のアイドル起動でprivateリポジトリの最新HEADを確認し、変更されたものだけ取得する。
-確認結果は保存し、以降の通常起動はGitHubにアクセスせず保存済みノードを再利用する。
-追加ノードの更新を取り込むときは `./scripts/modal.sh deploy splitapp.py` を再実行する。
-取得・検証に失敗しても有効な旧環境があれば再利用し、同じデプロイでは毎回更新を再試行しない。
-CPU/GPUは引き続きジョブに固定した同じ環境を使う。
-HTTPの入口は更新処理より先に起動する。ComfyUIの準備中はルートに起動段階と経過時間を表示し、
-完了後に自動で画面を開く。`GET /split/startup` は準備状態を返す。
-APIは短い起動待ちを最大20秒待ち、それ以上は `503` と `Retry-After: 2` を返す。
-この間の生成リクエストは受け付けず、更新や表示だけでGPUを起動しない。
-起動処理中だけCPUを維持し、完了後は通常の自動停止条件に戻す。
-旧環境の期限切れ整理は画面の起動完了から5分後以降のアイドル処理へ回す。
-[設定と更新・復帰の動作](ambient.md#ambient用comfyuiの追加ノード)。既定はoff。
+標準構成はAmbientパッケージ・設定・Secretなしで動作します。
+Ambient Studio連携は `SPLIT_EXTENSIONS=ambient` で追加する任意拡張です。
+追加ノードは `SPLIT_NODE_PACKS=agent-runtime,skills-loader,gemini,jev` から必要なものを選び、
+Mac Bridgeは独立して `SPLIT_AGENT_BRIDGE=on` で有効にします。
+いずれも既定は無効です。設定・旧構成の移行・配布物の更新は [任意拡張](split-integrations.md) を参照してください。
+
+追加ノードを選択した場合だけ、デプロイ後の最初のアイドル起動で最新HEADを確認します。
+有効な旧環境があれば更新失敗時も再利用し、CPU/GPUはジョブに固定した同じ環境を使います。
+HTTPの入口は更新処理より先に起動し、`GET /split/startup` で起動段階を確認できます。
+準備中のAPIは最大20秒待ち、それ以上は `503` と `Retry-After: 2` を返します。
+表示・更新確認だけでGPUは起動しません。保存領域の整理は起動完了後のアイドル処理で行います。
 
 検証用URLはModal Proxy Authを必須とする。Cloudflare Workerの既存
 `MODAL_ORIGINS` で新しいホスト名をこのURLへ向ければ、既存のAccess認証を使える。
@@ -233,7 +230,7 @@ split前のWebSocket圧縮・user_managerソースパッチは、この分離構
 
 Split の `/ambient/workflows` は従来6モードに加えて、`h3-ref2v`、
 `fasth3-8step-i2v-vsa`、`fasth3-vsa-4step-i2v` を登録する。
-新レシピは `comfy_split/generation.py` に置き、旧 Ambient API のモードは増やさない。
+レシピはStudio所有の `ambient-comfyui` 配布物で管理する。`SPLIT_EXTENSIONS=ambient` の場合だけ公開し、旧Ambient APIの対応モードは増やさない。
 Ref2V は既存Volumeの Ref2VA INT8（prunedがあれば優先）を使う。
 モデルの自動ダウンロードは行わず、必要なモデルやノードがない場合は登録しない。
 8ステップはV2モデル＋SigmaShift 10/3＋BlockSparseAttention VSA、

@@ -1,11 +1,5 @@
 import unittest
-
-from ambient.contracts import DEFAULT_BACKENDS
-from ambient.h3 import workflow
-from ambient.readiness import validate_object_info
-from ambient_fixtures import object_info
-from test_ambient import request
-
+from ambient_fixtures import DEFAULT_BACKENDS, workflow, validate_object_info, object_info, request
 
 class UpstreamContractTest(unittest.TestCase):
     def test_video_decode_uses_fast_vae_and_requires_the_extension(self):

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from aiohttp import ClientError, ClientSession
 
-from comfy_split import ambient_nodes
+from comfy_split import node_packs
 from comfy_split.state import write_json
 from comfy_split.storage import ENVIRONMENTS, TEMP_ARCHIVE, USER
 
@@ -39,11 +39,12 @@ def create_environment(source="base", *, restore_image_browsing=False):
     target.mkdir()
     shutil.copytree(origin / "comfy/custom_nodes", target / "comfy/custom_nodes", symlinks=True)
     shutil.copytree(origin / "venv", target / "venv", symlinks=True)
-    if (origin / ambient_nodes.DIRECTORY).is_dir():
-        shutil.copytree(origin / ambient_nodes.DIRECTORY, target / ambient_nodes.DIRECTORY,
-                        symlinks=True)
-    if (origin / ambient_nodes.MANIFEST).is_file():
-        shutil.copyfile(origin / ambient_nodes.MANIFEST, target / ambient_nodes.MANIFEST)
+    for directory, manifest in ((node_packs.DIRECTORY, node_packs.MANIFEST),
+                                (node_packs.LEGACY_DIRECTORY, node_packs.LEGACY_MANIFEST)):
+        if (origin / directory).is_dir():
+            shutil.copytree(origin / directory, target / directory, symlinks=True)
+        if (origin / manifest).is_file():
+            shutil.copyfile(origin / manifest, target / manifest)
     if restore_image_browsing:
         node = "ComfyUI-Image-Browsing"
         destination = target / "comfy/custom_nodes" / node
@@ -214,12 +215,21 @@ class ComfyProcess:
         temporary = self.temp_root
         temporary.mkdir(parents=True, exist_ok=True)
         extension_paths = Path(__file__).with_name("extension_paths.yaml")
-        if ambient_nodes.enabled() and (source / ambient_nodes.DIRECTORY).is_dir():
-            # JSON is valid YAML. Absolute Volume paths are identical on CPU/GPU.
-            extension_paths = self.root / "ambient-extension-paths.json"
+        if node_packs.enabled():
+            # Only selected packs enter the search path. Old Volume snapshots may
+            # contain additional, now disabled packs and remain untouched.
+            active_nodes = self.root / "managed-nodes"
+            if active_nodes.exists():
+                shutil.rmtree(active_nodes)
+            active_nodes.mkdir()
+            for name in node_packs.node_names():
+                saved = node_packs.node_path(source, name)
+                if saved.is_dir():
+                    (active_nodes / name).symlink_to(saved, target_is_directory=True)
+            extension_paths = self.root / "split-extension-paths.json"
             write_json(extension_paths, {
                 "modal_control": {"custom_nodes": "/opt/comfy-extensions"},
-                "ambient": {"custom_nodes": str(source / ambient_nodes.DIRECTORY)},
+                "managed": {"custom_nodes": str(active_nodes)},
             })
         command = [str(source / "venv/bin/python"), str(self.root / "main.py"),
                    "--listen", "127.0.0.1", "--port", str(self.port),
@@ -235,7 +245,7 @@ class ComfyProcess:
         elif os.environ.get("COMFYUI_SAGE_ATTENTION", "on") == "on":
             command.append("--use-sage-attention")
         environment = dict(os.environ)
-        environment.pop(ambient_nodes.TOKEN_ENV, None)
+        environment.pop(node_packs.TOKEN_ENV, None)
         environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),
