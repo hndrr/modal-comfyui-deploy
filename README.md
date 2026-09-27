@@ -23,7 +23,6 @@ GitHub Actionsで、push・pull request時に以下を並列実行します。Ac
 - 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
 
 CIはPython 3.12・Node.js 22を使用し、認証情報なしで実行します。
-Ambientの音声・最終フレーム検証に必要な`ffmpeg`（`ffprobe`を含む）もCIでインストールします。ローカルで同じ検証を行う場合も必要です。
 Modal上での実生成・GPU停止・ブラウザ操作の検証はCIの対象外です。
 
 ## セットアップ
@@ -134,6 +133,6 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 
 ## Ambient Studio
 
-独立した [Ambient Studio](https://github.com/hndrr/ambient-studio) 向けに、生成job API、H3の最終フレーム継承、FastH3専用workerを提供します。画面・再生・FX・MIDIはフロント側が担当します。バックエンドの責務分担、設定、明示的なモデル準備、検証手順は [docs/ambient.md](docs/ambient.md) を参照してください。
+Split単体にはAmbientのコード・設定・Secretは不要です。Studio連携、追加ノード、Mac Bridgeをそれぞれ独立して有効化できます。[任意拡張と移行](docs/split-integrations.md) を参照してください。
 
-`splitapp.py` と `ambient_app.py` を組み合わせ、ComfyUIの接続先にはsplitappのCPU UIエンドポイントを指定します。splitモードではComfyUI画面を開いたままでも、生成終了後にGPUを自動停止できます。FastH3はComfyUIと専用FastVideo workerの両方に対応します。`python -m ambient.cli` からモデル・実行エンジンを指定して生成、状態確認、キャンセル、結果取得ができ、ブラウザ画面は不要です。
+[Ambient Studio](https://github.com/hndrr/ambient-studio) がジョブ、動画保存、再生、タグ付けを担当し、splitの任意拡張に接続します。旧`ambient_app.py`、`ambient` API・CLIと専用workerは廃止しました。既存のModal保存データは削除せず、任意拡張から保存済み動画を読み出せます。[Studio連携](docs/ambient.md) と [保存データ](docs/ambient-library.md) を参照してください。

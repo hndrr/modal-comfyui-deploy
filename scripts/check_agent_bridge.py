@@ -23,7 +23,7 @@ image = (modal.Image.debian_slim(python_version="3.12").pip_install("aiohttp==3.
          .add_local_file(Path(__file__).resolve().parents[1] / "comfy_split/bridge_transport.py",
                          "/root/bridge_transport.py"))
 configuration = modal.Secret.from_dict({key: os.environ.get(key, "") for key in (
-    "AMBIENT_COMFYUI_URL", "MODAL_PROXY_KEY", "MODAL_PROXY_SECRET")})
+    "SPLIT_URL", "MODAL_PROXY_KEY", "MODAL_PROXY_SECRET")})
 bridge_secret = modal.Secret.from_name(os.environ.get("AGENT_RUNTIME_SECRET_NAME") or "agent-runtime-secret",
                                        required_keys=["AGENT_RUNTIME_BRIDGE_TOKEN"])
 
@@ -34,7 +34,7 @@ async def check():
     from PIL import Image
     from bridge_transport import HttpSocket, TRANSPORT
 
-    url = os.environ["AMBIENT_COMFYUI_URL"].rstrip("/")
+    url = os.environ["SPLIT_URL"].rstrip("/")
     headers = {"Modal-Key": os.environ["MODAL_PROXY_KEY"], "Modal-Secret": os.environ["MODAL_PROXY_SECRET"],
                "Authorization": "Bearer " + os.environ["AGENT_RUNTIME_BRIDGE_TOKEN"]}
     prefix = "/agent_runtime/bridge"
@@ -45,7 +45,7 @@ async def check():
     job_id = None
     terminal = False
     async with ClientSession(headers=headers, timeout=ClientTimeout(total=660)) as client:
-        print("Waiting for split startup and Ambient node refresh", flush=True)
+        print("Waiting for split startup and managed node refresh", flush=True)
         async with client.get(url + "/split/status") as response:
             response.raise_for_status()
             status = await response.json()

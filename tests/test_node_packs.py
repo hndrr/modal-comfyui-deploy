@@ -9,12 +9,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from comfy_split import ambient_nodes, runtime
+from comfy_split import node_packs, runtime
+from comfy_split.config import Settings, NODE_PACKS
 from comfy_split.gateway import Controller
 from comfy_split.state import write_json
 
 
-class AmbientRepositoryTests(unittest.TestCase):
+class ManagedRepositoryTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -29,7 +30,7 @@ class AmbientRepositoryTests(unittest.TestCase):
         write_json(self.source / "catalog.json", {"objects": {"GPUOnly": {}}})
         self.run = subprocess.run
         self.remotes = {}
-        for repo in ambient_nodes.REPOSITORIES:
+        for repo in node_packs.REPOSITORIES:
             name = repo.split("/")[1]
             remote = self.root / name
             self.run(["git", "init", "-q", "-b", "main", str(remote)], check=True)
@@ -42,9 +43,9 @@ class AmbientRepositoryTests(unittest.TestCase):
         self.fail_clone = False
         self.addCleanup(patch.stopall)
         patch.object(runtime, "ENVIRONMENTS", self.environments).start()
-        patch.dict(os.environ, {ambient_nodes.TOKEN_ENV: "test-token",
+        patch.dict(os.environ, {"SPLIT_NODE_PACKS": ",".join(NODE_PACKS), node_packs.TOKEN_ENV: "test-token",
                               "GIT_TRACE_CURL": "1", "GIT_CURL_VERBOSE": "1"}).start()
-        patch.object(ambient_nodes.subprocess, "run", side_effect=self.execute).start()
+        patch.object(node_packs.subprocess, "run", side_effect=self.execute).start()
 
     def commit(self, remote, message):
         self.run(["git", "-C", str(remote), "add", "."], check=True)
@@ -70,17 +71,17 @@ class AmbientRepositoryTests(unittest.TestCase):
                 repo = command[index].removeprefix("https://github.com/").removesuffix(".git")
                 command[index] = self.remotes[repo].as_uri()
             return self.run(command, **kwargs)
-        self.assertNotIn(ambient_nodes.TOKEN_ENV, kwargs["env"])
+        self.assertNotIn(node_packs.TOKEN_ENV, kwargs["env"])
         if self.fail_dependency:
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0)
 
     def test_latest_default_branches_are_published_as_one_immutable_snapshot(self):
-        version = ambient_nodes.prepare_environment("base")
+        version = node_packs.prepare_environment("base")
         target = self.environments / version
-        manifest = json.loads((target / ambient_nodes.MANIFEST).read_text())
-        self.assertEqual(set(manifest), ambient_nodes.NODE_NAMES)
-        self.assertFalse((self.source / ambient_nodes.DIRECTORY).exists())
+        manifest = json.loads((target / node_packs.MANIFEST).read_text())
+        self.assertEqual(set(manifest), node_packs.NODE_NAMES)
+        self.assertFalse((self.source / node_packs.DIRECTORY).exists())
         self.assertTrue((target / "comfy/custom_nodes/user-node/__init__.py").exists())
         self.assertEqual(json.loads((target / "catalog.json").read_text()),
                          {"objects": {"GPUOnly": {}}})
@@ -88,39 +89,64 @@ class AmbientRepositoryTests(unittest.TestCase):
         self.assertEqual(pip.count("-r"), 4)
         self.assertIn("/opt/split-constraints.txt", pip)
         self.calls.clear()
-        self.assertIsNone(ambient_nodes.prepare_environment(version))
+        self.assertIsNone(node_packs.prepare_environment(version))
         self.assertEqual(sum("ls-remote" in command for command, _ in self.calls), 4)
         self.assertFalse(any("fetch" in command or "pip" in command for command, _ in self.calls))
         self.assertEqual(len(list(self.environments.iterdir())), 2)
-        remote = self.remotes[ambient_nodes.REPOSITORIES[0]]
+        remote = self.remotes[node_packs.REPOSITORIES[0]]
         (remote / "__init__.py").write_text("# latest version\n")
         self.commit(remote, "update")
         self.calls.clear()
-        updated = ambient_nodes.prepare_environment(version)
+        updated = node_packs.prepare_environment(version)
         self.assertEqual(sum("fetch" in command for command, _ in self.calls), 1)
         name = remote.name
-        self.assertEqual((target / ambient_nodes.DIRECTORY / name / "__init__.py").read_text(),
+        self.assertEqual((target / node_packs.DIRECTORY / name / "__init__.py").read_text(),
                          "# first version\n")
-        self.assertEqual((self.environments / updated / ambient_nodes.DIRECTORY / name
+        self.assertEqual((self.environments / updated / node_packs.DIRECTORY / name
                           / "__init__.py").read_text(), "# latest version\n")
         self.assertNotEqual(manifest[name], json.loads(
-            (self.environments / updated / ambient_nodes.MANIFEST).read_text())[name])
+            (self.environments / updated / node_packs.MANIFEST).read_text())[name])
         self.assertTrue(all("test-token" not in " ".join(command) for command, _ in self.calls))
 
     def test_saved_snapshot_can_be_read_without_token_or_git(self):
-        version = ambient_nodes.prepare_environment("base")
+        version = node_packs.prepare_environment("base")
         self.calls.clear()
-        with patch.dict(os.environ, {ambient_nodes.TOKEN_ENV: ""}):
-            self.assertEqual(set(ambient_nodes.snapshot_revisions(version)), ambient_nodes.NODE_NAMES)
+        with patch.dict(os.environ, {node_packs.TOKEN_ENV: ""}):
+            self.assertEqual(set(node_packs.snapshot_revisions(version)), node_packs.NODE_NAMES)
         self.assertEqual(self.calls, [])
         target = self.environments / version
-        (target / ambient_nodes.DIRECTORY / next(iter(ambient_nodes.NODE_NAMES)) / "__init__.py").unlink()
-        self.assertIsNone(ambient_nodes.snapshot_revisions(version))
+        (target / node_packs.DIRECTORY / next(iter(node_packs.NODE_NAMES)) / "__init__.py").unlink()
+        self.assertIsNone(node_packs.snapshot_revisions(version))
+
+    def test_individual_selection_reuses_legacy_volume_and_fetches_only_selected_pack(self):
+        version = node_packs.prepare_environment("base")
+        original = self.environments / version
+        (original / node_packs.DIRECTORY).rename(original / node_packs.LEGACY_DIRECTORY)
+        (original / node_packs.MANIFEST).rename(original / node_packs.LEGACY_MANIFEST)
+        legacy = (original / node_packs.LEGACY_MANIFEST).read_bytes()
+        selected = "ComfyUI-GeminiTools"
+        self.calls.clear()
+        with patch.dict(os.environ, {"SPLIT_NODE_PACKS": "gemini", "SPLIT_EXTENSIONS": ""}):
+            with patch.dict(os.environ, {node_packs.TOKEN_ENV: ""}):
+                self.assertEqual(set(node_packs.snapshot_revisions(version)), {selected})
+            self.assertEqual(self.calls, [])
+            remote = self.remotes[NODE_PACKS["gemini"]]
+            (remote / "__init__.py").write_text("# selected update\n")
+            self.commit(remote, "update selected pack")
+            updated = node_packs.prepare_environment(version)
+            self.assertEqual(set(node_packs.snapshot_revisions(updated)), {selected})
+        self.assertEqual(sum("ls-remote" in cmd for cmd, _ in self.calls), 1)
+        self.assertEqual(sum("fetch" in cmd for cmd, _ in self.calls), 1)
+        self.assertEqual(next(cmd for cmd, _ in self.calls if "pip" in cmd).count("-r"), 1)
+        self.assertEqual((original / node_packs.LEGACY_MANIFEST).read_bytes(), legacy)
+        target = self.environments / updated
+        self.assertEqual({p.name for p in (target / node_packs.DIRECTORY).iterdir()}, {selected})
+        self.assertEqual({p.name for p in (target / node_packs.LEGACY_DIRECTORY).iterdir()}, node_packs.NODE_NAMES)
 
     def test_fetch_pins_checked_revision_even_if_branch_advances(self):
         original_execute = self.execute
         updated = False
-        first_repo = ambient_nodes.REPOSITORIES[0]
+        first_repo = node_packs.REPOSITORIES[0]
         first_name = first_repo.split("/")[1]
 
         def advance_branch(command, **kwargs):
@@ -132,51 +158,51 @@ class AmbientRepositoryTests(unittest.TestCase):
                 updated = True
             return original_execute(command, **kwargs)
 
-        with patch.object(ambient_nodes.subprocess, "run", side_effect=advance_branch):
-            version = ambient_nodes.prepare_environment("base")
-        self.assertEqual((self.environments / version / ambient_nodes.DIRECTORY
+        with patch.object(node_packs.subprocess, "run", side_effect=advance_branch):
+            version = node_packs.prepare_environment("base")
+        self.assertEqual((self.environments / version / node_packs.DIRECTORY
                           / first_name / "__init__.py").read_text(), "# first version\n")
 
     def test_corrupt_manifest_is_repaired_without_mutating_active_snapshot(self):
-        version = ambient_nodes.prepare_environment("base")
+        version = node_packs.prepare_environment("base")
         target = self.environments / version
-        (target / ambient_nodes.MANIFEST).write_text("{")
-        self.assertIsNone(ambient_nodes.snapshot_revisions(version))
-        repaired = ambient_nodes.prepare_environment(version)
-        self.assertIsNotNone(ambient_nodes.snapshot_revisions(repaired))
-        self.assertEqual((target / ambient_nodes.MANIFEST).read_text(), "{")
+        (target / node_packs.MANIFEST).write_text("{")
+        self.assertIsNone(node_packs.snapshot_revisions(version))
+        repaired = node_packs.prepare_environment(version)
+        self.assertIsNotNone(node_packs.snapshot_revisions(repaired))
+        self.assertEqual((target / node_packs.MANIFEST).read_text(), "{")
 
     def test_failed_fetch_or_missing_token_never_copies_the_active_environment(self):
         self.fail_clone = True
         with self.assertRaises(subprocess.CalledProcessError):
-            ambient_nodes.prepare_environment("base")
+            node_packs.prepare_environment("base")
         self.assertEqual(list(self.environments.iterdir()), [self.source])
-        with patch.dict(os.environ, {ambient_nodes.TOKEN_ENV: ""}):
-            with self.assertRaisesRegex(RuntimeError, ambient_nodes.TOKEN_ENV):
-                ambient_nodes.prepare_environment("base")
+        with patch.dict(os.environ, {node_packs.TOKEN_ENV: ""}):
+            with self.assertRaisesRegex(RuntimeError, node_packs.TOKEN_ENV):
+                node_packs.prepare_environment("base")
         self.assertEqual(list(self.environments.iterdir()), [self.source])
 
     def test_failed_dependency_install_leaves_source_untouched(self):
         self.fail_dependency = True
         with self.assertRaises(subprocess.CalledProcessError):
-            ambient_nodes.prepare_environment("base")
-        self.assertFalse((self.source / ambient_nodes.MANIFEST).exists())
-        self.assertFalse((self.source / ambient_nodes.DIRECTORY).exists())
+            node_packs.prepare_environment("base")
+        self.assertFalse((self.source / node_packs.MANIFEST).exists())
+        self.assertFalse((self.source / node_packs.DIRECTORY).exists())
         self.assertEqual((self.source / "venv/bin/pip").read_text(),
                          f"#!{self.source}/venv/bin/python\n")
 
     def test_manager_candidate_retains_ambient_snapshot(self):
-        version = ambient_nodes.prepare_environment("base")
+        version = node_packs.prepare_environment("base")
         candidate = runtime.create_environment(version)
         original = self.environments / version
         copied = self.environments / candidate
-        self.assertEqual((copied / ambient_nodes.MANIFEST).read_text(),
-                         (original / ambient_nodes.MANIFEST).read_text())
-        self.assertEqual({p.name for p in (copied / ambient_nodes.DIRECTORY).iterdir()},
-                         ambient_nodes.NODE_NAMES)
+        self.assertEqual((copied / node_packs.MANIFEST).read_text(),
+                         (original / node_packs.MANIFEST).read_text())
+        self.assertEqual({p.name for p in (copied / node_packs.DIRECTORY).iterdir()},
+                         node_packs.NODE_NAMES)
 
 
-class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
+class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -185,15 +211,15 @@ class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
         self.worker = Mock()
         self.control = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
         self.catalog = {"objects": {name: {"python_module": "custom_nodes." + name}
-                                    for name in ambient_nodes.NODE_NAMES}}
+                                    for name in node_packs.NODE_NAMES}}
         self.control.candidate = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(),
                                                 catalog=AsyncMock(return_value=self.catalog))
         self.addCleanup(patch.stopall)
-        patch.dict(os.environ, {ambient_nodes.MODE_ENV: "on",
-                              ambient_nodes.DEPLOYMENT_ENV: "deployment-1"}).start()
-        self.prepare = patch.object(ambient_nodes, "prepare_environment", return_value="env-new").start()
-        self.revisions = {name: "a" * 40 for name in ambient_nodes.NODE_NAMES}
-        self.snapshot = patch.object(ambient_nodes, "snapshot_revisions",
+        patch.dict(os.environ, {"COMFYUI_AMBIENT_MODE": "on",
+                              node_packs.DEPLOYMENT_ENV: "deployment-1"}).start()
+        self.prepare = patch.object(node_packs, "prepare_environment", return_value="env-new").start()
+        self.revisions = {name: "a" * 40 for name in node_packs.NODE_NAMES}
+        self.snapshot = patch.object(node_packs, "snapshot_revisions",
                                      return_value=self.revisions).start()
 
     async def test_refresh_commits_snapshot_before_selecting_it_and_never_wakes_gpu(self):
@@ -201,7 +227,7 @@ class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
         async def commit():
             selected_during_commit.append(self.control.journal.data["environment"])
         self.volumes["environment"].commit.aio.side_effect = commit
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         self.assertEqual(selected_during_commit, ["base"])
         self.assertEqual(self.control.journal.data["environment"], "env-new")
         self.assertEqual(json.loads(self.control.journal.path.read_text())["environment"], "env-new")
@@ -209,112 +235,112 @@ class AmbientStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.worker.mock_calls, [])
 
     async def test_disabled_busy_and_editing_startups_do_not_fetch(self):
-        with patch.dict(os.environ, {ambient_nodes.MODE_ENV: "off"}):
-            await self.control.refresh_ambient_nodes()
+        with patch.dict(os.environ, {"COMFYUI_AMBIENT_MODE": "off"}):
+            await self.control.refresh_node_packs()
         for status in ("queued", "running", "unknown"):
             self.control.journal.data["jobs"] = {"job": {"status": status}}
-            await self.control.refresh_ambient_nodes()
+            await self.control.refresh_node_packs()
         self.control.journal.data["jobs"] = {}
         self.control.journal.data["candidate"] = {"status": "editing"}
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         self.prepare.assert_not_called()
 
     async def test_fetch_dependency_and_import_failures_keep_previous_environment(self):
         for error in (RuntimeError("private repository unavailable"),
                       RuntimeError("dependency conflict"), None):
-            self.control.journal.data.pop(ambient_nodes.REFRESH_KEY, None)
+            self.control.journal.data.pop(node_packs.REFRESH_KEY, None)
             self.prepare.side_effect = error
             self.control.candidate.catalog.return_value = {"objects": {}}
             with self.assertLogs("comfy_split.gateway", level="ERROR"):
-                await self.control.refresh_ambient_nodes()
+                await self.control.refresh_node_packs()
             self.assertEqual(self.control.journal.data["environment"], "base")
         self.volumes["environment"].commit.aio.assert_not_awaited()
         self.assertEqual(self.worker.mock_calls, [])
 
     async def test_cold_restart_reuses_persisted_snapshot_without_github_access(self):
         self.prepare.return_value = None
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
         self.prepare.reset_mock()
         self.prepare.side_effect = AssertionError("ordinary startup must not use GitHub")
-        with patch.dict(os.environ, {ambient_nodes.TOKEN_ENV: ""}):
-            await restarted.refresh_ambient_nodes()
+        with patch.dict(os.environ, {node_packs.TOKEN_ENV: ""}):
+            await restarted.refresh_node_packs()
         self.prepare.assert_not_called()
         self.assertEqual(self.worker.mock_calls, [])
 
     async def test_new_deployment_rechecks_but_manager_copy_reuses_saved_nodes(self):
         self.prepare.return_value = None
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         self.prepare.reset_mock()
         self.control.journal.data["environment"] = "env-manager-copy"
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         self.prepare.assert_not_called()
-        with patch.dict(os.environ, {ambient_nodes.DEPLOYMENT_ENV: "deployment-2"}):
-            await self.control.refresh_ambient_nodes()
+        with patch.dict(os.environ, {node_packs.DEPLOYMENT_ENV: "deployment-2"}):
+            await self.control.refresh_node_packs()
         self.prepare.assert_called_once_with("env-manager-copy")
 
     async def test_failed_update_with_valid_snapshot_is_not_retried_on_each_cold_start(self):
         self.prepare.side_effect = RuntimeError("GitHub unavailable")
         with self.assertLogs("comfy_split.gateway", level="ERROR"):
-            await self.control.refresh_ambient_nodes()
-        self.assertEqual(self.control.journal.data[ambient_nodes.REFRESH_KEY]["status"], "failed")
+            await self.control.refresh_node_packs()
+        self.assertEqual(self.control.journal.data[node_packs.REFRESH_KEY]["status"], "failed")
         restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name))
-        await restarted.refresh_ambient_nodes()
+        await restarted.refresh_node_packs()
         self.prepare.assert_called_once()
         self.prepare.side_effect = None
         self.prepare.return_value = None
-        with patch.dict(os.environ, {ambient_nodes.DEPLOYMENT_ENV: "deployment-2"}):
-            await restarted.refresh_ambient_nodes()
+        with patch.dict(os.environ, {node_packs.DEPLOYMENT_ENV: "deployment-2"}):
+            await restarted.refresh_node_packs()
         self.assertEqual(self.prepare.call_count, 2)
-        self.assertEqual(restarted.journal.data[ambient_nodes.REFRESH_KEY]["status"], "unchanged")
+        self.assertEqual(restarted.journal.data[node_packs.REFRESH_KEY]["status"], "unchanged")
 
     async def test_missing_snapshot_is_repaired_and_failed_first_install_can_retry(self):
         self.prepare.return_value = None
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         self.snapshot.return_value = None
         self.prepare.side_effect = RuntimeError("initial install unavailable")
         for _ in range(2):
             with self.assertLogs("comfy_split.gateway", level="ERROR"):
-                await self.control.refresh_ambient_nodes()
+                await self.control.refresh_node_packs()
         self.assertEqual(self.prepare.call_count, 3)
 
     async def test_same_revisions_do_not_restart_comfy_or_republish(self):
         self.prepare.return_value = None
-        await self.control.refresh_ambient_nodes()
+        await self.control.refresh_node_packs()
         self.control.candidate.start.assert_not_awaited()
         self.volumes["environment"].commit.aio.assert_not_awaited()
 
     async def test_failed_volume_commit_does_not_select_unpublished_snapshot(self):
         self.volumes["environment"].commit.aio.side_effect = RuntimeError("commit failed")
         with self.assertRaisesRegex(RuntimeError, "commit failed"):
-            await self.control.refresh_ambient_nodes()
+            await self.control.refresh_node_packs()
         self.assertEqual(self.control.journal.data["environment"], "base")
         self.volumes["data"].commit.aio.assert_not_awaited()
 
-    async def test_catalog_uses_live_ambient_nodes_and_keeps_unrelated_gpu_nodes(self):
+    async def test_catalog_uses_live_node_packs_and_keeps_unrelated_gpu_nodes(self):
         root = Path(self.directory.name)
         write_json(root / "catalog.json", {
             "objects": {
-                "RemovedAmbientNode": {"python_module": "custom_nodes.ComfyUI-Jev"},
+                "RemovedManagedNode": {"python_module": "custom_nodes.ComfyUI-Jev"},
                 "GPUOnly": {"python_module": "custom_nodes.user-node"},
             },
-            "choice_sources": {"RemovedAmbientNode": {"required": {"model": "models"}}},
+            "choice_sources": {"RemovedManagedNode": {"required": {"model": "models"}}},
         })
         response = SimpleNamespace(raise_for_status=Mock(), json=AsyncMock(return_value={
-            "CurrentAmbientNode": {"python_module": "custom_nodes.ComfyUI-Jev"},
+            "CurrentManagedNode": {"python_module": "custom_nodes.ComfyUI-Jev"},
         }))
         context = AsyncMock()
         context.__aenter__.return_value = response
         self.control.client = SimpleNamespace(get=Mock(return_value=context))
         with patch("comfy_split.gateway.environment_path", return_value=root):
             current = await self.control.objects("/object_info")
-            self.assertEqual(set(json.loads(current.text)), {"CurrentAmbientNode", "GPUOnly"})
+            self.assertEqual(set(json.loads(current.text)), {"CurrentManagedNode", "GPUOnly"})
             response.json.return_value = {}
             disabled = await self.control.objects("/object_info")
             self.assertEqual(set(json.loads(disabled.text)), {"GPUOnly"})
 
 
-class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
+class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
     def test_named_provider_secrets_do_not_capture_local_keys(self):
         import comfyapp  # Load shared configuration before spying on this app's secrets.
         import modal
@@ -332,13 +358,13 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
         }
         for mode in ("on", "off"):
             with self.subTest(mode=mode), \
-                 patch.dict(os.environ, {**settings, ambient_nodes.MODE_ENV: mode}), \
+                 patch.dict(os.environ, {**settings, "COMFYUI_AMBIENT_MODE": mode}), \
                  patch.object(modal.Secret, "from_name", wraps=modal.Secret.from_name) as named, \
                  patch.object(modal.Secret, "from_dict") as inline:
                 app = runpy.run_path(str(Path(comfyapp.__file__).with_name("splitapp.py")))
             inline.assert_not_called()
             if mode == "on":
-                self.assertEqual([secret.name for secret in app["ambient_secrets"]],
+                self.assertEqual([secret.name for secret in app["provider_secrets"]],
                                  ["my-gemini", "my-openrouter", "my-agent-runtime"])
                 self.assertEqual([(call.args[0], call.kwargs["required_keys"])
                                   for call in named.call_args_list], [
@@ -349,7 +375,7 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
                 ])
             else:
                 named.assert_not_called()
-                self.assertEqual(app["ambient_secrets"], [])
+                self.assertEqual(app["provider_secrets"], [])
 
     def test_container_import_preserves_named_secret_dependencies(self):
         import comfyapp
@@ -362,7 +388,7 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
             image_env.update(values)
             return original(image, values)
 
-        settings = {ambient_nodes.MODE_ENV: "on", "GITHUB_SECRET_NAME": "private-repos",
+        settings = {"COMFYUI_AMBIENT_MODE": "on", "GITHUB_SECRET_NAME": "private-repos",
                     "GEMINI_SECRET_NAME": "provider-a", "TYPESAFE_SECRET_NAME": "",
                     "OPENROUTER_SECRET_NAME": "provider-b", "AGENT_RUNTIME_SECRET_NAME": "mac-bridge",
                     "GEMINI_API_KEY": "must-not-be-baked", "AGENT_RUNTIME_BRIDGE_TOKEN": "also-private"}
@@ -374,11 +400,11 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
         # A container has image env + injected credentials, but no local .env.
         with patch.dict(os.environ, image_env, clear=True):
             remote = runpy.run_path(path)
-        self.assertEqual(remote["AMBIENT_DEPLOYMENT"], local["AMBIENT_DEPLOYMENT"])
+        self.assertEqual(remote["DEPLOYMENT_ID"], local["DEPLOYMENT_ID"])
         with patch.dict(os.environ, settings):
             redeployed = runpy.run_path(path)
-        self.assertNotEqual(redeployed["AMBIENT_DEPLOYMENT"], local["AMBIENT_DEPLOYMENT"])
-        for key in ("ambient_secrets", "github_secrets"):
+        self.assertNotEqual(redeployed["DEPLOYMENT_ID"], local["DEPLOYMENT_ID"])
+        for key in ("provider_secrets", "github_secrets"):
             self.assertEqual([secret.name for secret in remote[key]], [secret.name for secret in local[key]])
 
     async def test_cpu_and_gpu_use_same_snapshot_only_when_enabled_without_git_token(self):
@@ -387,7 +413,9 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
             environments = root / "environments"
             source = environments / "env-snapshot"
             (source / "comfy/custom_nodes").mkdir(parents=True)
-            (source / ambient_nodes.DIRECTORY).mkdir()
+            (source / node_packs.DIRECTORY).mkdir()
+            for name in node_packs.NODE_NAMES:
+                (source / node_packs.DIRECTORY / name).mkdir()
             template = root / "template"
             (template / "custom_nodes").mkdir(parents=True)
             (template / "main.py").write_text("# main\n")
@@ -399,7 +427,10 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
                              "AGENT_RUNTIME_BRIDGE_TOKEN": "bridge-from-modal"}
             def local_path(value):
                 return root / value.lstrip("/") if value in {"/models", "/data/input", "/data/output"} else Path(value)
-            for mode in ("on", "off"):
+            for mode in ("on", "off", "gemini"):
+                selection = {"COMFYUI_AMBIENT_MODE": mode} if mode != "gemini" else {
+                    "COMFYUI_AMBIENT_MODE": "on", "SPLIT_NODE_PACKS": "gemini",
+                    "SPLIT_EXTENSIONS": "", "SPLIT_AGENT_BRIDGE": "off"}
                 for role in ("cpu", "gpu"):
                     process = runtime.ComfyProcess(role, 8187)
                     process.root = root / f"{mode}-{role}"
@@ -409,25 +440,30 @@ class AmbientLaunchTests(unittest.IsolatedAsyncioTestCase):
                     with patch.object(runtime, "ENVIRONMENTS", environments), \
                          patch.object(runtime, "TEMPLATE", template), patch.object(runtime, "USER", user), \
                          patch.object(runtime, "Path", side_effect=local_path), \
-                         patch.dict(os.environ, {ambient_nodes.MODE_ENV: mode,
-                                                ambient_nodes.TOKEN_ENV: "not-for-comfy",
+                         patch.dict(os.environ, {**selection,
+                                                node_packs.TOKEN_ENV: "not-for-comfy",
                                                 **provider_keys}), \
                          patch.object(runtime.asyncio, "create_subprocess_exec", launch):
                         with self.assertRaisesRegex(RuntimeError, "captured launch"):
                             await process.start("env-snapshot", cpu=role == "cpu")
                     command = launch.call_args.args
-                    self.assertNotIn(ambient_nodes.TOKEN_ENV, launch.call_args.kwargs["env"])
+                    self.assertNotIn(node_packs.TOKEN_ENV, launch.call_args.kwargs["env"])
                     self.assertEqual({key: launch.call_args.kwargs["env"][key] for key in provider_keys},
                                      provider_keys)
                     config = Path(command[command.index("--extra-model-paths-config") + 1])
-                    if mode == "on":
-                        self.assertEqual(json.loads(config.read_text())["ambient"]["custom_nodes"],
-                                         str(source / ambient_nodes.DIRECTORY))
+                    if mode != "off":
+                        self.assertEqual(json.loads(config.read_text())["managed"]["custom_nodes"],
+                                         str(process.root / "managed-nodes"))
+                        selected = node_packs.NODE_NAMES if mode == "on" else {"ComfyUI-GeminiTools"}
+                        self.assertEqual({p.name for p in (process.root / "managed-nodes").iterdir()}, selected)
+                        for name in selected:
+                            self.assertEqual((process.root / "managed-nodes" / name).resolve(),
+                                             (source / node_packs.DIRECTORY / name).resolve())
                     else:
                         self.assertEqual(config.name, "extension_paths.yaml")
 
     def test_mode_defaults_off_and_rejects_typos(self):
-        self.assertFalse(ambient_nodes.enabled({}))
-        self.assertTrue(ambient_nodes.enabled({ambient_nodes.MODE_ENV: " ON "}))
+        self.assertFalse(Settings.read({}).node_packs)
+        self.assertTrue(Settings.read({"COMFYUI_AMBIENT_MODE": " ON "}).node_packs)
         with self.assertRaises(ValueError):
-            ambient_nodes.enabled({ambient_nodes.MODE_ENV: "of"})
+            Settings.read({"COMFYUI_AMBIENT_MODE": "of"})

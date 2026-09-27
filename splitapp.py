@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import shlex
 import sys
 import threading
 import time
@@ -10,7 +11,8 @@ import uuid
 
 import modal
 
-from comfy_split import ambient_nodes
+from comfy_split import node_packs
+from comfy_split.config import Settings, DEPLOYMENT_ENV
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
     FLASH_ATTN_WHEEL_URL,
@@ -26,46 +28,18 @@ from comfyapp import (
 )
 
 APP_NAME = "comfyui-split"
-AMBIENT_MODE = ambient_nodes.enabled()
-# Mint once on the deploying client and preserve it when Modal imports this
-# module in a container. Keep it in the final image layer to reuse build caches.
-AMBIENT_DEPLOYMENT = os.environ.get(ambient_nodes.DEPLOYMENT_ENV) or uuid.uuid4().hex
-AMBIENT_SECRET_KEYS = (
-    ("GEMINI_SECRET_NAME", "GEMINI_API_KEY"),
-    ("TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"),
-    ("OPENROUTER_SECRET_NAME", "OPENROUTER_API_KEY"),
-    ("AGENT_RUNTIME_SECRET_NAME", "AGENT_RUNTIME_BRIDGE_TOKEN"),
-)
-# Modal imports this module again inside each container. Preserve the names so
-# that the remote function has exactly the same Secret dependencies as deploy.
-# Only names belong in the image; credential values come from Modal Secrets.
-secret_names = {
-    name: os.environ.get(name, "").strip() for name, _ in AMBIENT_SECRET_KEYS
-}
-secret_names["GITHUB_SECRET_NAME"] = (
-    os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret"
-)
-# The read-only repository token belongs only to the CPU updater. Provider keys
-# and Bridge credentials reach the CPU endpoints and the GPU executing nodes.
-ambient_secrets = (
-    [
-        modal.Secret.from_name(secret_name, required_keys=[key])
-        for setting, key in AMBIENT_SECRET_KEYS
-        if (secret_name := secret_names[setting])
-    ]
-    if AMBIENT_MODE
-    else []
-)
-github_secrets = (
-    [
-        modal.Secret.from_name(
-            secret_names["GITHUB_SECRET_NAME"],
-            required_keys=[ambient_nodes.TOKEN_ENV],
-        )
-    ]
-    if AMBIENT_MODE
-    else []
-)
+settings = Settings.read()
+# One identity per deployment, shared by CPU snapshots and node refreshes.
+DEPLOYMENT_ID = os.environ.get(DEPLOYMENT_ENV) or uuid.uuid4().hex
+provider_settings = settings.secrets(os.environ)
+secret_names = {name: value for name, _, value in provider_settings}
+provider_secrets = [modal.Secret.from_name(value, required_keys=[key])
+                    for _, key, value in provider_settings]
+github_secrets = []
+if settings.node_packs:
+    secret_names["GITHUB_SECRET_NAME"] = os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret"
+    github_secrets = [modal.Secret.from_name(secret_names["GITHUB_SECRET_NAME"],
+                                           required_keys=[node_packs.TOKEN_ENV])]
 COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
 FRONTEND_VERSION = "1.52.7"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
@@ -129,7 +103,7 @@ image = (
             **secret_names,
             "SPLIT_APP": APP_NAME,
             "SPLIT_VOLUMES": json.dumps(VOLUME_NAMES),
-            ambient_nodes.MODE_ENV: "on" if AMBIENT_MODE else "off",
+            **settings.environment(),
             "COMFYUI_SAGE_ATTENTION": "on" if SAGE_ATTENTION_ENABLED else "off",
             "SPLIT_GENERATION_TIMEOUT": str(FUNCTION_TIMEOUT),
             "PYTHONPATH": "/opt/split",
@@ -159,17 +133,29 @@ image = (
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
-    .add_local_dir(
-        "ambient",
-        "/opt/split/ambient",
-        copy=True,
-        ignore=["docs/**", "**/__pycache__/**", "**/*.pyc"],
-    )
     .run_commands(
         "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
     )
-    .env({ambient_nodes.DEPLOYMENT_ENV: AMBIENT_DEPLOYMENT})
 )
+if "ambient" in settings.extensions:
+    from bundled_packages import ambient_wheel
+
+    wheel = ambient_wheel()
+    frontend_init = 'NODE_CLASS_MAPPINGS = {}\nWEB_DIRECTORY = "./web"\n'
+    frontend_setup = (
+        'import ambient_comfyui, shutil; from pathlib import Path; '
+        'p=Path("/opt/comfy-extensions/ComfyUI-Ambient"); p.mkdir(); '
+        'shutil.copytree(Path(ambient_comfyui.__file__).parent/"web",p/"web"); '
+        f'p.joinpath("__init__.py").write_text({frontend_init!r})'
+    )
+    image = image.add_local_file("bundled_packages.py", "/root/bundled_packages.py", copy=True)
+    image = image.add_local_file("vendor/ambient-comfyui.json", "/opt/wheels/ambient-comfyui.json", copy=True)
+    image = image.add_local_file(wheel, "/opt/wheels/" + wheel.name, copy=True).run_commands(
+        "python -m pip install --no-deps /opt/wheels/" + wheel.name,
+        "python -c " + shlex.quote(frontend_setup),
+    )
+# Deployment-only layer last, so source and dependency builds remain cached.
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 app = modal.App(APP_NAME)
 
 # Only this image preloads CPU ComfyUI during module import, before Modal's
@@ -184,7 +170,7 @@ if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
 @app.function(
     image=image,
     gpu=str(GPU_PROFILE["modal_gpu"]),
-    secrets=ambient_secrets,
+    secrets=provider_secrets,
     min_containers=0,
     max_containers=1,
     scaledown_window=30,
@@ -207,7 +193,7 @@ async def gpu_worker(spec):
     memory=8192,
     enable_memory_snapshot=True,
     startup_timeout=600,
-    secrets=[*ambient_secrets, *github_secrets],
+    secrets=[*provider_secrets, *github_secrets],
     timeout=86400,
     volumes={MOUNTS[key]: value for key, value in volumes.items()},
 )

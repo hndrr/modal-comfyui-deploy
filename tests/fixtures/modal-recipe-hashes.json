@@ -1,0 +1,14 @@
+{
+  "h3:None": "6a8cfe4cfc6f0b0de751c6905ae9f73d696833fdd48b6aeba1b88244a23e5779",
+  "h3:first.png": "4c21459b23ceec228d1625e87cb9c79af476d0742eee5e26e1e32607977e826b",
+  "h3-turbo-4step:None": "02d68bcc72b81b027d8a5c7e4f030f4e47324afd250fa1b2f112eb40a416a1cd",
+  "h3-turbo-4step:first.png": "0d6cfacf0cbab39c56a83b463919a275ced73418b53279ce5cf3609b1ff404ec",
+  "h3-fused-4step:None": "efed77c7e3dcb4222eafb806d64f5f0c72ea0f46b5bd5c42559b6421d1f26908",
+  "h3-fused-4step:first.png": "5ddc981ce449debcf9297d63609ac3a5b88bf52fe24cad7cd77b3a89f67f9761",
+  "fasth3:None": "c81c63d99b5c6675bd6fb9babc4eefa66d6c14cb099aaf07a1e9887afc7c5bd9",
+  "fasth3-8step-t2v:None": "f358607c769e55593d3ba5fb7d4811cf9350033775d9cc2680824158810f0de5",
+  "fasth3-8step-i2v:None": "a3dce58348477ebe14ef22522315fcdede88693e8825bed3ddc7715a796b23e8",
+  "h3-ref2v:None": "4e454ebce21953b77f1470caff840ff6a06152ffb6d9e2f981e03a7cbb1db73e",
+  "fasth3-8step-i2v-vsa:None": "3f3879ac32c76a7c8b72cfeecdedfedadea2db242ad1f95b1cbf922814f179d5",
+  "fasth3-vsa-4step-i2v:None": "8be43ea56714a2d4876a2600ebeccbef864df9e44612bc8dd2126fe686171800"
+}

@@ -117,7 +117,7 @@ class StartupLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.ui.update_autoscaler.aio.call_args.kwargs, {"min_containers": 0})
 
     async def test_startup_does_not_wait_for_retention_cleanup(self):
-        self.controller.refresh_ambient_nodes = AsyncMock()
+        self.controller.refresh_node_packs = AsyncMock()
         self.controller.cleanup_storage = AsyncMock()
         self.controller.cpu.start = AsyncMock()
         self.controller.dispatch = AsyncMock()

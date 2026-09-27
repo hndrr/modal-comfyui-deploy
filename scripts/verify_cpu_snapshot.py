@@ -19,7 +19,7 @@ import modal
 
 async def main(output, boots, expected_prompt=None, until_restored=False):
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-    origin = os.environ["AMBIENT_COMFYUI_URL"].rstrip("/")
+    origin = os.environ["SPLIT_URL"].rstrip("/")
     headers = {"Modal-Key": os.environ["MODAL_PROXY_KEY"],
                "Modal-Secret": os.environ["MODAL_PROXY_SECRET"]}
     function = modal.Function.from_name("comfyui-split", "ui")
@@ -51,7 +51,7 @@ async def main(output, boots, expected_prompt=None, until_restored=False):
             objects, queue, extensions = await asyncio.gather(*[get(path) for path in
                 ("/object_info", "/queue", "/extensions")])
             assert not queue["queue_running"] and not queue["queue_pending"], queue
-            assert {"MiniMaxH3ImageToVideo", "JevInterpret", "AgentRuntimeBridgeText"} <= objects.keys()
+            assert {"LoadImage", "SaveImage", "KSampler"} <= objects.keys()
             async with client.get(origin + "/") as response:
                 assert response.status == 200 and len(await response.read()) > 100
             sid = "snapshot-check-" + uuid.uuid4().hex
