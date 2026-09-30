@@ -81,25 +81,27 @@ jobs:
           version: "0.11.26"
           python-version: "3.12"
           enable-cache: true
-      - name: Verify split without the Ambient distribution
+      - name: Verify split without optional distributions
         run: |
           uv sync --locked --extra split-test
-          uv run --locked --extra split-test python -m unittest discover -s tests -p 'test_split_standalone.py' -v
-      - name: Run standard unit and regression tests
-        run: uv run --locked --extra split-test python scripts/test_standalone.py
-      - name: Private Ambient integration tests
+          uv run --locked --extra split-test python scripts/test_standalone.py
+      - name: Install private integration dependencies
+        id: integrations
         env:
-          GH_TOKEN: ${{ secrets.AMBIENT_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.INTEGRATION_REPO_TOKEN || secrets.AMBIENT_REPO_TOKEN }}
           GIT_CONFIG_COUNT: "1"
           GIT_CONFIG_KEY_0: credential.helper
           GIT_CONFIG_VALUE_0: "!gh auth git-credential"
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo 'Ambient integration was not run: set AMBIENT_REPO_TOKEN with read access to hndrr/ComfyUI-Ambient.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Optional integration was not run: set INTEGRATION_REPO_TOKEN with read access to hndrr/ComfyUI-Ambient and hndrr/ComfyUI-AgentBridge.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          uv sync --locked --extra ambient-test
-          uv run --locked --extra ambient-test python -m unittest discover -s tests -v
+          uv sync --locked --extra ambient-test --extra bridge-test
+          echo 'installed=true' >> "$GITHUB_OUTPUT"
+      - name: Private Ambient and Agent Bridge integration tests
+        if: steps.integrations.outputs.installed == 'true'
+        run: uv run --no-sync python -m unittest discover -s tests/integration -v
 
   web:
     name: Asset manager tests and build

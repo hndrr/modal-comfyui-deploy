@@ -1,5 +1,8 @@
 """Shared Modal recipe fixtures; no legacy application import."""
+from copy import deepcopy
 from functools import partial
+from ambient_comfyui.models import REF_MODELS
+from ambient_comfyui.contracts import DEFAULT_BACKENDS as MODES
 from uuid import uuid4
 from ambient_comfyui.h3 import workflow as shared_workflow
 from ambient_comfyui.models import MODAL_MODE_MODEL_FILES
@@ -106,4 +109,22 @@ def object_info():
         "first_frame": ["IMAGE"],
         "last_frame": ["IMAGE"],
     }
+    return info
+
+
+def recipe_objects():
+    info = object_info()
+    def node(inputs, outputs):
+        return {"input": {"required": {k: [v] for k, v in inputs.items()}}, "output": outputs}
+    info["UNETLoader"]["input"]["required"]["unet_name"][0].extend(REF_MODELS)
+    info["MiniMaxH3ImageToVideo"]["input"]["required"]["length"] = ["INT", {"default": 124, "min": 5, "max": 3600}]
+    info["VAEDecode"] = node({"samples": "LATENT", "vae": "VAE"}, ["IMAGE"])
+    info["EasyCache"] = node({"model": "MODEL", "reuse_threshold": "FLOAT", "start_percent": "FLOAT", "end_percent": "FLOAT", "verbose": "BOOLEAN"}, ["MODEL"])
+    info["SolAttnMiniMax"] = node({"model": "MODEL", "start_percent": "FLOAT", "end_percent": "FLOAT", "min_tokens": "INT", "sink_conditioning": ["exact_kv_and_rows"], "verbose": "BOOLEAN"}, ["MODEL"])
+    info["SolAttnMiniMax"]["input"]["required"]["selection"] = ["COMFY_DYNAMICCOMBO_V3", {"options": [
+        {"key": "VSA (FastVideo)", "inputs": {"required": {"vsa_keep_percent": ["FLOAT", {"default": 10.0}]}}}]}]
+    ref = info["MiniMaxH3ReferenceToVideo"] = deepcopy(info["MiniMaxH3ImageToVideo"])
+    ref["input"]["required"]["ref_image_size"] = [["match", "max"]]
+    ref["input"]["optional"] = {"audio_vae": ["VAE"], "ref_images": ["COMFY_AUTOGROW_V3", {"template": {
+        "prefix": "ref_image_", "min": 1, "max": 9, "input": {"optional": {"image": ["IMAGE"]}}}}]}
     return info

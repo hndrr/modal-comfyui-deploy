@@ -17,7 +17,7 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 
 標準構成はAmbientパッケージ・設定・Secretなしで動作します。
 Ambient Studio連携は `SPLIT_EXTENSIONS=ambient` で追加する任意拡張です。
-追加ノードは `SPLIT_NODE_PACKS=agent-runtime,skills-loader,gemini,jev` から必要なものを選び、
+追加ノードは `SPLIT_NODE_PACKS=agent-bridge,agent-runtime,skills-loader,gemini,jev` から必要なものを選び、
 Mac Bridgeは独立して `SPLIT_AGENT_BRIDGE=on` で有効にします。
 いずれも既定は無効です。設定・旧構成の移行・配布物の更新は [任意拡張](split-integrations.md) を参照してください。
 
@@ -44,7 +44,7 @@ HTTPの入口は更新処理より先に起動し、`GET /split/startup` で起�
 Split専用Volumeは環境用とデータ用の2つ。過去の環境は保管せず、利用中・編集中・未完了処理が
 参照する環境と初期環境を残す。終了済みジョブの詳細は7日、一時ファイルは更新から24時間以上
 経過し、履歴や処理から参照されていなければ清掃する。通常の生成物・入力・保存済みワークフローは自動削除しない。
-清掃は起動中に行い、そのためにCPU/GPUを起動しない。[詳細と移行手順](../ambient/docs/split-storage.md)。
+清掃は起動中に行い、そのためにCPU/GPUを起動しない。[詳細と移行手順](design/split-storage.md)。
 
 GPUは入力のreload後に実行し、出力のcommit後に結果を保存する。
 CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを共有しない。
@@ -114,17 +114,17 @@ SDK更新時は `tests/test_modal_proxy.py` と
 - `/prompt` の `Idempotency-Key` ヘッダー: 同一キー・同一内容の再送を重複受付しない。
 - `POST /jobs/<id>/cancel`: 指定ジョブの待機キャンセル、またはそのGPU workerへの中断指示。
 
-[Ambient](ambient.md)はCPUの `ui` URLを接続先にする。モデル確認、WebSocket接続、
-結果取得はCPU側で処理し、H3とComfyUI版FastH3の生成をこのキューへ投入する。
+外部クライアントはCPUの `ui` URLを接続先にする。モデル確認、WebSocket接続、
+結果取得はCPU側で処理し、生成ワークフローをこのキューへ投入する。
 `X-Modal-Execution-Mode: split` を付けたリクエストは、従来モードでは409を返す。
-事前の状態確認後にモードが変わっても、Ambientのリクエストを従来モードのGPUへ転送しない。
+事前の状態確認後にモードが変わっても、分離モード指定のリクエストを従来モードのGPUへ転送しない。
 通常のComfyUI画面はこのヘッダーを送らず、従来どおりモードを切り替えて使える。
 
 `/modal-control/v1/status` の `dependencies` は実行中のCPU ComfyUI環境の
 comfy-kitchen版、固定版、必要APIの不足を返す。GPUカーネルの動作検証とは区別する。
 comfy-kitchenは上流ComfyUIの指定版を固定依存に含め、イメージ構築時と仮想環境の
 適用時に検査する。古いVolume上の仮想環境が別版を優先している場合はCPU側の
-レポートに反映し、AmbientのFastH3生成前に検出する。修復は既存の環境更新手順で行う。
+レポートに反映し、クライアントが生成前に確認できる。修復は既存の環境更新手順で行う。
 
 GPU呼び出し前にdispatch intentを保存し、呼び出しIDを取得後に保存する。
 CPUが間で停止してIDを記録できなかった場合は `unknown` とし、結果記録を待つ。
@@ -154,9 +154,11 @@ GPU Memory Snapshotsは未使用。
 検証コマンド:
 
 ```bash
-uv run python -m unittest discover -s tests -q
+uv run --locked --extra split-test python scripts/test_standalone.py
 uv run ruff check comfy_split splitapp.py tests/test_comfy_split.py
 ```
+
+任意拡張との連携は別スイートで実行する。配置と実行方法は[テストの説明](../tests/README.md)を参照。
 
 実機ではGPUゼロのまま10分間の編集・保存・閲覧、生成とプレビュー、
 30秒停止、連続生成、再接続、Manager更新と失敗時復帰、モード往復を確認する。

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 
 NODE_PACKS = {
+    "agent-bridge": "hndrr/ComfyUI-AgentBridge",
     "agent-runtime": "hndrr/ComfyUI-AgentRuntime",
     "skills-loader": "hndrr/ComfyUI-Skills-Loader",
     "gemini": "hndrr/ComfyUI-GeminiTools",

@@ -133,7 +133,7 @@ class SplitIntegrationTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_catalog_upgrades_saved_length_and_accepts_new_split_recipes(self):
         from copy import deepcopy
-        from test_split_generation import objects, workflow, MODES
+        from ambient_fixtures import recipe_objects as objects, workflow, MODES
         from ambient_comfyui.workflows import h3_metadata
 
         info = objects()

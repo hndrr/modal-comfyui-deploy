@@ -215,6 +215,7 @@ class ComfyProcess:
         temporary = self.temp_root
         temporary.mkdir(parents=True, exist_ok=True)
         extension_paths = Path(__file__).with_name("extension_paths.yaml")
+        selected_nodes = []
         if node_packs.enabled():
             # Only selected packs enter the search path. Old Volume snapshots may
             # contain additional, now disabled packs and remain untouched.
@@ -225,12 +226,14 @@ class ComfyProcess:
             for name in node_packs.node_names():
                 saved = node_packs.node_path(source, name)
                 if saved.is_dir():
+                    selected_nodes.append(saved)
                     (active_nodes / name).symlink_to(saved, target_is_directory=True)
             extension_paths = self.root / "split-extension-paths.json"
             write_json(extension_paths, {
                 "modal_control": {"custom_nodes": "/opt/comfy-extensions"},
                 "managed": {"custom_nodes": str(active_nodes)},
             })
+        node_packs.check_compatibility([*selected_nodes, self.root / "custom_nodes"])
         command = [str(source / "venv/bin/python"), str(self.root / "main.py"),
                    "--listen", "127.0.0.1", "--port", str(self.port),
                    "--base-directory", str(self.root),
