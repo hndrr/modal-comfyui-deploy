@@ -117,6 +117,8 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 使い方（`docs/`）:
 
 - [comfyui-modal.md](docs/comfyui-modal.md): ComfyUI の GPU / 環境変数 / Volume / custom nodes
+- [comfyui-split.md](docs/comfyui-split.md): CPU/GPU分離構成の起動・運用
+- [split-integrations.md](docs/split-integrations.md): 任意拡張・追加ノードの配置と設定
 - [known-issues.md](docs/known-issues.md): 既知の不具合と注意点
 - [preserve-model.md](docs/preserve-model.md): モデル保存の CLI・GUI・Modal デプロイ
 - [asset-manager.md](docs/asset-manager.md): 資産管理画面（`web/`）
@@ -126,13 +128,16 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 
 設計・検討メモ（`docs/design/`）:
 
+- [split-storage.md](docs/design/split-storage.md): splitのStorage設計・移行記録
+- [runtime-and-storage.md](docs/design/runtime-and-storage.md): splitの実行環境とVolumeの検討
+
 - [cloudflare-access.md](docs/design/cloudflare-access.md): Worker の責務と WebSocket 透過、迂回経路を塞ぐ設計
 - [modal-idle-scale-to-zero.md](docs/design/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
 - [modal-power-control.md](docs/design/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
 - [pytorch-cu130-upgrade.md](docs/design/pytorch-cu130-upgrade.md): PyTorch / CUDA のアップグレード検討
 
-## Ambient Studio
+## 任意拡張
 
-Split単体にはAmbientのコード・設定・Secretは不要です。Studio連携、追加ノード、Mac Bridgeをそれぞれ独立して有効化できます。[任意拡張と移行](docs/split-integrations.md) を参照してください。
+split単体にはAmbientのコード・設定・Secretは不要です。追加ノード、Ambient拡張、Mac Bridgeを独立して有効化する手順は[splitの任意拡張](docs/split-integrations.md)を参照してください。
 
-[Ambient Studio](https://github.com/hndrr/ambient-studio) がジョブ、動画保存、再生、タグ付けを担当し、splitの任意拡張に接続します。旧`ambient_app.py`、`ambient` API・CLIと専用workerは廃止しました。既存のModal保存データは削除せず、任意拡張から保存済み動画を読み出せます。[Studio連携](docs/ambient.md) と [保存データ](docs/ambient-library.md) を参照してください。
+Studioの操作・接続・保存済み動画は[ambient-studio](https://github.com/hndrr/ambient-studio/blob/main/docs/modal-split.md)、生成レシピ・パネル・旧Ambientの設計と検証記録は[ComfyUI-Ambient](https://github.com/hndrr/ComfyUI-Ambient)で管理します。

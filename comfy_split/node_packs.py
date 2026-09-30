@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from comfy_split.state import write_json
+from comfy_split.extension_sources import node_revision
 
 from comfy_split.config import Settings, NODE_PACKS, DEPLOYMENT_ENV
 
@@ -75,7 +76,7 @@ def snapshot_revisions(source):
 def prepare_environment(source):
     """Deployment update only. Return a new snapshot, or None when current.
 
-    Query default-branch HEADs first, then fetch only changed packs at those SHAs.
+    Resolve explicit pins or default-branch HEADs, then fetch only changed packs.
     No credentials in remotes, no force-pull over user edits, and every required
     download must succeed before copying a venv.
     The caller validates CPU imports and commits before publishing the version.
@@ -110,6 +111,10 @@ def prepare_environment(source):
         revisions = {}
         for repo in repositories():
             name = repo.split("/")[1]
+            pinned = node_revision(repo)
+            if pinned:
+                revisions[name] = pinned
+                continue
             head = subprocess.check_output(
                 ["git", "-c", "credential.helper=", "ls-remote", "--exit-code",
                  "https://github.com/" + repo + ".git", "HEAD"],
@@ -140,6 +145,10 @@ def prepare_environment(source):
                 ["git", "-C", str(destination), "checkout", "--quiet", "--detach", "FETCH_HEAD"],
                 env=git_env, check=True, timeout=10,
             )
+        # Validate the selected combination before creating or publishing it.
+        selected = [staging / name if name in changed else node_path(origin, name)
+                    for name in revisions]
+        check_compatibility([*selected, origin / "comfy/custom_nodes"])
         version = create_environment(source)
         target = environment_path(version)
         nodes = target / DIRECTORY
@@ -170,3 +179,19 @@ def prepare_environment(source):
         if (origin / "catalog.json").is_file():
             shutil.copyfile(origin / "catalog.json", target / "catalog.json")
         return version
+
+
+def check_compatibility(roots):
+    """Reject duplicate Bridge implementations without importing either package.
+
+    Only enabled/searchable paths are passed here; older saved environments and
+    disabled packs are not inspected or changed.
+    """
+    paths = []
+    for root in map(Path, roots):
+        if root.is_dir():
+            paths.extend([root, *[p for p in root.iterdir() if p.is_dir()]])
+    standalone = any((p / "comfyui_agent_bridge/bridge/nodes.py").is_file() for p in paths)
+    legacy = any((p / "comfyui_agent_runtime/bridge/nodes.py").is_file() for p in paths)
+    if standalone and legacy:
+        raise RuntimeError("Update ComfyUI-AgentRuntime together with ComfyUI-AgentBridge; duplicate Bridge nodes cannot be loaded.")

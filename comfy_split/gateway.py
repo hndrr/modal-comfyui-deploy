@@ -17,9 +17,7 @@ from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from comfy_split.proxy import proxy
 from comfy_split import storage
 from comfy_split import node_packs
-from comfy_split.config import Settings
-from comfy_split.extensions import load_extensions
-from comfy_split.agent_bridge import AgentBridge, PREFIX as BRIDGE_PREFIX, requires_bridge
+from comfy_split.extensions import load_extensions, check_requirements, reserved_route
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
@@ -57,9 +55,7 @@ class Controller:
         self.cpu_pinned = None
         self.cpu_scaling_lock = asyncio.Lock()
         self.cleanup_due = 0.0
-        self.bridge = AgentBridge(self)
         self.plugins = load_extensions(self) if extensions is None else [factory(self) for factory in extensions]
-        self.bridge_enabled = Settings.read().bridge
         self.starting = False
         self.startup_phase = "initializing"
         self.snapshot_status = None
@@ -282,7 +278,6 @@ class Controller:
     async def close(self, app):
         for extension in self.plugins:
             await extension.close()
-        await self.bridge.close()
         await self.close_candidate_relays()
         for task in (self.task, self.apply_task):
             if task:
@@ -325,22 +320,29 @@ class Controller:
         await self.commands.put.aio({"type": type_}, partition=session_id)
 
     async def spawn(self, record, operation):
-        if record.get("agent_bridge"):
-            try:
-                if record["agent_bridge"] != self.bridge.identity():
-                    raise ValueError("Mac Bridgeの接続が変わりました。再実行してください。")
-            except ValueError as error:
-                await self.finish(record, {"status": "failed", "error": str(error)})
-                return
+        extra = {}
+        try:
+            check_requirements(record.get("body"), record)
+            for extension in self.plugins:
+                hook = getattr(extension, "before_dispatch", None)
+                if hook:
+                    values = hook(record)
+                    if set(values) & {"id", "operation", "environment", "body", "token"}:
+                        raise ValueError("Extension attempted to replace core worker fields")
+                    extra.update(values)
+        except ValueError as error:
+            await self.finish(record, {"status": "failed", "error": str(error)})
+            return
         # Persist intent BEFORE spawn. A crash between spawn and call-id commit
         # leaves an unknown job, which recovery must never blindly resubmit.
         record["status"] = "dispatching"
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
                 "environment": record["environment"]}
-        for key in ("body", "token", "agent_bridge"):
+        for key in ("body", "token"):
             if key in record:
                 spec[key] = record[key]
+        spec.update(extra)
         call = await self.worker.spawn.aio(spec)
         record["call_id"] = call.object_id
         record["status"] = "running"
@@ -377,18 +379,13 @@ class Controller:
                 break
 
     async def relay_event(self, record, event):
+        for extension in self.plugins:
+            hook = getattr(extension, "worker_event", None)
+            if hook and await hook(record, event):
+                return
         if event["type"] == "legacy_ready":
             record["url"] = event["url"]
             await self.persist()
-        elif event["type"] == "agent_bridge_ready":
-            try:
-                await self.bridge.attach(record, event)
-            except Exception:
-                # Do not persist/log the tunnel bearer token from the event.
-                log.warning("AgentRuntime Bridge connection failed for %s", record["id"])
-                await self.command(record["id"], "agent_bridge_error")
-            else:
-                await self.command(record["id"], "agent_bridge_connected")
         elif event["type"] in {"event", "preview"}:
             data = event.get("event", event.get("data"))
             kind = data.get("type") if isinstance(data, dict) else None
@@ -426,7 +423,13 @@ class Controller:
     async def finish(self, record, result):
         # A result can arrive while more than one dispatch batch remains queued.
         await self.drain_events(record, all_pending=True)
-        await self.bridge.detach(record["id"])
+        for extension in self.plugins:
+            hook = getattr(extension, "finished", None)
+            if hook:
+                try:
+                    await hook(record)
+                except Exception:
+                    log.warning("Extension cleanup failed for %s", record["id"])
         await self.volumes["output"].reload.aio()
         record.update({key: value for key, value in result.items()
                        if key in {"status", "error", "history", "seconds"}})
@@ -564,9 +567,13 @@ class Controller:
         async with self.lock:
             if desired == self.journal.data["mode"]:
                 return web.json_response({"mode": desired})
+            if desired not in {"split", "legacy"}:
+                raise ValueError("Invalid mode")
+            for extension in self.plugins:
+                hook = getattr(extension, "before_mode", None)
+                if hook:
+                    hook(desired)
             if desired == "legacy":
-                if self.bridge.socket is not None:
-                    raise ValueError("Mac Bridgeを切断してからモードを切り替えてください。")
                 self.journal.assert_idle()
                 await self.volumes["input"].commit.aio()
                 await self.volumes["data"].commit.aio()
@@ -588,8 +595,6 @@ class Controller:
                 session["stopping"] = True
                 await self.command(session["id"], "stop")
                 await self.persist()
-            else:
-                raise ValueError("Invalid mode")
         return web.json_response({"mode": desired, "transitioning": True}, status=202)
 
     async def ensure_candidate(self, *, restore_image_browsing=False):
@@ -754,12 +759,12 @@ class Controller:
         try:
             if path.startswith("/_split/"):
                 raise web.HTTPNotFound()
-            if path.startswith(BRIDGE_PREFIX + "/"):
-                if not self.bridge_enabled:
-                    raise web.HTTPNotFound()
-                if self.journal.data["mode"] != "split" or self.journal.data["candidate"]:
-                    raise ValueError("Bridgeは環境更新が完了した分離モードで接続してください。")
-                return await self.bridge.handle(request)
+            if reserved_route(path):
+                for extension in self.plugins:
+                    response = await extension.handle(request, path)
+                    if response is not None:
+                        return response
+                raise web.HTTPNotFound()
             if path == "/view" and request.query.get("type") == "temp":
                 # Previously persisted temp references remain readable after the
                 # normal ComfyUI startup cleanup has been restored.
@@ -831,14 +836,14 @@ class Controller:
                     request_id = request.headers.get("Idempotency-Key")
                     existing = request_id and any(j.get("request_id") == request_id for j in (
                         *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
-                    if requires_bridge(body) and not self.bridge_enabled:
-                        raise ValueError("Enable SPLIT_AGENT_BRIDGE before submitting Bridge nodes.")
-                    bridge_id = self.bridge.identity() if requires_bridge(body) and not existing else None
                     for extension in self.plugins:
                         body = extension.prepare(body)
+                    check_requirements(body)
+                    admissions = [(extension, extension.admit(body, existing))
+                                  for extension in self.plugins if hasattr(extension, "admit")]
                     job = self.journal.enqueue(body, request_id)
-                    if bridge_id and job["status"] == "queued":
-                        job.setdefault("agent_bridge", bridge_id)
+                    for extension, admission in admissions:
+                        extension.accepted(job, admission)
                     await self.volumes["input"].commit.aio()
                     await self.persist()
                 await self.status()

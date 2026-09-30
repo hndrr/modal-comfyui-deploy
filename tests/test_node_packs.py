@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from comfy_split import node_packs, runtime
 from comfy_split.config import Settings, NODE_PACKS
+from comfy_split.extension_sources import BRIDGE, AGENT_RUNTIME
 from comfy_split.gateway import Controller
 from comfy_split.state import write_json
 
@@ -42,6 +43,9 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.fail_dependency = False
         self.fail_clone = False
         self.addCleanup(patch.stopall)
+        for source in (BRIDGE, AGENT_RUNTIME):
+            sha = subprocess.check_output(["git", "-C", str(self.remotes[source["repository"]]), "rev-parse", "HEAD"], text=True).strip()
+            patch.dict(source, revision=sha).start()
         patch.object(runtime, "ENVIRONMENTS", self.environments).start()
         patch.dict(os.environ, {"SPLIT_NODE_PACKS": ",".join(NODE_PACKS), node_packs.TOKEN_ENV: "test-token",
                               "GIT_TRACE_CURL": "1", "GIT_CURL_VERBOSE": "1"}).start()
@@ -86,14 +90,14 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads((target / "catalog.json").read_text()),
                          {"objects": {"GPUOnly": {}}})
         pip = next(command for command, _ in self.calls if "pip" in command)
-        self.assertEqual(pip.count("-r"), 4)
+        self.assertEqual(pip.count("-r"), len(NODE_PACKS))
         self.assertIn("/opt/split-constraints.txt", pip)
         self.calls.clear()
         self.assertIsNone(node_packs.prepare_environment(version))
-        self.assertEqual(sum("ls-remote" in command for command, _ in self.calls), 4)
+        self.assertEqual(sum("ls-remote" in command for command, _ in self.calls), len(NODE_PACKS) - 2)
         self.assertFalse(any("fetch" in command or "pip" in command for command, _ in self.calls))
         self.assertEqual(len(list(self.environments.iterdir())), 2)
-        remote = self.remotes[node_packs.REPOSITORIES[0]]
+        remote = self.remotes[NODE_PACKS["skills-loader"]]
         (remote / "__init__.py").write_text("# latest version\n")
         self.commit(remote, "update")
         self.calls.clear()
@@ -107,6 +111,35 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.assertNotEqual(manifest[name], json.loads(
             (self.environments / updated / node_packs.MANIFEST).read_text())[name])
         self.assertTrue(all("test-token" not in " ".join(command) for command, _ in self.calls))
+
+    def test_bridge_and_runtime_pins_ignore_later_default_branch_changes(self):
+        version = node_packs.prepare_environment("base")
+        for pin in (BRIDGE, AGENT_RUNTIME):
+            repo = self.remotes[pin["repository"]]
+            (repo / "__init__.py").write_text("# incompatible future main")
+            self.commit(repo, "advance unselected main")
+        self.calls.clear()
+        self.assertIsNone(node_packs.prepare_environment(version))
+        self.assertFalse(any("fetch" in cmd for cmd, _ in self.calls))
+
+    def test_old_runtime_and_new_bridge_fail_before_copying_candidate(self):
+        for pin, module in ((BRIDGE, "comfyui_agent_bridge"),
+                            (AGENT_RUNTIME, "comfyui_agent_runtime")):
+            repo = self.remotes[pin["repository"]]
+            nodes = repo / module / "bridge/nodes.py"
+            nodes.parent.mkdir(parents=True)
+            nodes.write_text("# duplicate IDs")
+            self.commit(repo, "duplicate nodes")
+            pin["revision"] = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        with self.assertRaisesRegex(RuntimeError, "duplicate Bridge nodes"):
+            node_packs.prepare_environment("base")
+        self.assertEqual(list(self.environments.iterdir()), [self.source])
+        self.assertFalse(any("pip" in cmd for cmd, _ in self.calls))
+        # Selecting just Bridge must not inspect the disabled Runtime checkout.
+        with patch.dict(os.environ, {"SPLIT_NODE_PACKS": "agent-bridge"}):
+            version = node_packs.prepare_environment("base")
+        self.assertEqual(set(json.loads((self.environments / version / node_packs.MANIFEST).read_text())),
+                         {"ComfyUI-AgentBridge"})
 
     def test_saved_snapshot_can_be_read_without_token_or_git(self):
         version = node_packs.prepare_environment("base")
@@ -146,7 +179,7 @@ class ManagedRepositoryTests(unittest.TestCase):
     def test_fetch_pins_checked_revision_even_if_branch_advances(self):
         original_execute = self.execute
         updated = False
-        first_repo = node_packs.REPOSITORIES[0]
+        first_repo = NODE_PACKS["skills-loader"]
         first_name = first_repo.split("/")[1]
 
         def advance_branch(command, **kwargs):

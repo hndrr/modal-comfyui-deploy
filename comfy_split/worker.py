@@ -7,12 +7,13 @@ import os
 import queue
 import shutil
 import time
+from types import SimpleNamespace
 
 import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
-from comfy_split.agent_bridge import gpu_tunnel, await_connection
+from comfy_split.extensions import run_worker_extensions
 from comfy_split.runtime import ComfyProcess
 from comfy_split.state import write_json
 from comfy_split.storage import JOBS, STATE, USER
@@ -83,7 +84,7 @@ async def run_worker(spec, events, commands, volumes):
             elif spec["operation"] == "legacy":
                 result = await legacy(spec, client, control, emit)
             else:
-                result = await asyncio.wait_for(generate_with_bridge(spec, client, control, emit),
+                result = await asyncio.wait_for(generate_with_extensions(spec, client, control, emit),
                     timeout=int(os.environ.get("SPLIT_GENERATION_TIMEOUT", "1800")))
         except Exception as error:
             result = {"status": "failed", "error": str(error)}
@@ -110,13 +111,10 @@ async def run_worker(spec, events, commands, volumes):
         return result
 
 
-async def generate_with_bridge(spec, client, control, emit):
-    if not spec.get("agent_bridge"):
-        return await generate(spec, client, control, emit)
-    async with gpu_tunnel(client, process.url) as ready:
-        if not await await_connection(ready, control, emit):
-            return {"status": "cancelled"}
-        return await generate(spec, client, control, emit)
+async def generate_with_extensions(spec, client, control, emit):
+    host = SimpleNamespace(client=client, comfy_url=process.url, control=control,
+                           emit=emit, proxy=proxy, forward=modal.forward)
+    return await run_worker_extensions(spec, host, lambda: generate(spec, client, control, emit))
 
 
 async def generate(spec, client, control, emit):

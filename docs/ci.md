@@ -12,7 +12,7 @@ PRのない作業ブランチで確認したい場合は、Actionsから`workflo
 | `worker/` | Access proxy |
 | `asset_manager.py`、`asset_rpc.py`、`preserve_model.py`、`pyproject.toml`、`uv.lock`、`.python-version` | Python＋Asset manager（Pythonバックエンドを利用するため） |
 | `.github/workflows/tests.yml` | 全種類 |
-| `README.md`、`docs/`、`ambient/docs/`だけ | テストなし |
+| `README.md`、`docs/`だけ | テストなし |
 
 PRでは直近コミットだけでなく、PR全体の差分を判定する。前のコミットで変更した部分も検証対象に残る。
 このため、CI設定の変更を含むPRでは全種類を実行する。

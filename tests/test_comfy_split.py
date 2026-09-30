@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -407,6 +408,12 @@ class RoutingTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        settings = patch.dict(os.environ, {"SPLIT_EXTENSIONS": "", "SPLIT_NODE_PACKS": "",
+                                           "SPLIT_AGENT_BRIDGE": "off"})
+        settings.start()
+        self.addCleanup(settings.stop)
+
     async def test_real_comfy_protocol_submits_once_relays_and_interrupts(self):
         state = {"submitted": 0, "interrupted": False, "history_reads": 0}
         sockets = []
@@ -485,22 +492,22 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                 sequence.append("result")
             volumes["output"].commit.aio.side_effect = output_commit
             volumes["data"].commit.aio.side_effect = result_commit
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version=None)
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "JOBS", Path(root)), \
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
                 result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
                     SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
             self.assertEqual(sequence, ["result", "output", "result"])
-            self.assertEqual(json.loads((Path(root) / "job.json").read_text())["status"], "completed")
-            self.assertEqual(result["status"], "completed")
+            self.assertEqual(json.loads((Path(root) / "job.json").read_text())["status"], "completed", result)
+            self.assertEqual(result["status"], "completed", result)
 
     async def test_preempted_input_with_start_receipt_is_not_reexecuted(self):
         with tempfile.TemporaryDirectory() as root:
             (Path(root) / "job.started.json").write_text("{}")
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
                        for key in ("environment", "input", "models", "data", "output")}
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version=None)
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
             generate = AsyncMock()
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "JOBS", Path(root)), \
@@ -516,7 +523,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
                        for key in ("environment", "input", "models", "data", "output")}
             volumes["output"].commit.aio.side_effect = OSError("output commit failed")
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x,
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid",
                                       start=AsyncMock(), stop=AsyncMock(), version=None)
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "JOBS", Path(root)), \
@@ -532,13 +539,13 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
                        for key in ("environment", "input", "models", "data", "output")}
             volumes["models"].reload.aio.side_effect = [RuntimeError("there are open files preventing the operation"), None]
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, start=AsyncMock(), stop=AsyncMock(), version="base")
+            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version="base")
             with patch.object(worker_module, "process", process), \
                  patch.object(worker_module, "JOBS", Path(root)), \
                  patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
                 result = await worker_module.run_worker({"id": "warm", "environment": "base", "operation": "generate"},
                     SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
-            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["status"], "completed", result)
             volumes["environment"].reload.aio.assert_not_awaited()
             self.assertEqual(volumes["models"].reload.aio.await_count, 2)
             process.stop.assert_awaited_once()

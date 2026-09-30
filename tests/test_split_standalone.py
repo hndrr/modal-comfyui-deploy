@@ -1,4 +1,4 @@
-"""The default split image and gateway must work without any Ambient package."""
+"""The default split image and gateway must work without optional extensions."""
 
 import os
 from pathlib import Path
@@ -20,15 +20,15 @@ PLAIN = {"SPLIT_EXTENSIONS": "", "SPLIT_NODE_PACKS": "", "SPLIT_AGENT_BRIDGE": "
 
 
 class StandaloneTests(unittest.TestCase):
-    def test_plain_deployment_never_imports_or_bundles_ambient_or_requests_secrets(self):
+    def test_plain_deployment_never_imports_or_bundles_extensions_or_requests_secrets(self):
         script = '''
 import importlib.abc, json, runpy, sys
 from unittest.mock import patch
-class ForbidAmbient(importlib.abc.MetaPathFinder):
+class ForbidOptionalExtensions(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'ambient', 'ambient_app', 'ambient_comfyui', 'bundled_packages'}:
+        if fullname.split('.')[0] in {'ambient', 'ambient_app', 'ambient_comfyui', 'comfyui_agent_bridge', 'bundled_packages'}:
             raise AssertionError('Unexpected dependency: ' + fullname)
-sys.meta_path.insert(0, ForbidAmbient())
+sys.meta_path.insert(0, ForbidOptionalExtensions())
 import comfyapp, modal
 from comfy_split import gateway, runtime, cpu_snapshot, worker
 sources = []
@@ -40,7 +40,8 @@ with patch.object(modal.Secret, 'from_name', side_effect=AssertionError('Unexpec
     app = runpy.run_path('splitapp.py')
 assert app['settings'].extensions == ()
 assert app['provider_secrets'] == app['github_secrets'] == []
-assert not any('ambient' in source.lower() for source in sources)
+assert not any(name in source.lower().replace('-', '').replace('_', '')
+               for source in sources for name in ('ambient', 'agentbridge'))
 import unittest
 sys.path.insert(0, 'tests')
 # Exercise runtime paths too: import isolation must survive start/restore,

@@ -22,7 +22,7 @@ MODAL_PROFILE="<profile>" .venv/bin/python scripts/verify_cpu_snapshot.py \
   --output /private/tmp/cpu-snapshot-boots.json --boots 2
 ```
 
-Studioからの実GPU生成を含む反映記録は`ambient/docs/validation/2026-09-20/cpu-memory-snapshot-deploy/`に保存する。
+Studioからの実GPU生成を含む反映記録は`docs/validation/2026-09-20/cpu-memory-snapshot-deploy/`に保存する。
 
 ### 本体での確認結果
 
@@ -103,7 +103,7 @@ Snapshotはデプロイしたアプリで作成されるため、`modal run`に�
 
 ## 記録と終了状態
 
-測定記録は`ambient/docs/validation/2026-09-20/cpu-memory-snapshot/`に保存した。
+測定記録は`docs/validation/2026-09-20/cpu-memory-snapshot/`に保存した。
 
 - `boots.json`：全起動の時間、コンテナID、初期化ID、定義のハッシュ。
 - `app.log`：Snapshot作成・復元のログ。

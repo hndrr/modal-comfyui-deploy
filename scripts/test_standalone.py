@@ -1,20 +1,22 @@
-"""Run all tests that do not need the private Ambient extension."""
+"""Run the root test suite with optional extension imports forbidden.
+
+Cross-repository tests live in tests/integration and are run separately.
+"""
 import importlib.abc
 from pathlib import Path
 import sys
 import unittest
 
 
-class ForbidAmbient(importlib.abc.MetaPathFinder):
+class ForbidOptionalExtensions(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in {"ambient", "ambient_app", "ambient_comfyui"}:
+        if fullname.split(".")[0] in {"ambient", "ambient_app", "ambient_comfyui", "comfyui_agent_bridge"}:
             raise AssertionError("Standalone test imported optional extension: " + fullname)
 
 
-sys.meta_path.insert(0, ForbidAmbient())
-root = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(root), str(root / "tests")]
-modules = [path.stem for path in sorted((root / "tests").glob("test_*.py"))
-           if not path.name.startswith("test_ambient") and path.name != "test_split_generation.py"]
-suite = unittest.defaultTestLoader.loadTestsFromNames(modules)
-raise SystemExit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
+if __name__ == "__main__":
+    sys.meta_path.insert(0, ForbidOptionalExtensions())
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root))
+    suite = unittest.defaultTestLoader.discover(str(root / "tests"))
+    raise SystemExit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())

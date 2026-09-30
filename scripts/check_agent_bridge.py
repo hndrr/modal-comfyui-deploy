@@ -17,11 +17,19 @@ import modal
 if modal.is_local():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import comfyapp  # noqa: E402,F401 - shared dotenv resolution
+    from comfy_split.extension_sources import BRIDGE
+else:
+    from extension_sources import BRIDGE
 
 app = modal.App("comfyui-agent-bridge-check")
 image = (modal.Image.debian_slim(python_version="3.12").pip_install("aiohttp==3.12.15", "pillow==11.3.0")
-         .add_local_file(Path(__file__).resolve().parents[1] / "comfy_split/bridge_transport.py",
-                         "/root/bridge_transport.py"))
+         .add_local_file(Path(__file__).resolve().parents[1] / "comfy_split/extension_sources.py",
+                         "/root/extension_sources.py")
+         .pip_install_private_repos(
+             f"github.com/{BRIDGE['repository']}@{BRIDGE['revision']}",
+             git_user="x-access-token", extra_options="--no-deps",
+             secrets=[modal.Secret.from_name(os.environ.get("GITHUB_SECRET_NAME") or "github-secret",
+                                             required_keys=["GITHUB_TOKEN"])]))
 configuration = modal.Secret.from_dict({key: os.environ.get(key, "") for key in (
     "SPLIT_URL", "MODAL_PROXY_KEY", "MODAL_PROXY_SECRET")})
 bridge_secret = modal.Secret.from_name(os.environ.get("AGENT_RUNTIME_SECRET_NAME") or "agent-runtime-secret",
@@ -32,7 +40,7 @@ bridge_secret = modal.Secret.from_name(os.environ.get("AGENT_RUNTIME_SECRET_NAME
 async def check():
     from aiohttp import ClientSession, ClientTimeout, WSMsgType
     from PIL import Image
-    from bridge_transport import HttpSocket, TRANSPORT
+    from comfyui_agent_bridge.transport import HttpSocket, TRANSPORT
 
     url = os.environ["SPLIT_URL"].rstrip("/")
     headers = {"Modal-Key": os.environ["MODAL_PROXY_KEY"], "Modal-Secret": os.environ["MODAL_PROXY_SECRET"],

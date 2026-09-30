@@ -1,5 +1,7 @@
 # Split Storageの整理
 
+> 2026-09-15〜16の設計・実施記録です。旧Ambientアプリに関する記述も当時の比較です。現在の構成・運用は[splitの説明](../comfyui-split.md)と[任意拡張](../split-integrations.md)を参照してください。
+
 ## 構成
 
 Split専用Volumeを4つから2つにまとめる。Managerと通常の生成物は維持する。
@@ -54,4 +56,4 @@ PRへのpush・コメントは行わない。
 - Pythonテスト185件とRuffが成功。実GPU生成は実行せず、終了時はSplit・AmbientともCPU/GPUが0、待機呼び出しも0。
   FastVideoの停止状態とモデル削除済みの状態を確認した。
 
-詳細な照合値・時刻はローカルの`validation/2026-09-15/storage-migration.json`に記録している。
+詳細な照合値・時刻はローカルの`docs/validation/2026-09-15/storage-migration.json`に記録している。
