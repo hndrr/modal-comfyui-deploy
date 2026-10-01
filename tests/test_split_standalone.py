@@ -36,7 +36,11 @@ original = modal.Image.add_local_dir
 def record(image, source, *args, **kwargs):
     sources.append(str(source))
     return original(image, source, *args, **kwargs)
-with patch.object(modal.Secret, 'from_name', side_effect=AssertionError('Unexpected Secret')), patch.object(modal.Image, 'add_local_dir', record):
+with (
+    patch.object(modal.Secret, 'from_name', side_effect=AssertionError('Unexpected Secret')),
+    patch.object(modal.Image, 'add_local_dir', record),
+    patch.object(modal.Image, 'pip_install_private_repos', side_effect=AssertionError('Unexpected private repository')),
+):
     app = runpy.run_path('splitapp.py')
 assert app['settings'].extensions == ()
 assert app['provider_secrets'] == app['github_secrets'] == []
