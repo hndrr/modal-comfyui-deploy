@@ -14,17 +14,6 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 
-## テスト
-
-GitHub Actionsで、push・pull request時に以下を並列実行します。Actions画面からの手動実行にも対応しています。
-
-- Python: split本体は認証なしで検証。任意拡張との連携テストは各拡張repoで実施（[手順](docs/split-integrations.md#ローカル検証)）。
-- 管理画面（`web/`）: `npm ci` → `npm test` → `npm run build`
-- 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
-
-CIはPython 3.12・Node.js 22を使用し、認証情報なしで実行します。
-Modal上での実生成・GPU停止・ブラウザ操作の検証はCIの対象外です。
-
 ## セットアップ
 
 ```bash
