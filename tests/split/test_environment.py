@@ -1,12 +1,31 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from comfy_split import runtime
+from comfy_split.check_environment import check_pins
 
 
-class ImageBrowsingRepairTests(unittest.TestCase):
+class EnvironmentTests(unittest.TestCase):
+    def test_candidate_rejects_install_scripts_that_override_protected_packages(self):
+        check_pins("torch==2.10.0+cu130\n", lambda _: "2.10.0+cu130")
+        with self.assertRaisesRegex(RuntimeError, "固定依存の競合"):
+            check_pins("torch==2.10.0+cu130\n", lambda _: "2.11.0")
+
+    def test_new_base_copies_nodes_without_copying_core(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / "template"
+            (template / "custom_nodes/pack").mkdir(parents=True)
+            (template / "custom_nodes/pack/__init__.py").write_text("node")
+            (template / "main.py").write_text("core")
+            with patch.object(runtime, "TEMPLATE", template), patch.object(runtime, "ENVIRONMENTS", root / "envs"), \
+                 patch.object(runtime, "USER", root / "user"), patch.object(runtime.subprocess, "run", Mock()):
+                runtime.initialize_environment()
+            self.assertFalse((root / "envs/base/comfy/main.py").exists())
+            self.assertTrue((root / "envs/base/comfy/custom_nodes/pack/__init__.py").exists())
+
     def test_repair_clones_active_environment_and_preserves_other_nodes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

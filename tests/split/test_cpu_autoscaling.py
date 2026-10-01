@@ -5,18 +5,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from comfy_split.gateway import Controller
-
-
-def remote():
-    return SimpleNamespace(aio=AsyncMock())
+from tests.split.support import remote_mock, volume_mocks
 
 
 class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.ui = SimpleNamespace(update_autoscaler=remote())
-        self.volumes = {key: SimpleNamespace(commit=remote()) for key in ('data', 'environment')}
+        self.ui = SimpleNamespace(update_autoscaler=remote_mock())
+        self.volumes = volume_mocks('data', 'environment')
         self.control = Controller(None, None, None, self.volumes, Path(self.directory.name),
                                   ui_function=self.ui, extensions=())
 

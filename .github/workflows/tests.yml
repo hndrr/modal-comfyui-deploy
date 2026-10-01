@@ -82,7 +82,7 @@ jobs:
           version: "0.11.26"
           python-version: "3.12"
           enable-cache: true
-      - name: Verify split without optional distributions
+      - name: Run Python regression suites without optional distributions
         run: |
           uv sync --locked --extra split-test
           uv run --locked --extra split-test python scripts/test_standalone.py

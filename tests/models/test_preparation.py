@@ -1,15 +1,15 @@
 """Model placement accepts provider-neutral data; no model downloads in tests."""
 import hashlib
 import json
-from pathlib import Path
 import runpy
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import preserve_model
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class PreparationTests(unittest.TestCase):

@@ -3,6 +3,8 @@
 `Tests`はPRと`main`へのpushで動く。PR用ブランチへのpushでは重複実行しない。
 PRのない作業ブランチで確認したい場合は、Actionsから`workflow_dispatch`で手動実行できる。
 
+Pythonジョブは `scripts/test_standalone.py` で通常版・split・アセット管理・モデル保存の各スイートを一度ずつ実行する。任意拡張のimportは禁止する。ローカルでの部分実行は[テストの説明](../tests/README.md)を参照。
+
 最初に変更ファイルを判定し、対象のジョブだけを起動する。
 
 | 変更箇所 | 実行するテスト |

@@ -10,6 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split.gateway import Controller
 from comfy_split.startup import StartupGate
+from tests.split.support import remote_mock, volume_mocks
 
 
 class StartupGateTests(unittest.IsolatedAsyncioTestCase):
@@ -101,9 +102,8 @@ class StartupLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.ui = SimpleNamespace(update_autoscaler=SimpleNamespace(aio=AsyncMock()))
-        volumes = {key: SimpleNamespace(commit=SimpleNamespace(aio=AsyncMock()))
-                   for key in ("data", "environment")}
+        self.ui = SimpleNamespace(update_autoscaler=remote_mock())
+        volumes = volume_mocks("data", "environment")
         self.controller = Controller(Mock(), None, None, volumes, Path(self.directory.name),
                                      ui_function=self.ui, extensions=())
 
