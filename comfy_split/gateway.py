@@ -239,6 +239,12 @@ class Controller:
             log.info("Managed nodes reused without GitHub access: %s (last update: %s)",
                      previous, last_refresh.get("status"))
             return
+        if (not revisions and last_refresh.get("status") == "failed"
+                and last_refresh.get("deployment") == deployment
+                and last_refresh.get("environment") == previous
+                and time.time() < last_refresh.get("checked_at", 0) + node_packs.REFRESH_RETRY_SECONDS):
+            log.info("Managed node repair deferred after a recent failure: %s", previous)
+            return
         started = time.monotonic()
         self.startup_phase = "updating_nodes"
         await self.pin_cpu(True)
@@ -252,12 +258,13 @@ class Controller:
                     node_packs.check_catalog(await self.candidate.catalog(self.client))
             except Exception:
                 log.exception("Managed node refresh failed; keeping environment %s", previous)
-                if revisions:
-                    # A valid previous snapshot remains usable. Do not delay every
-                    # cold start with the same failed update; redeploy to retry.
-                    data[node_packs.REFRESH_KEY] = {"deployment": deployment,
-                        "revisions": revisions, "status": "failed", "checked_at": time.time()}
-                    await self.persist()
+                # A valid snapshot is reused until redeployment. Missing/broken
+                # snapshots can recover on a later startup after the cooldown,
+                # which must survive CPU restarts as well.
+                data[node_packs.REFRESH_KEY] = {"deployment": deployment,
+                    "environment": previous, "revisions": revisions,
+                    "status": "failed", "checked_at": time.time()}
+                await self.persist()
                 return
             finally:
                 await self.candidate.stop()
@@ -297,7 +304,7 @@ class Controller:
                 log.exception("Extension event observer failed")
                 continue
             for extra in additional:
-                await self.broadcast(extra)
+                await self.broadcast(extra, client_id)
         targets = list(self.sockets.items())
         for sid, sockets in targets:
             if client_id and sid != client_id:
