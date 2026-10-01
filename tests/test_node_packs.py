@@ -17,8 +17,8 @@ from comfy_split.state import write_json
 
 PINNED = [source for source in NODE_SOURCES.values() if "revision" in source]
 ADAPTER = next(iter(INTEGRATIONS.values()))
-ADAPTER_SETTING = ADAPTER["setting"]
 ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
+MANAGED_SETTINGS = Settings(node_packs=tuple(NODE_PACKS))
 
 
 class ManagedRepositoryTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class ManagedRepositoryTests(unittest.TestCase):
             sha = subprocess.check_output(["git", "-C", str(self.remotes[source["repository"]]), "rev-parse", "HEAD"], text=True).strip()
             patch.dict(source, revision=sha).start()
         patch.object(runtime, "ENVIRONMENTS", self.environments).start()
-        patch.dict(os.environ, {"SPLIT_NODE_PACKS": ",".join(NODE_PACKS), node_packs.TOKEN_ENV: "test-token",
+        patch.dict(os.environ, {**MANAGED_SETTINGS.environment(), node_packs.TOKEN_ENV: "test-token",
                               "GIT_TRACE_CURL": "1", "GIT_CURL_VERBOSE": "1"}).start()
         patch.object(node_packs.subprocess, "run", side_effect=self.execute).start()
 
@@ -257,7 +257,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         self.control.candidate = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(),
                                                 catalog=AsyncMock(return_value=self.catalog))
         self.addCleanup(patch.stopall)
-        patch.dict(os.environ, {LEGACY["mode_env"]: "on",
+        patch.dict(os.environ, {**MANAGED_SETTINGS.environment(),
                               node_packs.DEPLOYMENT_ENV: "deployment-1"}).start()
         self.prepare = patch.object(node_packs, "prepare_environment", return_value="env-new").start()
         self.revisions = {name: "a" * 40 for name in node_packs.NODE_NAMES}
@@ -277,7 +277,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.worker.mock_calls, [])
 
     async def test_disabled_busy_and_editing_startups_do_not_fetch(self):
-        with patch.dict(os.environ, {LEGACY["mode_env"]: "off"}):
+        with patch.dict(os.environ, Settings().environment()):
             await self.control.refresh_node_packs()
         for status in ("queued", "running", "unknown"):
             self.control.journal.data["jobs"] = {"job": {"status": status}}
@@ -398,14 +398,16 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             "OPENROUTER_API_KEY": "local-value-must-not-be-uploaded",
             ADAPTER_TOKEN: "local-adapter-value-must-not-be-uploaded",
         }
-        for mode in ("on", "off"):
-            with self.subTest(mode=mode), \
-                 patch.dict(os.environ, {**settings, LEGACY["mode_env"]: mode}), \
+        for enabled in (True, False):
+            selection = (Settings(node_packs=tuple(NODE_PACKS), integrations=tuple(INTEGRATIONS))
+                         if enabled else Settings())
+            with self.subTest(enabled=enabled), \
+                 patch.dict(os.environ, {**settings, **selection.environment()}), \
                  patch.object(modal.Secret, "from_name", wraps=modal.Secret.from_name) as named, \
                  patch.object(modal.Secret, "from_dict") as inline:
                 app = runpy.run_path(str(Path(comfyapp.__file__).with_name("splitapp.py")))
             inline.assert_not_called()
-            if mode == "on":
+            if enabled:
                 self.assertEqual([secret.name for secret in app["provider_secrets"]],
                                  ["my-gemini", "my-openrouter", "my-adapter"])
                 self.assertEqual([(call.args[0], call.kwargs["required_keys"])
@@ -430,7 +432,8 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             image_env.update(values)
             return original(image, values)
 
-        settings = {LEGACY["mode_env"]: "on", "GITHUB_SECRET_NAME": "private-repos",
+        settings = {**Settings(node_packs=tuple(NODE_PACKS), integrations=tuple(INTEGRATIONS)).environment(),
+                    "GITHUB_SECRET_NAME": "private-repos",
                     "GEMINI_SECRET_NAME": "provider-a", "TYPESAFE_SECRET_NAME": "",
                     "OPENROUTER_SECRET_NAME": "provider-b", ADAPTER_SECRET: "adapter",
                     "GEMINI_API_KEY": "must-not-be-baked", ADAPTER_TOKEN: "also-private"}
@@ -470,9 +473,8 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             def local_path(value):
                 return root / value.lstrip("/") if value in {"/models", "/data/input", "/data/output"} else Path(value)
             for mode in ("on", "off", "gemini"):
-                selection = {LEGACY["mode_env"]: mode} if mode != "gemini" else {
-                    LEGACY["mode_env"]: "on", "SPLIT_NODE_PACKS": "gemini",
-                    "SPLIT_EXTENSIONS": "", ADAPTER_SETTING: "off"}
+                packs = tuple(NODE_PACKS) if mode == "on" else (("gemini",) if mode == "gemini" else ())
+                selection = Settings(node_packs=packs).environment()
                 for role in ("cpu", "gpu"):
                     process = runtime.ComfyProcess(role, 8187)
                     process.root = root / f"{mode}-{role}"
