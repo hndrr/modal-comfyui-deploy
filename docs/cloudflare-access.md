@@ -19,7 +19,7 @@ Modal 上の ComfyUI の手前に Cloudflare Access を置き、許可した利�
 | `TEAM_DOMAIN` | 必須 | Access の Team domain。`https://<team-name>.cloudflareaccess.com`。Zero Trust → Settings → Custom Pages で確認する |
 | `POLICY_AUD` | 必須 | Access アプリの Application Audience (AUD) Tag。アプリの Overview で確認する |
 
-**Proxy Auth トークンは Modal ワークスペース単位で発行する。** `MODAL_KEY` / `MODAL_SECRET` は、そのうち 1 つのワークスペースのペアを既定値として置く設定であり、別ワークスペースにも通用するキーではない。同じワークスペース内の splitapp と ambientapp には同じペアを使える。
+**Proxy Auth トークンは Modal ワークスペース単位で発行する。** `MODAL_KEY` / `MODAL_SECRET` は、そのうち 1 つのワークスペースのペアを既定値として置く設定であり、別ワークスペースにも通用するキーではない。同じワークスペース内の複数のModal Appには同じペアを使える。
 
 `MODAL_ORIGINS` / `TEAM_DOMAIN` / `POLICY_AUD` は秘密情報というより「リポジトリに置きたくない環境固有の値」である。`wrangler dev` / `wrangler deploy` には `--var key:value` があるのでコマンドラインからも渡せるが、値がシェル履歴に残るうえ毎回指定が必要になるため、デプロイ用の値は secret に寄せている。
 
@@ -74,7 +74,7 @@ Worker は HTTP と WebSocket のどちらでも、次の順に設定を使う�
 
 JSON のキーは公開ドメインではなく、転送先の HTTPS オリジンである。パス・末尾のスラッシュを含めず、転送先一覧の値と一致させる。指定は URL 単位なので、B の別 app にも転送する場合は、そのオリジンも登録する。同じワークスペースだからといって自動では引き継がれない。現在の実装では、すべての接続先をこの表に登録しても、必須設定の `MODAL_KEY` / `MODAL_SECRET` は省略できない。
 
-外部クライアントからModalへ直接接続する場合も、接続先ワークスペースのProxy Authトークンを使います。クライアント側の変数名・ヘッダー設定は各アプリが管理します。Studioの設定は[Studioの接続ガイド](https://github.com/hndrr/ambient-studio/blob/main/docs/local-comfyui.md)を参照してください。
+外部クライアントからModalへ直接接続する場合も、接続先ワークスペースのProxy Authトークンを使います。クライアント側の変数名・ヘッダー設定は各アプリが管理します。
 
 `modal-http: invalid credentials for proxy authorization` はModal側がこのトークンを
 拒否した状態である。接続先のワークスペースで発行したProxy Authトークンを使い、

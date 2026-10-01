@@ -46,6 +46,7 @@ jobs:
               - 'uv.lock'
               - '.python-version'
               - 'comfy_split/extension_paths.yaml'
+              - 'comfy_split/extension_catalog.toml'
               - 'extensions/**/web/**'
               - 'scripts/modal.sh'
             web:
@@ -94,12 +95,12 @@ jobs:
           GIT_CONFIG_VALUE_0: "!gh auth git-credential"
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo 'Optional integration was not run: set INTEGRATION_REPO_TOKEN with read access to hndrr/ComfyUI-Ambient and hndrr/ComfyUI-AgentBridge.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Optional integration was not run: set INTEGRATION_REPO_TOKEN with read access to hndrr/ComfyUI-AgentBridge.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          uv sync --locked --extra ambient-test --extra bridge-test
+          uv sync --locked --extra bridge-test
           echo 'installed=true' >> "$GITHUB_OUTPUT"
-      - name: Private Ambient and Agent Bridge integration tests
+      - name: Private Agent Bridge integration tests
         if: steps.integrations.outputs.installed == 'true'
         run: uv run --no-sync python -m unittest discover -s tests/integration -v
 

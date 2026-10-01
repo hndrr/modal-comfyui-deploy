@@ -8,9 +8,16 @@ import sys
 import unittest
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from comfy_split.extension_sources import EXTENSIONS
+
+FORBIDDEN = {source["module"].split(".")[0] for source in EXTENSIONS.values()}
+FORBIDDEN.add("comfyui_agent_bridge")
+
+
 class ForbidOptionalExtensions(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in {"ambient", "ambient_app", "ambient_comfyui", "comfyui_agent_bridge"}:
+        if fullname.split(".")[0] in FORBIDDEN:
             raise AssertionError("Standalone test imported optional extension: " + fullname)
 
 

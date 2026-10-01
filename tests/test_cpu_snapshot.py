@@ -42,7 +42,7 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
         async def reload():
             old.update(status="completed")
             journal.data["environment"] = "env-new"
-            journal.data["ambient_workflows"] = {"revision": 9}
+            journal.data["extension_state"] = {"revision": 9}
             journal.save()
         self.volumes["data"].reload.aio.side_effect = reload
         cpu = SimpleNamespace(version=None, user_directory="captured", temp_namespace="captured")
@@ -57,7 +57,7 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
                 volumes=self.volumes, restoration={"restoration_id": "fresh"})
         self.assertEqual(controller.journal.data["environment"], "env-new")
         self.assertEqual(controller.journal.data["jobs"][old["id"]]["status"], "completed")
-        self.assertEqual(controller.journal.data["ambient_workflows"], {"revision": 9})
+        self.assertEqual(controller.journal.data["extension_state"], {"revision": 9})
         self.assertIsNone(controller.task)
         self.assertEqual(controller.sockets, {})
         self.assertIs(controller.cpu, cpu)

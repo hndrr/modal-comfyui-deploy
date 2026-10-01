@@ -13,6 +13,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split.config import NODE_PACKS, Settings
+from comfy_split.extension_sources import EXTENSIONS, LEGACY
 from comfy_split.gateway import Controller
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,10 +25,7 @@ class StandaloneTests(unittest.TestCase):
         script = '''
 import importlib.abc, json, runpy, sys
 from unittest.mock import patch
-class ForbidOptionalExtensions(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'ambient', 'ambient_app', 'ambient_comfyui', 'comfyui_agent_bridge', 'bundled_packages'}:
-            raise AssertionError('Unexpected dependency: ' + fullname)
+from scripts.test_standalone import ForbidOptionalExtensions
 sys.meta_path.insert(0, ForbidOptionalExtensions())
 import comfyapp, modal
 from comfy_split import gateway, runtime, cpu_snapshot, worker
@@ -40,8 +38,7 @@ with patch.object(modal.Secret, 'from_name', side_effect=AssertionError('Unexpec
     app = runpy.run_path('splitapp.py')
 assert app['settings'].extensions == ()
 assert app['provider_secrets'] == app['github_secrets'] == []
-assert not any(name in source.lower().replace('-', '').replace('_', '')
-               for source in sources for name in ('ambient', 'agentbridge'))
+assert set(sources) == {'comfy_split', 'extensions/ComfyUI-Modal-Control', 'extensions/ComfyUI-Modal-Bridge'}
 import unittest
 sys.path.insert(0, 'tests')
 # Exercise runtime paths too: import isolation must survive start/restore,
@@ -60,7 +57,7 @@ print(json.dumps({'standalone': True}))
 
     def test_new_settings_override_legacy_individually_including_empty(self):
         self.assertEqual(Settings.read({}), Settings())
-        old = {"COMFYUI_AMBIENT_MODE": "on"}
+        old = {LEGACY["mode_env"]: "on"}
         self.assertEqual(Settings.read(old).node_packs, tuple(NODE_PACKS))
         self.assertEqual(Settings.read({**old, **PLAIN}), Settings())
         self.assertEqual(Settings.read({**old, "SPLIT_EXTENSIONS": ""}).extensions, ())
@@ -69,7 +66,7 @@ print(json.dumps({'standalone': True}))
             with self.subTest(key=key), self.assertRaises(ValueError):
                 Settings.read({key: value})
 
-    def test_node_packs_and_bridge_do_not_enable_ambient_or_unrelated_secrets(self):
+    def test_node_packs_and_bridge_do_not_enable_extensions_or_unrelated_secrets(self):
         env = {"SPLIT_NODE_PACKS": "gemini", "SPLIT_AGENT_BRIDGE": "on",
                "GEMINI_SECRET_NAME": "gemini", "TYPESAFE_SECRET_NAME": "unused",
                "OPENROUTER_SECRET_NAME": "unused", "AGENT_RUNTIME_SECRET_NAME": "bridge"}
@@ -116,7 +113,7 @@ class PlainGatewayTests(unittest.IsolatedAsyncioTestCase):
         responses = [await self.client.post("/prompt", json=body, headers={"Idempotency-Key": "plain"}) for _ in range(2)]
         self.assertEqual([r.status for r in responses], [200, 200])
         self.assertEqual((await responses[0].json())["prompt_id"], (await responses[1].json())["prompt_id"])
-        for path in ("/ambient/workflows", "/ambient/executions", "/ambient/library", "/agent_runtime/bridge/catalog"):
+        for path in [route for source in EXTENSIONS.values() for route in source["guarded_routes"]] + ["/agent_runtime/bridge/catalog"]:
             self.assertEqual((await self.client.get(path)).status, 404)
         self.worker.spawn.aio.assert_not_awaited()
 

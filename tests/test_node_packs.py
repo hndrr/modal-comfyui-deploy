@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from comfy_split import node_packs, runtime
 from comfy_split.config import Settings, NODE_PACKS
-from comfy_split.extension_sources import BRIDGE, AGENT_RUNTIME
+from comfy_split.extension_sources import BRIDGE, AGENT_RUNTIME, LEGACY
 from comfy_split.gateway import Controller
 from comfy_split.state import write_json
 
@@ -224,7 +224,7 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.assertEqual((self.source / "venv/bin/pip").read_text(),
                          f"#!{self.source}/venv/bin/python\n")
 
-    def test_manager_candidate_retains_ambient_snapshot(self):
+    def test_manager_candidate_retains_node_pack_snapshot(self):
         version = node_packs.prepare_environment("base")
         candidate = runtime.create_environment(version)
         original = self.environments / version
@@ -248,7 +248,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         self.control.candidate = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(),
                                                 catalog=AsyncMock(return_value=self.catalog))
         self.addCleanup(patch.stopall)
-        patch.dict(os.environ, {"COMFYUI_AMBIENT_MODE": "on",
+        patch.dict(os.environ, {LEGACY["mode_env"]: "on",
                               node_packs.DEPLOYMENT_ENV: "deployment-1"}).start()
         self.prepare = patch.object(node_packs, "prepare_environment", return_value="env-new").start()
         self.revisions = {name: "a" * 40 for name in node_packs.NODE_NAMES}
@@ -268,7 +268,7 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.worker.mock_calls, [])
 
     async def test_disabled_busy_and_editing_startups_do_not_fetch(self):
-        with patch.dict(os.environ, {"COMFYUI_AMBIENT_MODE": "off"}):
+        with patch.dict(os.environ, {LEGACY["mode_env"]: "off"}):
             await self.control.refresh_node_packs()
         for status in ("queued", "running", "unknown"):
             self.control.journal.data["jobs"] = {"job": {"status": status}}
@@ -391,7 +391,7 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
         }
         for mode in ("on", "off"):
             with self.subTest(mode=mode), \
-                 patch.dict(os.environ, {**settings, "COMFYUI_AMBIENT_MODE": mode}), \
+                 patch.dict(os.environ, {**settings, LEGACY["mode_env"]: mode}), \
                  patch.object(modal.Secret, "from_name", wraps=modal.Secret.from_name) as named, \
                  patch.object(modal.Secret, "from_dict") as inline:
                 app = runpy.run_path(str(Path(comfyapp.__file__).with_name("splitapp.py")))
@@ -421,7 +421,7 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             image_env.update(values)
             return original(image, values)
 
-        settings = {"COMFYUI_AMBIENT_MODE": "on", "GITHUB_SECRET_NAME": "private-repos",
+        settings = {LEGACY["mode_env"]: "on", "GITHUB_SECRET_NAME": "private-repos",
                     "GEMINI_SECRET_NAME": "provider-a", "TYPESAFE_SECRET_NAME": "",
                     "OPENROUTER_SECRET_NAME": "provider-b", "AGENT_RUNTIME_SECRET_NAME": "mac-bridge",
                     "GEMINI_API_KEY": "must-not-be-baked", "AGENT_RUNTIME_BRIDGE_TOKEN": "also-private"}
@@ -461,8 +461,8 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             def local_path(value):
                 return root / value.lstrip("/") if value in {"/models", "/data/input", "/data/output"} else Path(value)
             for mode in ("on", "off", "gemini"):
-                selection = {"COMFYUI_AMBIENT_MODE": mode} if mode != "gemini" else {
-                    "COMFYUI_AMBIENT_MODE": "on", "SPLIT_NODE_PACKS": "gemini",
+                selection = {LEGACY["mode_env"]: mode} if mode != "gemini" else {
+                    LEGACY["mode_env"]: "on", "SPLIT_NODE_PACKS": "gemini",
                     "SPLIT_EXTENSIONS": "", "SPLIT_AGENT_BRIDGE": "off"}
                 for role in ("cpu", "gpu"):
                     process = runtime.ComfyProcess(role, 8187)
@@ -497,6 +497,6 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
 
     def test_mode_defaults_off_and_rejects_typos(self):
         self.assertFalse(Settings.read({}).node_packs)
-        self.assertTrue(Settings.read({"COMFYUI_AMBIENT_MODE": " ON "}).node_packs)
+        self.assertTrue(Settings.read({LEGACY["mode_env"]: " ON "}).node_packs)
         with self.assertRaises(ValueError):
-            Settings.read({"COMFYUI_AMBIENT_MODE": "of"})
+            Settings.read({LEGACY["mode_env"]: "of"})
