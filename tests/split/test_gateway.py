@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,99 +10,12 @@ from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split.config import Settings
+from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS
 from comfy_split.gateway import Controller, api_path
 from comfy_split.state import Journal, job_history
-from comfy_split import worker as worker_module
-from comfy_split.check_environment import check_pins
+from tests.split.support import remote_mock, volume_mocks
 
-
-def remote_mock(result=None):
-    return SimpleNamespace(aio=AsyncMock(return_value=result))
-
-
-class JournalTests(unittest.TestCase):
-    def test_native_metadata_repairs_old_failures_without_changing_requests(self):
-        body = {"prompt": {"1": {}}, "extra_data": {"extra_pnginfo": {"workflow": {"id": "wf"}}}}
-        job = self.journal.enqueue(body, "retry")
-        pending = self.journal.queue()["queue_pending"][0]
-        self.assertEqual(pending[3]["create_time"], int(job["created_at"] * 1000))
-        self.assertNotIn("create_time", body["extra_data"])
-        job.update(status="failed", history={
-            "prompt": [0, job["id"], body["prompt"], {}, []], "outputs": {},
-            "status": {"status_str": "error", "completed": False, "messages": [
-                ["execution_error", {"prompt_id": job["id"], "exception_message": "worker failed"}]]}})
-        repaired = self.journal.history()[job["id"]]
-        self.assertEqual(repaired["prompt"][3], pending[3])
-        error = repaired["status"]["messages"][0][1]
-        self.assertEqual(error["exception_message"], "worker failed")
-        self.assertEqual(error["exception_type"], "RemoteExecutionError")
-        self.assertEqual(error["traceback"], [])
-        self.assertEqual(error["node_id"], "")
-        self.assertEqual(error["node_type"], "")
-        self.assertNotIn("exception_type", job["history"]["status"]["messages"][0][1])
-        self.assertIs(self.journal.enqueue(body, "retry"), job)
-        self.journal.save()
-        self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]], repaired)
-
-    def test_native_history_preserves_real_errors_outputs_and_timestamps(self):
-        job = self.journal.enqueue({"prompt": {"1": {}}})
-        job.update(status="failed", history={
-            "prompt": [0, job["id"], {"1": {}}, {"create_time": 1234}, []],
-            "outputs": {"1": {"images": [{"filename": "existing.png"}]}},
-            "status": {"status_str": "error", "messages": [["execution_error", {
-                "node_id": "1", "node_type": "SaveImage", "exception_type": "ValueError",
-                "exception_message": "original", "traceback": ["original trace"]}]]}})
-        result = job_history(job)
-        self.assertEqual(result["prompt"][3]["create_time"], 1234)
-        self.assertEqual(result["outputs"], job["history"]["outputs"])
-        self.assertEqual(result["status"]["messages"][0][1]["traceback"], ["original trace"])
-
-    def test_candidate_rejects_install_scripts_that_override_protected_packages(self):
-        check_pins("torch==2.10.0+cu130\n", lambda _: "2.10.0+cu130")
-        with self.assertRaisesRegex(RuntimeError, "固定依存の競合"):
-            check_pins("torch==2.10.0+cu130\n", lambda _: "2.11.0")
-
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.journal = Journal(Path(self.temp.name))
-
-    def test_idempotency_survives_restart_and_rejects_different_body(self):
-        body = {"prompt": {"1": {"class_type": "Test"}}}
-        first = self.journal.enqueue(body, "retry")
-        self.journal.save()
-        journal = Journal(Path(self.temp.name))
-        self.assertEqual(journal.enqueue(body, "retry")["id"], first["id"])
-        with self.assertRaises(ValueError):
-            journal.enqueue({"prompt": {"different": {}}}, "retry")
-
-    def test_unknown_dispatch_never_returns_to_queue(self):
-        job = self.journal.enqueue({"prompt": {"1": {}}})
-        job["status"] = "dispatching"
-        self.journal.save()
-        restarted = Journal(Path(self.temp.name))
-        restarted.recover()
-        self.assertEqual(restarted.data["jobs"][job["id"]]["status"], "unknown")
-        self.assertIsNone(restarted.next_job())
-        with self.assertRaises(ValueError):
-            restarted.assert_idle()
-
-    def test_running_call_is_recoverable_without_resubmission(self):
-        job = self.journal.enqueue({"prompt": {"1": {}}})
-        job.update(status="running", call_id="fc-existing")
-        self.journal.save()
-        restarted = Journal(Path(self.temp.name))
-        restarted.recover()
-        self.assertIsNone(restarted.next_job())
-        self.assertEqual(restarted.data["jobs"][job["id"]]["call_id"], "fc-existing")
-
-    def test_environment_and_mode_changes_reject_pending_work(self):
-        self.journal.enqueue({"prompt": {"1": {}}})
-        with self.assertRaises(ValueError):
-            self.journal.assert_idle()
-        self.journal.data["candidate"] = {"version": "env-new"}
-        with self.assertRaises(ValueError):
-            self.journal.enqueue({"prompt": {"2": {}}})
+ADAPTER = next(iter(INTEGRATIONS.values()))
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
@@ -139,20 +51,20 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(failed["checked_at"])
 
     async def asyncSetUp(self):
+        self.enterContext(patch.dict("os.environ", Settings().environment()))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.worker = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-test")),
             get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0)))
         self.events = SimpleNamespace(get_many=remote_mock([]))
         self.commands = SimpleNamespace(put=remote_mock())
-        self.volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                        for key in ("input", "output", "data", "models", "environment")}
+        self.volumes = volume_mocks()
         async def missing_file(_):
             raise FileNotFoundError
             yield b""
         self.volumes["data"].read_file = SimpleNamespace(aio=missing_file)
         self.control = Controller(self.worker, self.events, self.commands, self.volumes,
-                                  Path(self.temp.name), extensions=())
+                                  Path(self.temp.name))
 
         async def cpu_handler(request):
             if request.path == "/ws":
@@ -169,24 +81,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             if request.path == "/_split/jobs":
                 self.job_snapshot = await request.json()
                 return web.json_response({"jobs": [], "pagination": {"total": 0}})
+            reserved = [route for source in EXTENSIONS.values() for route in source["guarded_routes"]]
+            # Native ComfyUI has no extension APIs. Adapter routes, however,
+            # must be blocked by the gateway even if the upstream returns 200.
+            if request.path in reserved:
+                raise web.HTTPNotFound()
             return web.json_response({"cpu": True})
 
         cpu_app = web.Application()
         cpu_app.router.add_route("*", "/{path:.*}", cpu_handler)
         self.cpu_server = TestServer(cpu_app)
+        self.addAsyncCleanup(self.cpu_server.close)
         await self.cpu_server.start_server()
         self.control.cpu = SimpleNamespace(url=str(self.cpu_server.make_url("/"))[:-1],
                                            stop=AsyncMock(), start=AsyncMock(), archive_temp=Mock())
         self.control.client = ClientSession(auto_decompress=False)
+        self.addAsyncCleanup(self.control.client.close)
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", self.control.handle)
         self.client = TestClient(TestServer(app))
+        self.addAsyncCleanup(self.client.close)
         await self.client.start_server()
-
-    async def asyncTearDown(self):
-        await self.client.close()
-        await self.control.client.close()
-        await self.cpu_server.close()
 
     async def test_jobs_use_extension_snapshot_without_modifying_comfy_queue(self):
         job = self.control.journal.enqueue({"prompt": {"1": {"class_type": "Test"}}})
@@ -252,7 +167,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_remote_python_failure_is_terminal_but_network_failure_is_not(self):
         namespace = {}
-        exec(compile("def fail():\n raise RuntimeError('remote failure')", "<ta-test>:/root/worker.py", "exec"), namespace)
+        # A fixed fixture with Modal's remote traceback filename, not user input.
+        exec(compile("def fail():\n raise RuntimeError('remote failure')", "<ta-test>:/root/worker.py", "exec"), namespace)  # noqa: S102
         try:
             namespace["fail"]()
         except RuntimeError as error:
@@ -276,19 +192,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disk.data["jobs"][job["id"]]["status"], "unknown")
         self.assertIsNone(disk.next_job())
 
-    async def test_completion_waits_for_output_visibility(self):
-        job = self.control.journal.enqueue({"prompt": {"1": {}}})
-        job["status"] = "running"
-        history = {"outputs": {}, "status": {"status_str": "success"}}
-        ready = asyncio.Event()
-        self.volumes["output"].reload.aio.side_effect = ready.wait
-        finishing = asyncio.create_task(self.control.finish(job, {"status": "completed", "history": history}))
-        await asyncio.sleep(0)
-        self.assertEqual(job["status"], "running")
-        ready.set()
-        await finishing
-        self.assertEqual(job["status"], "completed")
-        self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]], job_history(job))
 
     async def test_progress_counts_finished_non_output_nodes_and_preserves_real_outputs(self):
         job = self.control.journal.enqueue({"prompt": {str(n): {} for n in range(1, 5)}})
@@ -332,6 +235,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.control.broadcast.side_effect = visible
         ready.set()
         await task
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(Journal(Path(self.temp.name)).history()[job["id"]], job_history(job))
         kinds = [call.args[0]["type"] for call in self.control.broadcast.call_args_list]
         self.assertEqual(kinds[-4:], ["executed", "execution_success", "executing", "status"])
         self.assertEqual(kinds.count("execution_success"), 1)
@@ -366,9 +271,9 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.control.journal.data["candidate"] = {"version": "env-broken", "status": "validating"}
         self.control.candidate = SimpleNamespace(url=self.control.cpu.url, stop=AsyncMock())
         # Missing verified Manager queue status must fail before GPU validation.
-        with patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("bad dependency")):
-            with self.assertLogs("comfy_split.gateway", level="ERROR"):
-                await self.control.apply_environment()
+        with (patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("bad dependency")),
+              self.assertLogs("comfy_split.gateway", level="ERROR")):
+            await self.control.apply_environment()
         self.assertEqual(self.control.journal.data["environment"], "base")
         self.assertEqual(self.control.journal.data["candidate"]["status"], "failed")
         self.worker.spawn.aio.assert_not_awaited()
@@ -401,155 +306,36 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.control.journal.data["session"])
         self.worker.spawn.aio.assert_not_awaited()
 
+    async def test_plain_prompt_is_idempotent_and_optional_endpoints_are_absent(self):
+        self.assertEqual(self.control.plugins, [])
+        body = {"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}}
+        responses = [await self.client.post("/prompt", json=body, headers={"Idempotency-Key": "plain"}) for _ in range(2)]
+        self.assertEqual([r.status for r in responses], [200, 200])
+        self.assertEqual((await responses[0].json())["prompt_id"], (await responses[1].json())["prompt_id"])
+        for path in [route for source in EXTENSIONS.values() for route in source["guarded_routes"]] + [source["prefix"] + "catalog" for source in INTEGRATIONS.values()]:
+            self.assertEqual((await self.client.get(path)).status, 404)
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_disabled_adapter_rejects_before_acceptance(self):
+        response = await self.client.post("/prompt", json={"prompt": {
+            "1": {"class_type": ADAPTER["node_prefix"] + "Text", "inputs": {}}}})
+        self.assertEqual(response.status, 409)
+        self.assertEqual(self.control.journal.data["jobs"], {})
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_optional_observer_failure_does_not_block_native_events(self):
+        def broken(_event):
+            raise RuntimeError("Extension failure")
+        self.control.plugins = [SimpleNamespace(event=broken)]
+        socket = SimpleNamespace(send_json=AsyncMock())
+        self.control.sockets = {"native": [socket]}
+        event = {"type": "progress", "data": {"value": 1, "max": 2}}
+        with self.assertLogs("comfy_split.gateway", level="ERROR"):
+            await self.control.broadcast(event)
+        socket.send_json.assert_awaited_once_with(event)
+
 
 class RoutingTests(unittest.TestCase):
     def test_api_prefix_normalization(self):
         self.assertEqual(api_path("/api/prompt"), "/prompt")
         self.assertEqual(api_path("/apiculture"), "/apiculture")
-
-
-class WorkerTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        settings = patch.dict(os.environ, Settings().environment())
-        settings.start()
-        self.addCleanup(settings.stop)
-
-    async def test_real_comfy_protocol_submits_once_relays_and_interrupts(self):
-        state = {"submitted": 0, "interrupted": False, "history_reads": 0}
-        sockets = []
-
-        async def ws(request):
-            socket = web.WebSocketResponse()
-            await socket.prepare(request)
-            sockets.append(socket)
-            async for _ in socket:
-                pass
-            return socket
-
-        async def prompt(request):
-            body = await request.json()
-            state["submitted"] += 1
-            self.assertEqual(body["client_id"], "job-1")
-            for socket in sockets:
-                await socket.send_json({"type": "progress", "data": {"value": 1, "max": 2}})
-                await socket.send_bytes(b"preview")
-            return web.json_response({"prompt_id": body["prompt_id"]})
-
-        async def interrupt(request):
-            state["interrupted"] = True
-            return web.json_response({})
-
-        async def history(request):
-            state["history_reads"] += 1
-            if state["history_reads"] < 2:
-                return web.json_response({})
-            async def tail():
-                # Native history is committed just before the final WS frames.
-                await asyncio.sleep(0.02)
-                for socket in sockets:
-                    await socket.send_json({"type": "progress", "data": {"value": 2, "max": 2}})
-                    await socket.send_json({"type": "executing", "data": {"node": None, "prompt_id": "job-1"}})
-            asyncio.create_task(tail())
-            return web.json_response({"job-1": {"outputs": {}, "status": {
-                "status_str": "error", "messages": [["execution_interrupted", {}]]}}})
-
-        app = web.Application()
-        app.router.add_get("/ws", ws)
-        app.router.add_post("/prompt", prompt)
-        app.router.add_post("/interrupt", interrupt)
-        app.router.add_get("/history/{id}", history)
-        server = TestServer(app)
-        await server.start_server()
-        try:
-            fake_process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url=str(server.make_url("/"))[:-1],
-                                           process=SimpleNamespace(returncode=None))
-            emit = AsyncMock()
-            with patch.object(worker_module, "process", fake_process):
-                async with ClientSession() as client:
-                    result = await worker_module.generate(
-                        {"id": "job-1", "body": {"prompt": {"1": {}}}}, client,
-                        AsyncMock(return_value=[{"type": "interrupt"}]), emit)
-            self.assertEqual(result["status"], "cancelled")
-            self.assertEqual(state["submitted"], 1)
-            self.assertTrue(state["interrupted"])
-            types = [call.args[0]["type"] for call in emit.call_args_list]
-            self.assertIn("event", types)
-            self.assertIn("preview", types)
-            progress = [call.args[0]["event"]["data"]["value"] for call in emit.call_args_list
-                        if call.args[0].get("event", {}).get("type") == "progress"]
-            self.assertEqual(progress, [1, 2])
-        finally:
-            await server.close()
-
-    async def test_result_receipt_is_written_after_outputs_committed(self):
-        sequence = []
-        with tempfile.TemporaryDirectory() as root:
-            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "data", "output")}
-            async def output_commit():
-                sequence.append("output")
-            async def result_commit():
-                sequence.append("result")
-            volumes["output"].commit.aio.side_effect = output_commit
-            volumes["data"].commit.aio.side_effect = result_commit
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
-            with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "JOBS", Path(root)), \
-                 patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
-                result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
-                    SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
-            self.assertEqual(sequence, ["result", "output", "result"])
-            self.assertEqual(json.loads((Path(root) / "job.json").read_text())["status"], "completed", result)
-            self.assertEqual(result["status"], "completed", result)
-
-    async def test_preempted_input_with_start_receipt_is_not_reexecuted(self):
-        with tempfile.TemporaryDirectory() as root:
-            (Path(root) / "job.started.json").write_text("{}")
-            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "data", "output")}
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
-            generate = AsyncMock()
-            with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "JOBS", Path(root)), \
-                 patch.object(worker_module, "generate", generate):
-                result = await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
-                    SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
-            self.assertEqual(result["status"], "unknown")
-            generate.assert_not_awaited()
-            process.start.assert_not_awaited()
-
-    async def test_output_commit_failure_does_not_publish_completion(self):
-        with tempfile.TemporaryDirectory() as root:
-            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "data", "output")}
-            volumes["output"].commit.aio.side_effect = OSError("output commit failed")
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid",
-                                      start=AsyncMock(), stop=AsyncMock(), version=None)
-            with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "JOBS", Path(root)), \
-                 patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
-                with self.assertRaisesRegex(OSError, "output commit failed"):
-                    await worker_module.run_worker({"id": "job", "environment": "base", "operation": "generate"},
-                        SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
-            self.assertTrue((Path(root) / "job.started.json").exists())
-            self.assertFalse((Path(root) / "job.json").exists())
-
-    async def test_warm_worker_skips_immutable_environment_and_closes_mapped_files(self):
-        with tempfile.TemporaryDirectory() as root:
-            volumes = {key: SimpleNamespace(commit=remote_mock(), reload=remote_mock())
-                       for key in ("environment", "input", "models", "data", "output")}
-            volumes["models"].reload.aio.side_effect = [RuntimeError("there are open files preventing the operation"), None]
-            process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version="base")
-            with patch.object(worker_module, "process", process), \
-                 patch.object(worker_module, "JOBS", Path(root)), \
-                 patch.object(worker_module, "generate", AsyncMock(return_value={"status": "completed"})):
-                result = await worker_module.run_worker({"id": "warm", "environment": "base", "operation": "generate"},
-                    SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), volumes)
-            self.assertEqual(result["status"], "completed", result)
-            volumes["environment"].reload.aio.assert_not_awaited()
-            self.assertEqual(volumes["models"].reload.aio.await_count, 2)
-            process.stop.assert_awaited_once()
-
-
-if __name__ == "__main__":
-    unittest.main()

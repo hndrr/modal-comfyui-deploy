@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from comfy_split.runtime import ComfyProcess
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / 'extensions/ComfyUI-Modal-Bridge'
 
 
@@ -43,9 +43,9 @@ class BridgeTests(unittest.TestCase):
         class ChangedQueue:
             def put(self, changed, another):
                 pass
-        with patch.dict(sys.modules, {'execution': SimpleNamespace(PromptQueue=ChangedQueue)}):
-            with self.assertRaisesRegex(RuntimeError, 'signature'):
-                guard.install_cpu_guard()
+        with (patch.dict(sys.modules, {'execution': SimpleNamespace(PromptQueue=ChangedQueue)}),
+              self.assertRaisesRegex(RuntimeError, 'signature')):
+            guard.install_cpu_guard()
 
     def test_temporary_output_survives_normal_cleanup_and_restart(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -67,3 +67,16 @@ class BridgeTests(unittest.TestCase):
             self.assertNotEqual(process.temp_namespace, ComfyProcess('gpu', 8188).temp_namespace)
             with self.assertRaises(ValueError):
                 process.durable_outputs({'type': 'temp', 'filename': 'x', 'subfolder': '../escape'})
+
+
+class ModalControlPackageTests(unittest.TestCase):
+    def test_standard_comfy_loader_contract_without_modal_or_comfy_imports(self):
+        root = ROOT / 'extensions/ComfyUI-Modal-Control'
+        spec = importlib.util.spec_from_file_location('arbitrary_custom_node', root / '__init__.py',
+                                                    submodule_search_locations=[str(root)])
+        pack = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pack)
+        self.assertEqual(pack.NODE_CLASS_MAPPINGS, {})
+        web = root / pack.WEB_DIRECTORY
+        self.assertTrue((web / 'modal-control.js').is_file())
+        self.assertTrue((web / 'comfy-adapter.mjs').is_file())

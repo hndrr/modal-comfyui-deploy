@@ -91,7 +91,7 @@ Modal 1.1.4の標準Webサーバー中継は、ASGIのデコード済みパス�
 `/userdata/workflows%2Fname.json` の保存・読み込みに失敗する。
 CPU入口は認証付きASGIアプリとし、`comfy_split/modal_proxy.py` でファイルパスを再エンコードして
 固定版ModalのHTTP/WebSocket中継へ渡す。`raw_path` が提供される環境ではそれを優先する。
-SDK更新時は `tests/test_modal_proxy.py` と
+SDK更新時は `tests/split/test_proxy.py` と
 公開URL経由のワークフロー保存・読み込みを確認する。
 
 追加API:
@@ -145,7 +145,7 @@ GPU Memory Snapshotsは未使用。
 
 ```bash
 uv run --locked --extra split-test python scripts/test_standalone.py
-uv run ruff check comfy_split splitapp.py tests/test_comfy_split.py
+uv run ruff check comfy_split splitapp.py tests/split
 ```
 
 任意拡張との連携は別スイートで実行する。配置と実行方法は[テストの説明](../tests/README.md)を参照。

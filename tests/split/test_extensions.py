@@ -1,7 +1,9 @@
 """Lifecycle selection and worker wrapping work for any registered adapter."""
 import os
-from types import SimpleNamespace
+import runpy
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from comfy_split import extensions
@@ -61,3 +63,27 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         host = factory.call_args.args[0]
         self.assertIsInstance(host, extensions.GatewayHost)
         self.assertIs(host.jobs, controller.journal.data['jobs'])
+
+
+class FrontendTests(unittest.TestCase):
+    def test_frontend_install_copies_assets_without_registering_native_nodes(self):
+        import tempfile
+
+        from comfy_split import extension_frontend
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / 'package'
+            (package / 'assets').mkdir(parents=True)
+            (package / 'assets/panel.js').write_text('export const panel = true;')
+            target = root / 'extensions'
+            target.mkdir()
+            catalog = {'sample': {'web_package': 'test_plugin', 'web_directory': 'assets', 'web_name': 'Sample'}}
+            with patch.dict(extension_frontend.EXTENSIONS, catalog, clear=True), \
+                 patch.object(extension_frontend, 'files', return_value=package) as resources:
+                extension_frontend.install('sample', target)
+            resources.assert_called_once_with('test_plugin')
+            registered = runpy.run_path(str(target / 'Sample/__init__.py'))
+            self.assertEqual(registered['NODE_CLASS_MAPPINGS'], {})
+            self.assertEqual(registered['WEB_DIRECTORY'], './web')
+            self.assertEqual((target / 'Sample/web/panel.js').read_bytes(),
+                             (package / 'assets/panel.js').read_bytes())

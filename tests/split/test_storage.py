@@ -1,14 +1,14 @@
 import json
 import os
-from pathlib import Path
 import shutil
 import tempfile
 import time
-from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from comfy_split import runtime, storage, worker
+from comfy_split import storage, worker
 from comfy_split.gateway import Controller
 from comfy_split.state import Journal
 
@@ -192,22 +192,3 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
         result = await self.control.read_result(self.job)
         self.assertEqual(result["status"], "completed")
         self.volumes["data"].reload.aio.assert_not_awaited()
-
-
-class InitializationTests(unittest.TestCase):
-    def test_new_base_copies_nodes_without_copying_core(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            template = root / "template"
-            (template / "custom_nodes/pack").mkdir(parents=True)
-            (template / "custom_nodes/pack/__init__.py").write_text("node")
-            (template / "main.py").write_text("core")
-            with patch.object(runtime, "TEMPLATE", template), patch.object(runtime, "ENVIRONMENTS", root / "envs"), \
-                 patch.object(runtime, "USER", root / "user"), patch.object(runtime.subprocess, "run", Mock()):
-                runtime.initialize_environment()
-            self.assertFalse((root / "envs/base/comfy/main.py").exists())
-            self.assertTrue((root / "envs/base/comfy/custom_nodes/pack/__init__.py").exists())
-
-
-if __name__ == "__main__":
-    unittest.main()

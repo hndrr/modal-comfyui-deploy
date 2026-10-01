@@ -1,14 +1,15 @@
 import json
 import os
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from comfy_split import cpu_snapshot, storage
 from comfy_split.gateway import Controller
 from comfy_split.state import Journal, write_json
+from tests.split.support import volume_mocks
 
 
 class SnapshotTests(unittest.IsolatedAsyncioTestCase):
@@ -16,8 +17,7 @@ class SnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.volumes = {key: SimpleNamespace(reload=SimpleNamespace(aio=AsyncMock()),
-            commit=SimpleNamespace(aio=AsyncMock())) for key in ("data", "environment")}
+        self.volumes = volume_mocks("data", "environment")
 
     async def test_resume_forwards_current_credentials_in_private_one_use_file(self):
         path = self.root / "resume.json"
