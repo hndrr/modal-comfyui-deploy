@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from comfy_split.state import write_json
-from comfy_split.extension_sources import node_revision
+from comfy_split.extension_sources import LEGACY, node_revision
 
 from comfy_split.config import Settings, NODE_PACKS, DEPLOYMENT_ENV
 
@@ -18,8 +18,8 @@ REPOSITORIES = tuple(NODE_PACKS.values())
 NODE_NAMES = frozenset(repo.split("/")[1] for repo in REPOSITORIES)
 DIRECTORY = "node_packs"
 MANIFEST = "node-packs.json"
-LEGACY_DIRECTORY = "ambient_nodes"
-LEGACY_MANIFEST = "ambient-nodes.json"
+LEGACY_DIRECTORY = LEGACY["node_directory"]
+LEGACY_MANIFEST = LEGACY["node_manifest"]
 
 
 def enabled():

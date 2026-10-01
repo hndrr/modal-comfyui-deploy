@@ -1,6 +1,6 @@
 # Splitの実行環境とStorageの検討
 
-> 2026-09-15〜16の設計・実施記録です。旧Ambientアプリに関する記述も当時の比較です。現在の構成・運用は[splitの説明](../comfyui-split.md)と[任意拡張](../split-integrations.md)を参照してください。
+> 2026-09-15〜16の設計・実施記録です。現在の構成・運用は[splitの説明](../comfyui-split.md)と[任意拡張](../split-integrations.md)を参照してください。
 
 確認日: 2026-09-16
 
@@ -9,7 +9,7 @@
 
 ## 現在の保存先
 
-SplitとAmbientは、すでにModalのコンテナで動いている。
+SplitはModalのコンテナで動いている。
 Dockerfileの代わりに、Pythonの`modal.Image`で依存関係やイメージを定義している。
 検討対象は、Splitのカスタムノードと追加Python環境をVolumeに保持する必要があるか、という点。
 
@@ -20,13 +20,7 @@ Dockerfileの代わりに、Pythonの`modal.Image`で依存関係やイメージ
 | Splitの通常のカスタムノード | `comfy-split-environments`内の`/environments/<環境ID>/comfy/custom_nodes`から実行する |
 | Splitの追加Python環境 | 同Volumeの`/environments/<環境ID>/venv`。イメージ内の基本ライブラリも参照する |
 | SplitのModal連携用拡張 | イメージ内の`/opt/comfy-extensions`に配置する |
-| Ambientのコード・依存ライブラリ | コンテナ側。Splitのような環境Volumeは使用しない |
 | モデル・入力・生成物・設定・ワークフロー・必要なジョブ状態 | VolumeやModal Dictなどの永続ストレージに保持する |
-
-AmbientはCPUでAPI・ジョブ管理・メディア処理を行い、生成は接続先のComfyUIに依頼する。
-現在のSplitとの構成では、SplitのGPU workerが生成を担当する。
-Ambientの依存ライブラリはイメージにインストールされ、アプリコードは`add_local_file`・`add_local_dir`で配布される。
-現在のAmbientではこれらに`copy=True`を指定していないため、コードはビルド済みイメージのレイヤーではなく、コンテナ起動時に配置される。
 
 ## なぜSplitの環境をVolumeに置いているか
 
@@ -69,6 +63,5 @@ CPUとGPUの分離や未使用時の停止も、引き続きModal側で設定で
 - `comfy_split/runtime.py`: `initialize_environment`、`create_environment`、`ComfyProcess.start`。
 - `comfy_split/gateway.py`: Managerの環境候補作成・検証・適用。
 - `comfy_split/storage.py`: Volume名・マウント先・環境の保持判定。
-- `ambient_app.py`: CPUイメージ、コード配布、ComfyUIへの生成依頼。
 - [Split Storage](split-storage.md): 現行のStorage構成と清掃・移行の記録。
 - [Modal Images公式ドキュメント](https://modal.com/docs/guide/images): イメージ定義、ローカルコードの配布と`copy=True`の違い。

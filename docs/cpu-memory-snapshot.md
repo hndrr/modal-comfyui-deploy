@@ -22,17 +22,13 @@ MODAL_PROFILE="<profile>" .venv/bin/python scripts/verify_cpu_snapshot.py \
   --output /private/tmp/cpu-snapshot-boots.json --boots 2
 ```
 
-Studioからの実GPU生成を含む反映記録は`docs/validation/2026-09-20/cpu-memory-snapshot-deploy/`に保存する。
+本体への反映記録は`docs/validation/2026-09-20/cpu-memory-snapshot-deploy/`に保存する。
 
 ### 本体での確認結果
 
 2026-09-20の実機確認では、Snapshotの新規作成を伴う起動は54.16〜104.30秒、保存済みSnapshotから準備完了までは**12.24秒**だった。共有Volumeの再読込・Gatewayの復旧まで含むため、前段の隔離試験の4〜5秒とは計測条件が異なる。全API確認が終わるまでの時間とは区別する。
 
-StudioからCodex OFF、H3 Fused + Mystic 4step、9:16で実生成した。生成・保存・Studioへの配信・Jevタグ付けが完了し、共有ライブラリは13本から14本になった。動画は576×1024、124フレーム、24fps、約5.2秒、AAC音声付き。モデル処理を含むGPUワーカーの所要時間は64.36秒だった。
-
-生成前に作成したSnapshotを、CPUが0台になった後の別コンテナへ復元した。初期化IDは同一、復元IDとコンテナIDは異なる。生成後の成功履歴を取得でき、新しく増えた素材の選択肢も反映されていた。ノード1352件・拡張161件、WebSocket、内部復元ルートが公開されないことも確認した。
-
-20:12:09 JST、最終反映の確認後にCPU・GPU・Ambient API・生成・タグ付け・清掃がすべて0台、待機ジョブ0であることを管理APIから確認した。
+生成後に保存済みSnapshotを別コンテナへ復元し、最新の履歴と素材一覧を取得できました。ノード1352件・拡張161件、WebSocket、内部復元ルートが公開されないことも確認しています。
 
 ## 結果
 
@@ -57,7 +53,6 @@ Modalは実行先のワーカーの種類ごとにSnapshotを作成するため�
 全7回で、以下の確認が成功した。
 
 - `/object_info`の1352ノードが揃い、すべての入出力定義のSHA-256が一致した。
-- GeminiToolsの21ノード、H3／FastH3、Jev、AgentRuntime Bridgeを含む現行Ambientワークフローの使用クラスが存在した。
 - カスタムノードのimport失敗がなく、拡張JSは161件だった。
 - ComfyUIのHTMLとメタデータAPIが応答した。
 - 復元後に作った新しいクライアントIDでWebSocketへ接続し、そのIDに対応するstatusイベントを受信した。
@@ -110,4 +105,4 @@ Snapshotはデプロイしたアプリで作成されるため、`modal run`に�
 - `run.log`：各起動前後のCPU停止確認。
 - `all-idle.json`：専用アプリ停止後の最終確認。
 
-19:35:05 JSTに検証用アプリの停止が完了した。19:37:42 JST、管理APIから運用側の全6関数でrunners・backlogが0であることを確認した。検証アプリもstopped・Tasks 0で、コンテナ一覧は空だった。既存のStudio／Split／Ambientのデプロイ、GeminiToolsの有効状態は変更していない。
+19:35:05 JSTに検証用アプリの停止が完了した。19:37:42 JST、管理APIから運用側の全6関数でrunners・backlogが0であることを確認した。検証アプリもstopped・Tasks 0で、コンテナ一覧は空だった。既存のデプロイとノード選択は変更していない。

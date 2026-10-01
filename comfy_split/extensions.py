@@ -3,6 +3,7 @@ from importlib import import_module
 from typing import Protocol
 
 from comfy_split.config import Settings
+from comfy_split.extension_sources import EXTENSIONS
 from comfy_split.proxy import proxy
 from comfy_split.state import ACTIVE
 
@@ -90,9 +91,9 @@ def check_requirements(body, record=None):
 def load_extensions(controller):
     result = []
     settings = Settings.read()
-    factories = {"ambient": ("ambient_comfyui.split", "SplitAmbient")}
     for name in settings.extensions:
-        module, factory = factories[name]
+        source = EXTENSIONS[name]
+        module, factory = source["module"], source["factory"]
         try:
             extension = getattr(import_module(module), factory)
         except ImportError as error:

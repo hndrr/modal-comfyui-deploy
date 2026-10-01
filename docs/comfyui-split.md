@@ -15,11 +15,7 @@ GPUは生成、環境検証、明示的な従来モードでだけ使用する�
 ./scripts/modal.sh deploy splitapp.py
 ```
 
-標準構成はAmbientパッケージ・設定・Secretなしで動作します。
-Ambient Studio連携は `SPLIT_EXTENSIONS=ambient` で追加する任意拡張です。
-追加ノードは `SPLIT_NODE_PACKS=agent-bridge,agent-runtime,skills-loader,gemini,jev` から必要なものを選び、
-Mac Bridgeは独立して `SPLIT_AGENT_BRIDGE=on` で有効にします。
-いずれも既定は無効です。設定・旧構成の移行・配布物の更新は [任意拡張](split-integrations.md) を参照してください。
+追加機能は既定で無効です。拡張・追加ノード・中継の有効化、配布物の更新、旧設定からの移行は[任意拡張](split-integrations.md)を参照してください。
 
 追加ノードを選択した場合だけ、デプロイ後の最初のアイドル起動で最新HEADを確認します。
 有効な旧環境があれば更新失敗時も再利用し、CPU/GPUはジョブに固定した同じ環境を使います。
@@ -80,12 +76,6 @@ ComfyUI本体を変更せず、追加のcustom_nodes検索パスから読み込�
 - **Manager**: 追加・更新は候補環境に対して行う。再起動、または
   「ノード更新を検証・反映」で依存確認、CPU起動、GPU検証を行い、有効環境を切り替える。
   失敗時は旧環境を維持し、「未反映の更新を破棄」で戻せる。
-
-Ambient StudioのMac Bridgeは未使用時に接続を解放します。認証付きの
-`POST /agent_runtime/bridge/idle` は、同じ接続を使う受付済みジョブや未返却の結果が
-あれば `idle: false` を返します。空なら投入処理と同じロック内で接続を無効化し、
-WebSocketを閉じます。これにより確認と切断の間に受け付けたジョブを失うことを防ぎます。
-通常の動画生成は継続し、CPUは既存のジョブ保持・アイドル時30秒停止の設定に従います。
 
 生成・待機ジョブがある場合はモード切替とノード更新を拒否する。
 ManagerからのComfyUI本体更新は提供せず、固定バージョンを再デプロイで更新する。
@@ -226,27 +216,3 @@ split前のWebSocket圧縮・user_managerソースパッチは、この分離構
 - CPU再起動後の履歴・ジョブ詳細・画像の復元と、実行中ジョブが再投入されないことを確認する。
 - 実ブラウザで標準画面・GPU表示・生成履歴・画像表示を確認する。
 - Managerの応答、追加済みノードの保持、Image Browsingのファイル操作を確認する。
-
-
-## Studio の生成モードと秒数
-
-Split の `/ambient/workflows` は従来6モードに加えて、`h3-ref2v`、
-`fasth3-8step-i2v-vsa`、`fasth3-vsa-4step-i2v` を登録する。
-レシピは非公開の `hndrr/ComfyUI-Ambient` repoで管理し、固定コミットからインストールする。`SPLIT_EXTENSIONS=ambient` の場合だけ公開する。旧Ambient APIは廃止済み。
-Ref2V は既存Volumeの Ref2VA INT8（prunedがあれば優先）を使う。
-モデルの自動ダウンロードは行わず、必要なモデルやノードがない場合は登録しない。
-8ステップはV2モデル＋SigmaShift 10/3＋BlockSparseAttention VSA、
-4ステップは同じモデル＋SigmaShift 12/3＋SolAttnMiniMax VSAとManualSigmasを使う。
-4ステップは実験用。SolAttnMiniMax v5は出典とSHA-256を記録して同梱し、
-CPU/GPU共通の追加ノードパスへ置く。既存Volume上のノードは書き換えない。
-
-全動画モードが `length` バインドを公開する。Studioが秒数を24fps・17k+5へ補正し、
-接続先ノードの範囲を検証する。省略時は従来の124フレーム。
-更新前に保存した既知のH3グラフでlengthバインドがない場合は、初回カタログ読み込みで
-現在版を新しい版へ移し、Ambient所有のlengthを追加する。グラフ、モデル、レイアウト、
-他の入力所有権、旧版、受付済みジョブは変更しない。
-明示的にワークフロー所有としたlengthはそのまま維持する。
-
-Ref2Vの `references` は順序付き1〜9枚の `ref_images.ref_image_0…` を一組として扱う。
-保存したレシピを再利用しても各ジョブの画像構成で置き換え、前の余剰画像を残さない。
-ComfyUIのAmbientパネルではlength／referencesも他の入力と同様に所有権を選択できる。

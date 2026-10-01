@@ -89,14 +89,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ambient-comfyui"
-version = "0.1.0"
-source = { git = "https://github.com/hndrr/ComfyUI-Ambient?rev=c40aa0d4cbde7ab570a04afe91590f03ba62d56f#c40aa0d4cbde7ab570a04afe91590f03ba62d56f" }
-dependencies = [
-    { name = "aiohttp" },
-]
-
-[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -753,13 +745,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-ambient = [
-    { name = "ambient-comfyui" },
-]
-ambient-test = [
-    { name = "aiohttp" },
-    { name = "ambient-comfyui" },
-]
 bridge = [
     { name = "comfyui-agent-bridge" },
 ]
@@ -773,11 +758,8 @@ split-test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'ambient-test'", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'bridge-test'", specifier = ">=3.12.15" },
     { name = "aiohttp", marker = "extra == 'split-test'", specifier = ">=3.12.15" },
-    { name = "ambient-comfyui", marker = "extra == 'ambient'", git = "https://github.com/hndrr/ComfyUI-Ambient?rev=c40aa0d4cbde7ab570a04afe91590f03ba62d56f" },
-    { name = "ambient-comfyui", marker = "extra == 'ambient-test'", git = "https://github.com/hndrr/ComfyUI-Ambient?rev=c40aa0d4cbde7ab570a04afe91590f03ba62d56f" },
     { name = "comfyui-agent-bridge", marker = "extra == 'bridge'", git = "https://github.com/hndrr/ComfyUI-AgentBridge?rev=0dd4ac5a8c9c8550d13b3ae3f4f536c50336106b" },
     { name = "comfyui-agent-bridge", marker = "extra == 'bridge-test'", git = "https://github.com/hndrr/ComfyUI-AgentBridge?rev=0dd4ac5a8c9c8550d13b3ae3f4f536c50336106b" },
     { name = "gradio", specifier = ">=5.47.2" },
@@ -785,7 +767,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
 ]
-provides-extras = ["ambient", "bridge", "bridge-test", "split-test", "ambient-test"]
+provides-extras = ["bridge", "bridge-test", "split-test"]
 
 [[package]]
 name = "multidict"

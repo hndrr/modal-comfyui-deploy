@@ -18,7 +18,7 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 GitHub Actionsで、push・pull request時に以下を並列実行します。Actions画面からの手動実行にも対応しています。
 
-- Python: 標準splitは認証なしで検証。任意拡張の回帰テストは `AMBIENT_REPO_TOKEN` がある場合に追加実行（[手順](docs/split-integrations.md#ローカル検証)）。
+- Python: 標準splitは認証なしで検証。任意拡張の回帰テストは `INTEGRATION_REPO_TOKEN` がある場合に追加実行（[手順](docs/split-integrations.md#ローカル検証)）。
 - 管理画面（`web/`）: `npm ci` → `npm test` → `npm run build`
 - 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
 
@@ -130,7 +130,6 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 
 - [split-storage.md](docs/design/split-storage.md): splitのStorage設計・移行記録
 - [runtime-and-storage.md](docs/design/runtime-and-storage.md): splitの実行環境とVolumeの検討
-
 - [cloudflare-access.md](docs/design/cloudflare-access.md): Worker の責務と WebSocket 透過、迂回経路を塞ぐ設計
 - [modal-idle-scale-to-zero.md](docs/design/modal-idle-scale-to-zero.md): アイドル時に GPU コンテナをゼロ台へ縮退させる設計
 - [modal-power-control.md](docs/design/modal-power-control.md): ComfyUI から GPU の Sleep / Wake を操作する構想
@@ -138,6 +137,4 @@ Volume の別名コピーとファイル移動に `rename_volume.py` / `move_vol
 
 ## 任意拡張
 
-split単体にはAmbientのコード・設定・Secretは不要です。追加ノード、Ambient拡張、Mac Bridgeを独立して有効化する手順は[splitの任意拡張](docs/split-integrations.md)を参照してください。
-
-Studioの操作・接続・保存済み動画は[ambient-studio](https://github.com/hndrr/ambient-studio/blob/main/docs/modal-split.md)、生成レシピ・パネル・旧Ambientの設計と検証記録は[ComfyUI-Ambient](https://github.com/hndrr/ComfyUI-Ambient)で管理します。
+標準構成は拡張なしで動作します。拡張・追加ノード・中継の配置と設定は[splitの任意拡張](docs/split-integrations.md)を参照してください。各機能の仕様・操作ガイドもそこから配布元へリンクしています。

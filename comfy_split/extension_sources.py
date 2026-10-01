@@ -1,10 +1,11 @@
 """Optional extension pins. No package import, lookup or network access."""
 
-AMBIENT = {
-    "repository": "hndrr/ComfyUI-Ambient",
-    "version": "0.1.0",
-    "revision": "c40aa0d4cbde7ab570a04afe91590f03ba62d56f",
-}
+from pathlib import Path
+import tomllib
+
+_CATALOG = tomllib.loads(Path(__file__).with_name("extension_catalog.toml").read_text())
+EXTENSIONS = _CATALOG["extensions"]
+LEGACY = _CATALOG["legacy"]
 
 BRIDGE = {
     "repository": "hndrr/ComfyUI-AgentBridge",

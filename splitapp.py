@@ -37,7 +37,7 @@ provider_secrets = [modal.Secret.from_name(value, required_keys=[key])
                     for _, key, value in provider_settings]
 github_secrets = []
 github_build_secret = None
-if settings.node_packs or settings.bridge or "ambient" in settings.extensions:
+if settings.node_packs or settings.bridge or settings.extensions:
     secret_names["GITHUB_SECRET_NAME"] = os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret"
     github_build_secret = modal.Secret.from_name(secret_names["GITHUB_SECRET_NAME"],
                                                 required_keys=[node_packs.TOKEN_ENV])
@@ -140,25 +140,21 @@ image = (
         "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
     )
 )
-if "ambient" in settings.extensions:
-    from comfy_split.extension_sources import AMBIENT
-
-    frontend_init = 'NODE_CLASS_MAPPINGS = {}\nWEB_DIRECTORY = "./web"\n'
-    frontend_setup = (
-        'import ambient_comfyui, shutil; from pathlib import Path; '
-        'p=Path("/opt/comfy-extensions/ComfyUI-Ambient"); p.mkdir(); '
-        'shutil.copytree(Path(ambient_comfyui.__file__).parent/"web",p/"web"); '
-        f'p.joinpath("__init__.py").write_text({frontend_init!r})'
-    )
+# Source metadata selects the package and optional UI; no product-specific build path.
+from comfy_split.extension_sources import EXTENSIONS
+for name in settings.extensions:
+    source = EXTENSIONS[name]
     image = image.pip_install_private_repos(
-        f"github.com/{AMBIENT['repository']}@{AMBIENT['revision']}",
+        f"github.com/{source['repository']}@{source['revision']}",
         git_user="x-access-token", secrets=[github_build_secret], extra_options="--no-deps",
-    ).run_commands(
-        "python -c " + shlex.quote(
-            "from importlib.metadata import version; "
-            f"assert version('ambient-comfyui') == {AMBIENT['version']!r}"
-        ), "python -c " + shlex.quote(frontend_setup),
-    )
+    ).run_commands("python -c " + shlex.quote(
+        "from importlib.metadata import version; "
+        f"assert version({source['distribution']!r}) == {source['version']!r}"
+    ))
+    if source.get("web_package"):
+        image = image.run_commands(
+            "python -m comfy_split.extension_frontend " + shlex.quote(name)
+        )
 if settings.bridge:
     from comfy_split.extension_sources import BRIDGE
 

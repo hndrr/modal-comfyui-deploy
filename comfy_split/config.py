@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import os
 
+from comfy_split.extension_sources import EXTENSIONS, LEGACY
+
 NODE_PACKS = {
     "agent-bridge": "hndrr/ComfyUI-AgentBridge",
     "agent-runtime": "hndrr/ComfyUI-AgentRuntime",
@@ -37,11 +39,11 @@ class Settings:
     def read(cls, environ=None):
         environ = os.environ if environ is None else environ
         # Each explicitly provided new setting wins, including an empty list.
-        legacy = switch(environ, "COMFYUI_AMBIENT_MODE") if any(
+        legacy = switch(environ, LEGACY["mode_env"]) if any(
             name not in environ for name in ("SPLIT_EXTENSIONS", "SPLIT_NODE_PACKS", "SPLIT_AGENT_BRIDGE")
         ) else False
         return cls(
-            selection(environ, "SPLIT_EXTENSIONS", ("ambient",), "ambient" if legacy else ""),
+            selection(environ, "SPLIT_EXTENSIONS", EXTENSIONS, ",".join(LEGACY["extensions"]) if legacy else ""),
             selection(environ, "SPLIT_NODE_PACKS", NODE_PACKS, ",".join(NODE_PACKS) if legacy else ""),
             switch(environ, "SPLIT_AGENT_BRIDGE", "on" if legacy else "off"),
         )

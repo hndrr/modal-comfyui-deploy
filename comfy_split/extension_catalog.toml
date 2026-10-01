@@ -1,0 +1,19 @@
+# Deployment metadata only. Implementations and tests live in the owning repo.
+[extensions.ambient]
+repository = "hndrr/ComfyUI-Ambient"
+version = "0.1.0"
+revision = "c40aa0d4cbde7ab570a04afe91590f03ba62d56f"
+distribution = "ambient-comfyui"
+module = "ambient_comfyui.split"
+factory = "SplitAmbient"
+web_package = "ambient_comfyui"
+web_directory = "web"
+web_name = "ComfyUI-Ambient"
+guarded_routes = ["/ambient/workflows", "/ambient/executions", "/ambient/library"]
+
+# Read compatibility for existing deployments; never rewrite or delete data.
+[legacy]
+mode_env = "COMFYUI_AMBIENT_MODE"
+extensions = ["ambient"]
+node_directory = "ambient_nodes"
+node_manifest = "ambient-nodes.json"
