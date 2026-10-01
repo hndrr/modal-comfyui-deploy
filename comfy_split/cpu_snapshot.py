@@ -113,7 +113,7 @@ async def restore_controller(cpu, info, *, volumes, restoration):
         except Exception:
             logging.exception("Warm ComfyUI health failed; starting a fresh CPU process")
             await cpu.stop()
-    # Constructor reads today's journal, creates new locks, Bridge, workflow
+    # Constructor reads today's journal, creates new locks, extension, workflow
     # registry and socket maps. Dispatcher starts later through StartupGate.
     controller = make_controller(volumes, warmed_cpu=cpu)
     if cpu.version is not None and (controller.journal.data["mode"] != "split" or

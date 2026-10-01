@@ -52,7 +52,7 @@ class ModalProxyTests(unittest.IsolatedAsyncioTestCase):
         app.router.add_route("*", "/api/userdata/{file}", userdata)
         app.router.add_post("/api/userdata/{file}/move/{dest}", move)
         app.router.add_get("/ws/{file}", socket)
-        app.router.add_post("/agent_runtime/bridge/jobs/{id}/artifacts", artifact)
+        app.router.add_post("/extension/jobs/{id}/artifacts", artifact)
         self.server = TestServer(app)
         await self.server.start_server()
         self.session = ClientSession(str(self.server.make_url("/")), auto_decompress=False)
@@ -88,11 +88,11 @@ class ModalProxyTests(unittest.IsolatedAsyncioTestCase):
         content = b"".join(message.get("body", b"") for message in outgoing)
         return SimpleNamespace(status_code=outgoing[0]["status"], json=lambda: json.loads(content))
 
-    async def test_bridge_artifacts_stream_through_modals_actual_proxy(self):
+    async def test_large_artifacts_stream_through_modals_actual_proxy(self):
         image = bytes(range(256)) * 12000
         for framing in ([(b"Transfer-Encoding", b"chunked")], [(b"content-length", str(len(image)).encode())]):
             with self.subTest(framing=framing):
-                response = await self.request("POST", "/agent_runtime/bridge/jobs/native-job/artifacts?name=grid.png",
+                response = await self.request("POST", "/extension/jobs/native-job/artifacts?name=grid.png",
                     image, modal_wire=True, chunk_size=65536,
                     headers=[*framing, (b"authorization", b"Bearer fixture-token")])
                 self.assertEqual(response.status_code, 200)

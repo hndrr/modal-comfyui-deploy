@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from comfy_split.state import write_json
-from comfy_split.extension_sources import LEGACY, node_revision
+from comfy_split.extension_sources import LEGACY, NODE_CONFLICTS, node_revision
 
 from comfy_split.config import Settings, NODE_PACKS, DEPLOYMENT_ENV
 
@@ -182,7 +182,7 @@ def prepare_environment(source):
 
 
 def check_compatibility(roots):
-    """Reject duplicate Bridge implementations without importing either package.
+    """Reject declared conflicts without importing either package.
 
     Only enabled/searchable paths are passed here; older saved environments and
     disabled packs are not inspected or changed.
@@ -191,7 +191,6 @@ def check_compatibility(roots):
     for root in map(Path, roots):
         if root.is_dir():
             paths.extend([root, *[p for p in root.iterdir() if p.is_dir()]])
-    standalone = any((p / "comfyui_agent_bridge/bridge/nodes.py").is_file() for p in paths)
-    legacy = any((p / "comfyui_agent_runtime/bridge/nodes.py").is_file() for p in paths)
-    if standalone and legacy:
-        raise RuntimeError("Update ComfyUI-AgentRuntime together with ComfyUI-AgentBridge; duplicate Bridge nodes cannot be loaded.")
+    for conflict in NODE_CONFLICTS:
+        if all(any((path / marker).is_file() for path in paths) for marker in conflict["markers"]):
+            raise RuntimeError(conflict["message"])

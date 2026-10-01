@@ -11,9 +11,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from comfy_split import node_packs, runtime
 from comfy_split.config import Settings, NODE_PACKS
-from comfy_split.extension_sources import BRIDGE, AGENT_RUNTIME, LEGACY
+from comfy_split.extension_sources import INTEGRATIONS, NODE_SOURCES, NODE_CONFLICTS, LEGACY
 from comfy_split.gateway import Controller
 from comfy_split.state import write_json
+
+PINNED = [source for source in NODE_SOURCES.values() if "revision" in source]
+ADAPTER = next(iter(INTEGRATIONS.values()))
+ADAPTER_SETTING = ADAPTER["setting"]
+ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
 
 
 class ManagedRepositoryTests(unittest.TestCase):
@@ -43,7 +48,7 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.fail_dependency = False
         self.fail_clone = False
         self.addCleanup(patch.stopall)
-        for source in (BRIDGE, AGENT_RUNTIME):
+        for source in PINNED:
             sha = subprocess.check_output(["git", "-C", str(self.remotes[source["repository"]]), "rev-parse", "HEAD"], text=True).strip()
             patch.dict(source, revision=sha).start()
         patch.object(runtime, "ENVIRONMENTS", self.environments).start()
@@ -94,7 +99,7 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.assertIn("/opt/split-constraints.txt", pip)
         self.calls.clear()
         self.assertIsNone(node_packs.prepare_environment(version))
-        self.assertEqual(sum("ls-remote" in command for command, _ in self.calls), len(NODE_PACKS) - 2)
+        self.assertEqual(sum("ls-remote" in command for command, _ in self.calls), len(NODE_PACKS) - len(PINNED))
         self.assertFalse(any("fetch" in command or "pip" in command for command, _ in self.calls))
         self.assertEqual(len(list(self.environments.iterdir())), 2)
         remote = self.remotes[NODE_PACKS["skills-loader"]]
@@ -112,9 +117,9 @@ class ManagedRepositoryTests(unittest.TestCase):
             (self.environments / updated / node_packs.MANIFEST).read_text())[name])
         self.assertTrue(all("test-token" not in " ".join(command) for command, _ in self.calls))
 
-    def test_bridge_and_runtime_pins_ignore_later_default_branch_changes(self):
+    def test_pins_ignore_later_default_branch_changes(self):
         version = node_packs.prepare_environment("base")
-        for pin in (BRIDGE, AGENT_RUNTIME):
+        for pin in PINNED:
             repo = self.remotes[pin["repository"]]
             (repo / "__init__.py").write_text("# incompatible future main")
             self.commit(repo, "advance unselected main")
@@ -122,24 +127,28 @@ class ManagedRepositoryTests(unittest.TestCase):
         self.assertIsNone(node_packs.prepare_environment(version))
         self.assertFalse(any("fetch" in cmd for cmd, _ in self.calls))
 
-    def test_old_runtime_and_new_bridge_fail_before_copying_candidate(self):
-        for pin, module in ((BRIDGE, "comfyui_agent_bridge"),
-                            (AGENT_RUNTIME, "comfyui_agent_runtime")):
-            repo = self.remotes[pin["repository"]]
-            nodes = repo / module / "bridge/nodes.py"
+    def test_declared_conflicts_fail_before_copying_candidate(self):
+        selected = list(NODE_SOURCES.items())[:2]
+        markers = ["fixture_a/nodes.py", "fixture_b/nodes.py"]
+        conflicts = [{"markers": markers, "message": "incompatible fixture nodes"}]
+        for (_, source), marker in zip(selected, markers):
+            repo = self.remotes[source["repository"]]
+            nodes = repo / marker
             nodes.parent.mkdir(parents=True)
             nodes.write_text("# duplicate IDs")
             self.commit(repo, "duplicate nodes")
-            pin["revision"] = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-        with self.assertRaisesRegex(RuntimeError, "duplicate Bridge nodes"):
-            node_packs.prepare_environment("base")
-        self.assertEqual(list(self.environments.iterdir()), [self.source])
-        self.assertFalse(any("pip" in cmd for cmd, _ in self.calls))
-        # Selecting just Bridge must not inspect the disabled Runtime checkout.
-        with patch.dict(os.environ, {"SPLIT_NODE_PACKS": "agent-bridge"}):
-            version = node_packs.prepare_environment("base")
+            source["revision"] = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        with patch.object(node_packs, "NODE_CONFLICTS", conflicts):
+            with self.assertRaisesRegex(RuntimeError, "incompatible fixture nodes"):
+                node_packs.prepare_environment("base")
+            self.assertEqual(list(self.environments.iterdir()), [self.source])
+            self.assertFalse(any("pip" in cmd for cmd, _ in self.calls))
+            # A disabled pack must not participate in the candidate conflict check.
+            name, source = selected[0]
+            with patch.dict(os.environ, {"SPLIT_NODE_PACKS": name}):
+                version = node_packs.prepare_environment("base")
         self.assertEqual(set(json.loads((self.environments / version / node_packs.MANIFEST).read_text())),
-                         {"ComfyUI-AgentBridge"})
+                         {source["repository"].split("/")[1]})
 
     def test_saved_snapshot_can_be_read_without_token_or_git(self):
         version = node_packs.prepare_environment("base")
@@ -383,11 +392,11 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             "GEMINI_SECRET_NAME": " my-gemini ",
             "TYPESAFE_SECRET_NAME": "",  # An unused provider needs no Secret.
             "OPENROUTER_SECRET_NAME": "my-openrouter",
-            "AGENT_RUNTIME_SECRET_NAME": "my-agent-runtime",
+            ADAPTER_SECRET: "my-adapter",
             "GEMINI_API_KEY": "local-value-must-not-be-uploaded",
             "TYPESAFE_API_KEY": "local-value-must-not-enable-provider",
             "OPENROUTER_API_KEY": "local-value-must-not-be-uploaded",
-            "AGENT_RUNTIME_BRIDGE_TOKEN": "local-bridge-value-must-not-be-uploaded",
+            ADAPTER_TOKEN: "local-adapter-value-must-not-be-uploaded",
         }
         for mode in ("on", "off"):
             with self.subTest(mode=mode), \
@@ -398,12 +407,12 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             inline.assert_not_called()
             if mode == "on":
                 self.assertEqual([secret.name for secret in app["provider_secrets"]],
-                                 ["my-gemini", "my-openrouter", "my-agent-runtime"])
+                                 ["my-gemini", "my-openrouter", "my-adapter"])
                 self.assertEqual([(call.args[0], call.kwargs["required_keys"])
                                   for call in named.call_args_list], [
                     ("my-gemini", ["GEMINI_API_KEY"]),
                     ("my-openrouter", ["OPENROUTER_API_KEY"]),
-                    ("my-agent-runtime", ["AGENT_RUNTIME_BRIDGE_TOKEN"]),
+                    ("my-adapter", [ADAPTER_TOKEN]),
                     ("github-for-test", ["GITHUB_TOKEN"]),
                 ])
             else:
@@ -423,8 +432,8 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
 
         settings = {LEGACY["mode_env"]: "on", "GITHUB_SECRET_NAME": "private-repos",
                     "GEMINI_SECRET_NAME": "provider-a", "TYPESAFE_SECRET_NAME": "",
-                    "OPENROUTER_SECRET_NAME": "provider-b", "AGENT_RUNTIME_SECRET_NAME": "mac-bridge",
-                    "GEMINI_API_KEY": "must-not-be-baked", "AGENT_RUNTIME_BRIDGE_TOKEN": "also-private"}
+                    "OPENROUTER_SECRET_NAME": "provider-b", ADAPTER_SECRET: "adapter",
+                    "GEMINI_API_KEY": "must-not-be-baked", ADAPTER_TOKEN: "also-private"}
         path = str(Path(comfyapp.__file__).with_name("splitapp.py"))
         with patch.dict(os.environ, settings), patch.object(modal.Image, "env", capture):
             local = runpy.run_path(path)
@@ -457,13 +466,13 @@ class ManagedLaunchTests(unittest.IsolatedAsyncioTestCase):
             provider_keys = {"GEMINI_API_KEY": "gemini-from-modal",
                              "TYPESAFE_API_KEY": "typesafe-from-modal",
                              "OPENROUTER_API_KEY": "openrouter-from-modal",
-                             "AGENT_RUNTIME_BRIDGE_TOKEN": "bridge-from-modal"}
+                             ADAPTER_TOKEN: "adapter-from-modal"}
             def local_path(value):
                 return root / value.lstrip("/") if value in {"/models", "/data/input", "/data/output"} else Path(value)
             for mode in ("on", "off", "gemini"):
                 selection = {LEGACY["mode_env"]: mode} if mode != "gemini" else {
                     LEGACY["mode_env"]: "on", "SPLIT_NODE_PACKS": "gemini",
-                    "SPLIT_EXTENSIONS": "", "SPLIT_AGENT_BRIDGE": "off"}
+                    "SPLIT_EXTENSIONS": "", ADAPTER_SETTING: "off"}
                 for role in ("cpu", "gpu"):
                     process = runtime.ComfyProcess(role, 8187)
                     process.root = root / f"{mode}-{role}"

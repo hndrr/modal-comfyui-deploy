@@ -12,13 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-bridge = ["comfyui-agent-bridge==0.2.0"]
-bridge-test = ["comfyui-agent-bridge==0.2.0", "aiohttp>=3.12.15"]
 split-test = ["aiohttp>=3.12.15"]
 
 [tool.flake8]
 max-line-length = 100
-
-[tool.uv.sources]
-
-comfyui-agent-bridge = { git = "https://github.com/hndrr/ComfyUI-AgentBridge", rev = "0dd4ac5a8c9c8550d13b3ae3f4f536c50336106b" }

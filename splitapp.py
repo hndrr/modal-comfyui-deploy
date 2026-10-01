@@ -13,6 +13,7 @@ import modal
 
 from comfy_split import node_packs
 from comfy_split.config import Settings, DEPLOYMENT_ENV
+from comfy_split.extension_sources import enabled_sources
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
     FLASH_ATTN_WHEEL_URL,
@@ -37,7 +38,7 @@ provider_secrets = [modal.Secret.from_name(value, required_keys=[key])
                     for _, key, value in provider_settings]
 github_secrets = []
 github_build_secret = None
-if settings.node_packs or settings.bridge or settings.extensions:
+if settings.node_packs or enabled_sources(settings):
     secret_names["GITHUB_SECRET_NAME"] = os.environ.get("GITHUB_SECRET_NAME", "").strip() or "github-secret"
     github_build_secret = modal.Secret.from_name(secret_names["GITHUB_SECRET_NAME"],
                                                 required_keys=[node_packs.TOKEN_ENV])
@@ -141,9 +142,7 @@ image = (
     )
 )
 # Source metadata selects the package and optional UI; no product-specific build path.
-from comfy_split.extension_sources import EXTENSIONS
-for name in settings.extensions:
-    source = EXTENSIONS[name]
+for name, source in enabled_sources(settings):
     image = image.pip_install_private_repos(
         f"github.com/{source['repository']}@{source['revision']}",
         git_user="x-access-token", secrets=[github_build_secret], extra_options="--no-deps",
@@ -155,16 +154,6 @@ for name in settings.extensions:
         image = image.run_commands(
             "python -m comfy_split.extension_frontend " + shlex.quote(name)
         )
-if settings.bridge:
-    from comfy_split.extension_sources import BRIDGE
-
-    image = image.pip_install_private_repos(
-        f"github.com/{BRIDGE['repository']}@{BRIDGE['revision']}",
-        git_user="x-access-token", secrets=[github_build_secret], extra_options="--no-deps",
-    ).run_commands("python -c " + shlex.quote(
-        "from importlib.metadata import version; "
-        f"assert version('comfyui-agent-bridge') == {BRIDGE['version']!r}"
-    ))
 # Deployment-only layer last, so source and dependency builds remain cached.
 image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 app = modal.App(APP_NAME)

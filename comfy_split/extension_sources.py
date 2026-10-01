@@ -1,25 +1,23 @@
-"""Optional extension pins. No package import, lookup or network access."""
-
+"""Read deployment metadata without importing any optional package."""
 from pathlib import Path
 import tomllib
 
 _CATALOG = tomllib.loads(Path(__file__).with_name("extension_catalog.toml").read_text())
 EXTENSIONS = _CATALOG["extensions"]
+INTEGRATIONS = _CATALOG["integrations"]
 LEGACY = _CATALOG["legacy"]
-
-BRIDGE = {
-    "repository": "hndrr/ComfyUI-AgentBridge",
-    "version": "0.2.0",
-    "revision": "0dd4ac5a8c9c8550d13b3ae3f4f536c50336106b",
+NODE_SOURCES = {
+    name: INTEGRATIONS[source["integration"]] if "integration" in source else source
+    for name, source in _CATALOG["node_packs"].items()
 }
-
-# Coordinated extraction: never combine new Bridge with AgentRuntime's old nodes.
-AGENT_RUNTIME = {
-    "repository": "hndrr/ComfyUI-AgentRuntime",
-    "revision": "b1ed92f74b0330eee2939642519d97454a45a350",
-}
+NODE_CONFLICTS = _CATALOG.get("node_conflicts", [])
 
 
 def node_revision(repository):
-    return next((source["revision"] for source in (BRIDGE, AGENT_RUNTIME)
+    return next((source.get("revision") for source in NODE_SOURCES.values()
                  if repository == source["repository"]), None)
+
+
+def enabled_sources(settings):
+    return [(name, EXTENSIONS[name]) for name in settings.extensions] + [
+        (name, INTEGRATIONS[name]) for name in settings.integrations]

@@ -13,11 +13,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split.config import NODE_PACKS, Settings
-from comfy_split.extension_sources import EXTENSIONS, LEGACY
+from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS, LEGACY
 from comfy_split.gateway import Controller
 
 ROOT = Path(__file__).resolve().parents[1]
-PLAIN = {"SPLIT_EXTENSIONS": "", "SPLIT_NODE_PACKS": "", "SPLIT_AGENT_BRIDGE": "off"}
+PLAIN = Settings().environment()
+ADAPTER = next(iter(INTEGRATIONS.values()))
+ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
 
 
 class StandaloneTests(unittest.TestCase):
@@ -62,19 +64,19 @@ print(json.dumps({'standalone': True}))
         self.assertEqual(Settings.read({**old, **PLAIN}), Settings())
         self.assertEqual(Settings.read({**old, "SPLIT_EXTENSIONS": ""}).extensions, ())
         for key, value in (("SPLIT_EXTENSIONS", "typo"), ("SPLIT_NODE_PACKS", "typo"),
-                           ("SPLIT_AGENT_BRIDGE", "yes")):
+                           (ADAPTER["setting"], "yes")):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 Settings.read({key: value})
 
-    def test_node_packs_and_bridge_do_not_enable_extensions_or_unrelated_secrets(self):
-        env = {"SPLIT_NODE_PACKS": "gemini", "SPLIT_AGENT_BRIDGE": "on",
+    def test_node_packs_and_adapters_do_not_enable_extensions_or_unrelated_secrets(self):
+        env = {"SPLIT_NODE_PACKS": "gemini", ADAPTER["setting"]: "on",
                "GEMINI_SECRET_NAME": "gemini", "TYPESAFE_SECRET_NAME": "unused",
-               "OPENROUTER_SECRET_NAME": "unused", "AGENT_RUNTIME_SECRET_NAME": "bridge"}
+               "OPENROUTER_SECRET_NAME": "unused", ADAPTER_SECRET: "adapter"}
         config = Settings.read(env)
         self.assertEqual(config.extensions, ())
         self.assertEqual(config.node_packs, ("gemini",))
         self.assertEqual([name for name, _, _ in config.secrets(env)],
-                         ["GEMINI_SECRET_NAME", "AGENT_RUNTIME_SECRET_NAME"])
+                         ["GEMINI_SECRET_NAME", ADAPTER_SECRET])
 
 
 class PlainGatewayTests(unittest.IsolatedAsyncioTestCase):
@@ -113,13 +115,13 @@ class PlainGatewayTests(unittest.IsolatedAsyncioTestCase):
         responses = [await self.client.post("/prompt", json=body, headers={"Idempotency-Key": "plain"}) for _ in range(2)]
         self.assertEqual([r.status for r in responses], [200, 200])
         self.assertEqual((await responses[0].json())["prompt_id"], (await responses[1].json())["prompt_id"])
-        for path in [route for source in EXTENSIONS.values() for route in source["guarded_routes"]] + ["/agent_runtime/bridge/catalog"]:
+        for path in [route for source in EXTENSIONS.values() for route in source["guarded_routes"]] + [source["prefix"] + "catalog" for source in INTEGRATIONS.values()]:
             self.assertEqual((await self.client.get(path)).status, 404)
         self.worker.spawn.aio.assert_not_awaited()
 
-    async def test_disabled_bridge_rejects_before_acceptance(self):
+    async def test_disabled_adapter_rejects_before_acceptance(self):
         response = await self.client.post("/prompt", json={"prompt": {
-            "1": {"class_type": "AgentRuntimeBridgeText", "inputs": {}}}})
+            "1": {"class_type": ADAPTER["node_prefix"] + "Text", "inputs": {}}}})
         self.assertEqual(response.status, 409)
         self.assertEqual(self.controller.journal.data["jobs"], {})
         self.worker.spawn.aio.assert_not_awaited()
