@@ -14,6 +14,7 @@ from comfy_split.config import Settings, NODE_PACKS, DEPLOYMENT_ENV
 
 TOKEN_ENV = "GITHUB_TOKEN"
 REFRESH_KEY = "node_packs_refresh"
+REFRESH_RETRY_SECONDS = 5 * 60
 REPOSITORIES = tuple(NODE_PACKS.values())
 NODE_NAMES = frozenset(repo.split("/")[1] for repo in REPOSITORIES)
 DIRECTORY = "node_packs"

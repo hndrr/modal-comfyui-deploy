@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from comfy_split import node_packs
 from comfy_split.config import NODE_PACKS, Settings
 from comfy_split.gateway import Controller
-from comfy_split.state import write_json
+from comfy_split.state import Journal, write_json
 from tests.split.support import volume_mocks
 
 MANAGED_SETTINGS = Settings(node_packs=tuple(NODE_PACKS))
@@ -105,15 +105,67 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.prepare.call_count, 2)
         self.assertEqual(restarted.journal.data[node_packs.REFRESH_KEY]["status"], "unchanged")
 
-    async def test_missing_snapshot_is_repaired_and_failed_first_install_can_retry(self):
+    async def test_missing_snapshot_failure_cooldown_survives_restart_and_allows_recovery(self):
         self.prepare.return_value = None
         await self.control.refresh_node_packs()
         self.snapshot.return_value = None
         self.prepare.side_effect = RuntimeError("initial install unavailable")
-        for _ in range(2):
-            with self.assertLogs("comfy_split.gateway", level="ERROR"):
-                await self.control.refresh_node_packs()
+        with patch("comfy_split.gateway.time.time", return_value=1000), \
+             self.assertLogs("comfy_split.gateway", level="ERROR"):
+            await self.control.refresh_node_packs()
+        saved = Journal(Path(self.directory.name)).data
+        self.assertEqual(saved["environment"], "base")
+        self.assertEqual(saved[node_packs.REFRESH_KEY], {
+            "deployment": "deployment-1", "environment": "base", "revisions": None,
+            "status": "failed", "checked_at": 1000})
+        self.volumes["environment"].commit.aio.assert_not_awaited()
+
+        restarted = Controller(self.worker, None, None, self.volumes, Path(self.directory.name), extensions=())
+        restarted.candidate = self.control.candidate
+        retry_at = 1000 + node_packs.REFRESH_RETRY_SECONDS
+        with patch("comfy_split.gateway.time.time", return_value=retry_at - 1):
+            await restarted.refresh_node_packs()
+        self.assertEqual(self.prepare.call_count, 2)
+        with patch("comfy_split.gateway.time.time", return_value=retry_at), \
+             self.assertLogs("comfy_split.gateway", level="ERROR"):
+            await restarted.refresh_node_packs()
         self.assertEqual(self.prepare.call_count, 3)
+        self.assertEqual(Journal(Path(self.directory.name)).data[node_packs.REFRESH_KEY]["checked_at"], retry_at)
+
+        self.prepare.side_effect = None
+        self.prepare.return_value = "env-recovered"
+        self.snapshot.side_effect = lambda version: self.revisions if version == "env-recovered" else None
+        with patch("comfy_split.gateway.time.time", return_value=retry_at + 1):
+            await restarted.refresh_node_packs()
+        self.assertEqual(self.prepare.call_count, 3)
+        with patch("comfy_split.gateway.time.time", return_value=retry_at + node_packs.REFRESH_RETRY_SECONDS):
+            await restarted.refresh_node_packs()
+        self.assertEqual(self.prepare.call_count, 4)
+        recovered = Journal(Path(self.directory.name)).data
+        self.assertEqual(recovered["environment"], "env-recovered")
+        self.assertEqual(recovered[node_packs.REFRESH_KEY]["status"], "updated")
+        self.volumes["environment"].commit.aio.assert_awaited_once()
+        self.assertEqual(self.worker.mock_calls, [])
+
+    async def test_initial_install_cooldown_is_cleared_by_redeploy_environment_change_or_reset(self):
+        self.snapshot.return_value = None
+        self.prepare.side_effect = RuntimeError("GitHub unavailable")
+        for change in ("redeploy", "environment", "reset"):
+            with self.subTest(change=change), patch("comfy_split.gateway.time.time", return_value=1000):
+                self.control.journal.data.pop(node_packs.REFRESH_KEY, None)
+                self.control.journal.data["environment"] = "base"
+                with self.assertLogs("comfy_split.gateway", level="ERROR"):
+                    await self.control.refresh_node_packs()
+                self.prepare.reset_mock()
+                if change == "environment":
+                    self.control.journal.data["environment"] = "env-repaired"
+                elif change == "reset":
+                    self.control.journal.data.pop(node_packs.REFRESH_KEY)
+                deployment = "deployment-2" if change == "redeploy" else "deployment-1"
+                with patch.dict(os.environ, {node_packs.DEPLOYMENT_ENV: deployment}), \
+                     self.assertLogs("comfy_split.gateway", level="ERROR"):
+                    await self.control.refresh_node_packs()
+                self.prepare.assert_called_once_with(self.control.journal.data["environment"])
 
     async def test_same_revisions_do_not_restart_comfy_or_republish(self):
         self.prepare.return_value = None

@@ -334,6 +334,24 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             await self.control.broadcast(event)
         socket.send_json.assert_awaited_once_with(event)
 
+    async def test_extension_events_preserve_targeted_and_global_recipients(self):
+        events = [{"type": name} for name in ("source", "derived", "nested")]
+        def additional(event):
+            return {"source": [events[1]], "derived": [events[2]]}.get(event["type"], [])
+        self.control.plugins = [SimpleNamespace(event=additional)]
+        first = SimpleNamespace(send_json=AsyncMock())
+        second = SimpleNamespace(send_json=AsyncMock())
+        self.control.sockets = {"first": [first], "second": [second]}
+        for recipient in ("first", None):
+            with self.subTest(recipient=recipient):
+                first.send_json.reset_mock()
+                second.send_json.reset_mock()
+                await self.control.broadcast(events[0], recipient)
+                delivered = [call.args[0] for call in first.send_json.call_args_list]
+                self.assertEqual(delivered, list(reversed(events)))
+                other = [call.args[0] for call in second.send_json.call_args_list]
+                self.assertEqual(other, delivered if recipient is None else [])
+
 
 class RoutingTests(unittest.TestCase):
     def test_api_prefix_normalization(self):
