@@ -3,19 +3,9 @@ from importlib import import_module
 from typing import Protocol
 
 from comfy_split.config import Settings
-from comfy_split.extension_sources import EXTENSIONS
+from comfy_split.extension_sources import INTEGRATIONS, enabled_sources
 from comfy_split.proxy import proxy
 from comfy_split.state import ACTIVE
-
-# Declarative admission and route guards must work with the package uninstalled.
-INTEGRATIONS = {
-    "agent-bridge": {
-        "module": "comfyui_agent_bridge.split", "factory": "SplitBridge",
-        "prefix": "/agent_runtime/bridge/", "node_prefix": "AgentRuntimeBridge",
-        "record_key": "agent_bridge", "setting": "SPLIT_AGENT_BRIDGE",
-    },
-}
-
 
 class Extension(Protocol):
     async def start(self): ...
@@ -70,7 +60,7 @@ class GatewayHost:
 
 def enabled_integrations(settings=None):
     settings = settings or Settings.read()
-    return ("agent-bridge",) if settings.bridge else ()
+    return settings.integrations
 
 
 def reserved_route(path):
@@ -90,22 +80,14 @@ def check_requirements(body, record=None):
 
 def load_extensions(controller):
     result = []
-    settings = Settings.read()
-    for name in settings.extensions:
-        source = EXTENSIONS[name]
-        module, factory = source["module"], source["factory"]
+    for name, source in enabled_sources(Settings.read()):
         try:
-            extension = getattr(import_module(module), factory)
+            extension = getattr(import_module(source["module"]), source["factory"])
         except ImportError as error:
-            raise RuntimeError(f"Install the pinned {name} extension before enabling SPLIT_EXTENSIONS") from error
-        result.append(extension(controller))
-    for name in enabled_integrations(settings):
-        item = INTEGRATIONS[name]
-        try:
-            extension = getattr(import_module(item["module"]), item["factory"])
-        except ImportError as error:
-            raise RuntimeError(f"Install the pinned {name} package before enabling {item['setting']}") from error
-        result.append(extension(GatewayHost(controller)))
+            setting = source.get("setting", "SPLIT_EXTENSIONS")
+            raise RuntimeError(f"Install the pinned {name} package before enabling {setting}") from error
+        host = GatewayHost(controller) if source.get("host") == "capabilities" else controller
+        result.append(extension(host))
     return result
 
 
@@ -113,7 +95,10 @@ async def run_worker_extensions(spec, host, generate):
     check_requirements(spec.get("body"), spec)
     run = generate
     for name in reversed(enabled_integrations()):
-        wrapper = import_module(INTEGRATIONS[name]["module"]).run_generation
+        source = INTEGRATIONS[name]
+        if not source.get("worker"):
+            continue
+        wrapper = getattr(import_module(source["module"]), source["worker"])
         inner = run
         async def wrapped(wrapper=wrapper, inner=inner):
             return await wrapper(spec, host, inner)

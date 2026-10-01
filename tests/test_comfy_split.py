@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from comfy_split.config import Settings
 from comfy_split.gateway import Controller, api_path
 from comfy_split.state import Journal, job_history
 from comfy_split import worker as worker_module
@@ -409,8 +410,7 @@ class RoutingTests(unittest.TestCase):
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        settings = patch.dict(os.environ, {"SPLIT_EXTENSIONS": "", "SPLIT_NODE_PACKS": "",
-                                           "SPLIT_AGENT_BRIDGE": "off"})
+        settings = patch.dict(os.environ, Settings().environment())
         settings.start()
         self.addCleanup(settings.stop)
 

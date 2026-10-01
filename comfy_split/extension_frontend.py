@@ -3,11 +3,11 @@ from importlib.resources import files
 from pathlib import Path
 import shutil
 
-from comfy_split.extension_sources import EXTENSIONS
+from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS
 
 
 def install(name, root=Path('/opt/comfy-extensions')):
-    source = EXTENSIONS[name]
+    source = {**EXTENSIONS, **INTEGRATIONS}[name]
     assets = files(source['web_package']).joinpath(source['web_directory'])
     destination = root / source['web_name']
     destination.mkdir()

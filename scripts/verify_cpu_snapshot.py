@@ -31,7 +31,7 @@ async def main(output, boots, expected_prompt=None, until_restored=False):
             if not stats.num_total_runners and not stats.backlog:
                 break
             if time.monotonic() > deadline:
-                raise TimeoutError("CPU is not idle; close active browser/Bridge sessions")
+                raise TimeoutError("CPU is not idle; close active browser/extension sessions")
             await asyncio.sleep(5)
         print("CPU runners=0 backlog=0; starting cold request", flush=True)
         started = time.monotonic()

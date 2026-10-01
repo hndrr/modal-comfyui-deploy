@@ -9,10 +9,9 @@ import unittest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from comfy_split.extension_sources import EXTENSIONS
+from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS
 
-FORBIDDEN = {source["module"].split(".")[0] for source in EXTENSIONS.values()}
-FORBIDDEN.add("comfyui_agent_bridge")
+FORBIDDEN = {source["module"].split(".")[0] for source in (*EXTENSIONS.values(), *INTEGRATIONS.values())}
 
 
 class ForbidOptionalExtensions(importlib.abc.MetaPathFinder):

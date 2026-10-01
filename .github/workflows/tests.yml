@@ -86,23 +86,6 @@ jobs:
         run: |
           uv sync --locked --extra split-test
           uv run --locked --extra split-test python scripts/test_standalone.py
-      - name: Install private integration dependencies
-        id: integrations
-        env:
-          GH_TOKEN: ${{ secrets.INTEGRATION_REPO_TOKEN || secrets.AMBIENT_REPO_TOKEN }}
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: credential.helper
-          GIT_CONFIG_VALUE_0: "!gh auth git-credential"
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo 'Optional integration was not run: set INTEGRATION_REPO_TOKEN with read access to hndrr/ComfyUI-AgentBridge.' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          uv sync --locked --extra bridge-test
-          echo 'installed=true' >> "$GITHUB_OUTPUT"
-      - name: Private Agent Bridge integration tests
-        if: steps.integrations.outputs.installed == 'true'
-        run: uv run --no-sync python -m unittest discover -s tests/integration -v
 
   web:
     name: Asset manager tests and build

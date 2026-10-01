@@ -18,7 +18,7 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 GitHub Actionsで、push・pull request時に以下を並列実行します。Actions画面からの手動実行にも対応しています。
 
-- Python: 標準splitは認証なしで検証。任意拡張の回帰テストは `INTEGRATION_REPO_TOKEN` がある場合に追加実行（[手順](docs/split-integrations.md#ローカル検証)）。
+- Python: split本体は認証なしで検証。任意拡張との連携テストは各拡張repoで実施（[手順](docs/split-integrations.md#ローカル検証)）。
 - 管理画面（`web/`）: `npm ci` → `npm test` → `npm run build`
 - 認証Worker（`worker/`）: `npm ci` → `npm test` → `npm run typecheck`
 
