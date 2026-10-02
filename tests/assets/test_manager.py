@@ -133,9 +133,8 @@ class AssetManagerOperationTests(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), b"png")
 
     def test_rejects_directory_download_and_requires_recursive_delete(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with self.assertRaises(IsADirectoryError):
-                self.manager.download_asset(INPUT_VOLUME, "folder", Path(temp_dir) / "x")
+        with tempfile.TemporaryDirectory() as temp_dir, self.assertRaises(IsADirectoryError):
+            self.manager.download_asset(INPUT_VOLUME, "folder", Path(temp_dir) / "x")
         with self.assertRaises(IsADirectoryError):
             self.manager.delete_asset(INPUT_VOLUME, "folder")
         self.manager.delete_asset(INPUT_VOLUME, "folder", recursive=True)
@@ -285,5 +284,10 @@ class AssetManagerOperationTests(unittest.TestCase):
         self.assertEqual([asset.path for asset in assets], [])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class DeprecatedGuiEntrypointTests(unittest.TestCase):
+    def test_gradio_entrypoint_exits_with_migration_message(self) -> None:
+        import asset_manager_gui
+
+        with self.assertRaises(SystemExit) as raised:
+            asset_manager_gui.main()
+        self.assertEqual(raised.exception.code, 2)

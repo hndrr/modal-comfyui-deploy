@@ -7,79 +7,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 import comfyapp
+from tests.env_checks import IntegerEnvChecks
 
 
-class ResolveIntEnvTests(unittest.TestCase):
+class ResolveIntEnvTests(IntegerEnvChecks, unittest.TestCase):
+    resolve = staticmethod(comfyapp._resolve_int_env)
     CONFIGS = (
-        (
-            comfyapp.COMFYUI_SCALEDOWN_WINDOW_ENV,
-            comfyapp.DEFAULT_SCALEDOWN_WINDOW,
-            comfyapp.MIN_SCALEDOWN_WINDOW,
-            comfyapp.MAX_SCALEDOWN_WINDOW,
-        ),
-        (
-            comfyapp.COMFYUI_FUNCTION_TIMEOUT_ENV,
-            comfyapp.DEFAULT_FUNCTION_TIMEOUT,
-            comfyapp.MIN_FUNCTION_TIMEOUT,
-            comfyapp.MAX_FUNCTION_TIMEOUT,
-        ),
+        (comfyapp.COMFYUI_SCALEDOWN_WINDOW_ENV, comfyapp.DEFAULT_SCALEDOWN_WINDOW,
+         comfyapp.MIN_SCALEDOWN_WINDOW, comfyapp.MAX_SCALEDOWN_WINDOW),
+        (comfyapp.COMFYUI_FUNCTION_TIMEOUT_ENV, comfyapp.DEFAULT_FUNCTION_TIMEOUT,
+         comfyapp.MIN_FUNCTION_TIMEOUT, comfyapp.MAX_FUNCTION_TIMEOUT),
     )
-
-    def test_uses_default_when_environment_variable_is_missing(self) -> None:
-        for env_name, default, minimum, maximum in self.CONFIGS:
-            with self.subTest(env_name=env_name):
-                with patch.dict(os.environ, {}, clear=False):
-                    os.environ.pop(env_name, None)
-                    self.assertEqual(
-                        comfyapp._resolve_int_env(
-                            env_name,
-                            default,
-                            minimum,
-                            maximum,
-                        ),
-                        default,
-                    )
-
-    def test_accepts_boundaries_and_whitespace(self) -> None:
-        for env_name, default, minimum, maximum in self.CONFIGS:
-            for value in (minimum, maximum):
-                with self.subTest(env_name=env_name, value=value):
-                    with patch.dict(os.environ, {env_name: f"  {value}  "}):
-                        self.assertEqual(
-                            comfyapp._resolve_int_env(
-                                env_name,
-                                default,
-                                minimum,
-                                maximum,
-                            ),
-                            value,
-                        )
-
-    def test_rejects_empty_non_numeric_and_out_of_range_values(self) -> None:
-        for env_name, default, minimum, maximum in self.CONFIGS:
-            invalid_values = (
-                "",
-                " ",
-                "not-a-number",
-                "1.5",
-                "0",
-                "-1",
-                str(minimum - 1),
-                str(maximum + 1),
-            )
-            for value in invalid_values:
-                with self.subTest(env_name=env_name, value=value):
-                    with patch.dict(os.environ, {env_name: value}):
-                        with self.assertRaisesRegex(
-                            ValueError,
-                            rf"{env_name}.*{minimum}.*{maximum}",
-                        ):
-                            comfyapp._resolve_int_env(
-                                env_name,
-                                default,
-                                minimum,
-                                maximum,
-                            )
 
 
 class RejectDotenvModalProfileTests(unittest.TestCase):
@@ -99,9 +37,8 @@ class RejectDotenvModalProfileTests(unittest.TestCase):
             '  MODAL_PROFILE = "other" \n',
             "COMFYUI_GPU_PROFILE=rtx-pro-6000\nMODAL_PROFILE='other'\n",
         ):
-            with self.subTest(body=body):
-                with self.assertRaisesRegex(RuntimeError, "MODAL_PROFILE=other"):
-                    comfyapp._reject_dotenv_modal_profile(self._dotenv(body), None)
+            with self.subTest(body=body), self.assertRaisesRegex(RuntimeError, "MODAL_PROFILE=other"):
+                comfyapp._reject_dotenv_modal_profile(self._dotenv(body), None)
 
         with self.assertRaisesRegex(RuntimeError, "MODAL_PROFILE=other"):
             comfyapp._reject_dotenv_modal_profile(
@@ -277,18 +214,16 @@ class ResolveManagerInstallEnabledTests(unittest.TestCase):
 
     def test_accepts_on_and_off(self) -> None:
         for raw, expected in (("on", True), ("OFF", False), (" On ", True)):
-            with self.subTest(raw=raw):
-                with patch.dict(
-                    os.environ, {comfyapp.COMFYUI_MANAGER_INSTALL_ENV: raw}
-                ):
-                    self.assertIs(comfyapp._resolve_manager_install_enabled(), expected)
+            with self.subTest(raw=raw), patch.dict(
+                os.environ, {comfyapp.COMFYUI_MANAGER_INSTALL_ENV: raw}
+            ):
+                self.assertIs(comfyapp._resolve_manager_install_enabled(), expected)
 
     def test_rejects_other_values(self) -> None:
         with patch.dict(
             os.environ, {comfyapp.COMFYUI_MANAGER_INSTALL_ENV: "personal_cloud"}
-        ):
-            with self.assertRaisesRegex(ValueError, "Allowed values: on, off"):
-                comfyapp._resolve_manager_install_enabled()
+        ), self.assertRaisesRegex(ValueError, "Allowed values: on, off"):
+            comfyapp._resolve_manager_install_enabled()
 
 
 if __name__ == "__main__":

@@ -433,11 +433,28 @@ NODES = [
     "https://github.com/rgthree/rgthree-comfy",
 ]
 
+# Optional exact ComfyUI pin. Unset preserves the existing install workflow.
+COMFYUI_REVISION = os.environ.get("COMFYUI_REVISION", "").strip()
+if COMFYUI_REVISION and (len(COMFYUI_REVISION) != 40 or any(c not in "0123456789abcdef" for c in COMFYUI_REVISION)):
+    raise ValueError("COMFYUI_REVISION must be a full lowercase Git commit SHA")
+COMFYUI_PIN_COMMANDS = []
+if COMFYUI_REVISION:
+    COMFYUI_PIN_COMMANDS = [
+        "python -c " + shlex.quote(
+            "from pathlib import Path; import subprocess; "
+            "root=next(p for p in [Path('/root/comfy/ComfyUI'),Path('/root/ComfyUI'),Path('/root/.cache/comfyui/ComfyUI')] if (p/'.git').exists()); "
+            f"subprocess.run(['git','-C',str(root),'fetch','origin','{COMFYUI_REVISION}'],check=True); "
+            f"subprocess.run(['git','-C',str(root),'checkout','--detach','{COMFYUI_REVISION}'],check=True); "
+            "subprocess.run(['python','-m','pip','install','-r',str(root/'requirements.txt')],check=True)"
+        )
+    ]
+
 # イメージファイルの作成
 base_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
         "git",
+        "ffmpeg",  # Native H3 audio/video encoding and probing.
         "wget",
         "curl",
         "ca-certificates",
@@ -507,6 +524,7 @@ image = (
     )
     .run_commands(
         "comfy --skip-prompt install --nvidia",
+        *COMFYUI_PIN_COMMANDS,
         force_build=COMFYUI_FORCE_BUILD,
     )
     .run_commands(

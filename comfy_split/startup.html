@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ComfyUI — 起動中</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #171717; color: #eee; }
+  body { min-height: 100svh; margin: 0; display: grid; place-items: center; }
+  main { width: min(30rem, calc(100% - 3rem)); }
+  .brand { color: #aaa; font-size: .8rem; letter-spacing: .12em; }
+  h1 { font-size: 1.4rem; font-weight: 500; margin: 1.6rem 0 1rem; }
+  p { line-height: 1.8; color: #bcbcbc; }
+  #elapsed { font-variant-numeric: tabular-nums; font-size: .85rem; color: #929292; }
+  button { color: #eee; background: #333; border: 1px solid #666; padding: .7rem 1rem; border-radius: 6px; cursor: pointer; }
+</style>
+<main>
+  <div class="brand">COMFYUI</div>
+  <h1 id="stage" role="status">ComfyUIを準備しています</h1>
+  <p id="detail">停止中のサーバーを起動しています。準備ができると自動で画面が開きます。</p>
+  <p id="elapsed"></p>
+  <button id="reload" hidden>再読み込み</button>
+</main>
+<script>
+  const stages = {
+    initializing: '保存済みの環境を確認しています',
+    updating_nodes: '追加ノードの更新を確認・反映しています',
+    validating_nodes: '追加ノードの動作を確認しています',
+    starting_comfy: 'ComfyUIを起動しています',
+  };
+  const stage = document.getElementById('stage');
+  const detail = document.getElementById('detail');
+  const elapsed = document.getElementById('elapsed');
+  const reload = document.getElementById('reload');
+  reload.onclick = () => location.reload();
+  async function check() {
+    try {
+      const response = await fetch('/split/startup', { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error('Connection unavailable');
+      const state = await response.json();
+      if (state.ready) { location.reload(); return; }
+      const seconds = state.elapsed_seconds;
+      elapsed.textContent = `経過 ${Math.floor(seconds / 60)}分 ${seconds % 60}秒`;
+      if (state.failed) {
+        stage.textContent = 'ComfyUIを起動できませんでした';
+        detail.textContent = 'サーバーの起動ログを確認してください。';
+        reload.hidden = false;
+        return;
+      }
+      stage.textContent = stages[state.stage] || 'ComfyUIを準備しています';
+      detail.textContent = state.stage === 'updating_nodes' || state.stage === 'validating_nodes'
+        ? 'ノードに更新がある場合は数分かかります。このままお待ちください。'
+        : '準備ができると自動で画面が開きます。';
+    } catch {
+      detail.textContent = '接続を確認しています。復旧すると自動で続行します。';
+      reload.hidden = false;
+    }
+    setTimeout(check, 1500);
+  }
+  check();
+</script>
+</html>

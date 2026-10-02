@@ -7,15 +7,18 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
 _CACHE_DIR = tempfile.TemporaryDirectory()
-os.environ.setdefault("COMFY_ASSET_CACHE_DIR", _CACHE_DIR.name)
+with mock.patch.dict(os.environ, {"COMFY_ASSET_CACHE_DIR": _CACHE_DIR.name}):
+    import asset_rpc
+from asset_manager import AssetEntry
 
-import asset_rpc  # noqa: E402
-from asset_manager import AssetEntry  # noqa: E402
+
+def setUpModule():
+    unittest.addModuleCleanup(_CACHE_DIR.cleanup)
 
 
 class MaterializeConcurrencyTests(unittest.TestCase):
@@ -26,7 +29,7 @@ class MaterializeConcurrencyTests(unittest.TestCase):
             name="example.png",
             kind="file",
             size=7,
-            modified_at=datetime(2026, 8, 4, tzinfo=timezone.utc),
+            modified_at=datetime(2026, 8, 4, tzinfo=UTC),
             media_type="image",
         )
         barrier = threading.Barrier(2)
@@ -89,7 +92,7 @@ class MaterializeConcurrencyTests(unittest.TestCase):
             name="oversized.bin",
             kind="file",
             size=10,
-            modified_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            modified_at=datetime(2026, 8, 5, tzinfo=UTC),
             media_type="file",
         )
         manager = mock.Mock()
@@ -241,7 +244,7 @@ class VideoPosterExtractionTests(unittest.TestCase):
             name="a.mp4",
             kind="file",
             size=99,
-            modified_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            modified_at=datetime(2026, 8, 5, tzinfo=UTC),
             media_type="video",
         )
         with mock.patch.object(asset_rpc, "THUMB_GEN_VERSION", "v-test"):
@@ -264,7 +267,7 @@ class MaterializeEntryValidationTests(unittest.TestCase):
             name="asset.png",
             kind="file",
             size=42,
-            modified_at=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            modified_at=datetime(2026, 8, 5, tzinfo=UTC),
             media_type="image",
         )
         manager = mock.Mock()

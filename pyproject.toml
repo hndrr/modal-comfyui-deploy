@@ -11,5 +11,8 @@ dependencies = [
     "python-dotenv>=1.0.1",
 ]
 
+[project.optional-dependencies]
+split-test = ["aiohttp>=3.12.15"]
+
 [tool.flake8]
 max-line-length = 100

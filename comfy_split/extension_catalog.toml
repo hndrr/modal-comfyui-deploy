@@ -1,0 +1,58 @@
+# Deployment metadata only. Implementations and tests live in the owning repo.
+[extensions.ambient]
+repository = "hndrr/ComfyUI-Ambient"
+version = "0.1.0"
+revision = "c40aa0d4cbde7ab570a04afe91590f03ba62d56f"
+distribution = "ambient-comfyui"
+module = "ambient_comfyui.split"
+factory = "SplitAmbient"
+web_package = "ambient_comfyui"
+web_directory = "web"
+web_name = "ComfyUI-Ambient"
+guarded_routes = ["/ambient/workflows", "/ambient/executions", "/ambient/library"]
+
+# Read compatibility for existing deployments; never rewrite or delete data.
+[legacy]
+mode_env = "COMFYUI_AMBIENT_MODE"
+extensions = ["ambient"]
+node_directory = "ambient_nodes"
+node_manifest = "ambient-nodes.json"
+
+# Independently switched adapters share the same image and lifecycle machinery.
+[integrations.agent-bridge]
+repository = "hndrr/ComfyUI-AgentBridge"
+version = "0.2.0"
+revision = "0dd4ac5a8c9c8550d13b3ae3f4f536c50336106b"
+distribution = "comfyui-agent-bridge"
+module = "comfyui_agent_bridge.split"
+factory = "SplitBridge"
+worker = "run_generation"
+host = "capabilities"
+setting = "SPLIT_AGENT_BRIDGE"
+prefix = "/agent_runtime/bridge/"
+node_prefix = "AgentRuntimeBridge"
+record_key = "agent_bridge"
+secrets = [["AGENT_RUNTIME_SECRET_NAME", "AGENT_RUNTIME_BRIDGE_TOKEN"]]
+
+[node_packs.agent-bridge]
+integration = "agent-bridge"
+
+[node_packs.agent-runtime]
+repository = "hndrr/ComfyUI-AgentRuntime"
+revision = "b1ed92f74b0330eee2939642519d97454a45a350"
+
+[node_packs.skills-loader]
+repository = "hndrr/ComfyUI-Skills-Loader"
+
+[node_packs.gemini]
+repository = "hndrr/ComfyUI-GeminiTools"
+secrets = [["GEMINI_SECRET_NAME", "GEMINI_API_KEY"]]
+
+[node_packs.jev]
+repository = "hndrr/ComfyUI-Jev"
+secrets = [["TYPESAFE_SECRET_NAME", "TYPESAFE_API_KEY"], ["OPENROUTER_SECRET_NAME", "OPENROUTER_API_KEY"]]
+
+# Detect incompatible installed files before importing or publishing a candidate.
+[[node_conflicts]]
+markers = ["comfyui_agent_bridge/bridge/nodes.py", "comfyui_agent_runtime/bridge/nodes.py"]
+message = "Update ComfyUI-AgentRuntime together with ComfyUI-AgentBridge; duplicate Bridge nodes cannot be loaded."

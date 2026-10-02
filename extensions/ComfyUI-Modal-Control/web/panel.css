@@ -1,0 +1,28 @@
+.modal-control-panel { padding: 20px 16px; font: 14px/1.6 system-ui,sans-serif; color: var(--fg-color,#ddd); }
+.modal-control-panel h2 { margin: 0 0 24px; font-size: 18px; font-weight: 600; }
+.modal-control-panel .modal-gpu-state { font-size: 24px; font-weight: 600; margin-bottom: 12px; }
+.modal-control-panel .modal-gpu-state[data-state=off] { color: inherit; }
+.modal-control-panel .modal-gpu-state[data-state=on] { color: #ff7373; }
+.modal-control-panel p { margin: 8px 0 16px; overflow-wrap: anywhere; }
+.modal-control-panel .modal-hint { font-size: 12px; opacity: .7; }
+.modal-control-panel .modal-settings { margin-top: 28px; border-top: 1px solid var(--border-color,#444); padding-top: 16px; }
+.modal-control-panel button { display: block; width: 100%; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border-color,#555); border-radius: 6px; background: var(--comfy-input-bg,#333); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.modal-control-panel button:hover:not(:disabled) { border-color: var(--fg-color,#aaa); }
+.modal-control-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.modal-control-panel button:focus-visible { outline: 2px solid #8ebcf0; outline-offset: 3px; }
+button.comfyui-button.modal-gpu-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-color, #555);
+  border-radius: 6px;
+  background: var(--comfy-input-bg, #303030);
+  color: var(--input-text, #eee);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+button.comfyui-button.modal-gpu-indicator[data-state=on] { color: #ff7373; border-color: #ff7373; }
+button.comfyui-button.modal-gpu-indicator:hover { border-color: var(--fg-color, #aaa); }
+button.modal-gpu-indicator:focus-visible { outline: 2px solid #8ebcf0; outline-offset: 3px; }
