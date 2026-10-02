@@ -1,6 +1,5 @@
 # Hugging Face のモデルを Volume に保存する
 
-
 `preserve_model.py` は Hugging Face 上の単一ファイルをダウンロードし、ComfyUI が参照する `comfy-model` Volume に保存します。
 
 ```bash
