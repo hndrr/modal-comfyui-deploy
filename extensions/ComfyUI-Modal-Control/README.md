@@ -21,7 +21,7 @@ ComfyUIや環境バージョンを交換しても拡張はイメージから読�
 
 - `web/modal-control.js`: 独立したDOMで状態表示・操作を提供します。
   ComfyUI内部のCSSクラス、Vueストア、既存ツールバーのDOM構造には依存しません。
-- `web/comfy-adapter.mjs`: ComfyUIの拡張登録とワークフロー保存・復元APIへの接続です。
+- `web/comfy-adapter.mjs`: サイドバー登録、標準ツールバーへのボタン追加、ワークフロー保存・復元APIへの接続です。`ComfyButton`と`app.menu.element`にも依存します。
   本体更新でAPIが変わった場合はここで対応します。保存APIが使えない場合、切替を中止します。
 - `GET /modal-control/v1/status`: CPU側バックエンドとのバージョン付き契約です。
   `api_version: 1`、`gpu: {containers, checked_at, phase}` とモード・環境情報を返します。
@@ -30,7 +30,7 @@ ComfyUIや環境バージョンを交換しても拡張はイメージから読�
   `/split/environment/discard` を使います。状態表示だけでは呼びません。
 
 読み込みにはComfyUIの `app.registerExtension()` を使います。
-現行検証対象はComfyUI `5bbdf8a76678e2c7cfb519a49a9c3a7137fd6280`、frontend `1.51.10`。
+このrepoのsplit構成は、[splitapp.py](../../splitapp.py)でComfyUI `7a0b5eede3f9721c8faab290689893f36edc6d66`、frontend `1.52.7`を固定しています。
 将来のすべてのバージョンとの互換性を保証するものではありません。
 更新時は標準拡張一覧、状態API、GPU0台の表示、保存・復元を確認してください。
 本体の固定バージョンをこの拡張の変更に合わせて更新する必要はありません。
