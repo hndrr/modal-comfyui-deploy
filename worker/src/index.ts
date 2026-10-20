@@ -1,4 +1,5 @@
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
+import { startupOrigins, startupResponse } from "./startup.ts";
 
 /**
  * Cloudflare Access で認証済みのリクエストだけを、Modal 上の ComfyUI へ中継する
@@ -31,6 +32,8 @@ export interface Env {
   MODAL_ADDITIONAL_ORIGINS?: string;
   /** Modal origin -> { key, secret }; keep credentials for other workspaces intact. */
   MODAL_PROXY_CREDENTIALS?: string;
+  /** Opt-in Modal Servers origins; existing production origins are unchanged by default. */
+  MODAL_STARTUP_ORIGINS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -195,7 +198,7 @@ function findConfigError(env: Env): string | null {
   }
 
   try {
-    configuredOrigins(env);
+    startupOrigins(env.MODAL_STARTUP_ORIGINS, configuredOrigins(env).values());
     credentialOverrides(env);
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -498,6 +501,7 @@ export default {
       })
     );
 
-    return rewriteLocationHeader(upstream, modalOrigin, requestUrl.origin);
+    return startupResponse(request, rewriteLocationHeader(upstream, modalOrigin, requestUrl.origin),
+      startupOrigins(env.MODAL_STARTUP_ORIGINS, configuredOrigins(env).values()).has(modalOrigin));
   },
 } satisfies ExportedHandler<Env>;

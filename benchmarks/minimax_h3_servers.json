@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "name": "minimax-h3-fused-4step-576x1024",
+  "source": "Previously successful h3-fused-4step workflow (2026-09-20)",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "seed_node": "8",
+  "output_node": "15",
+  "width": 576,
+  "height": 1024,
+  "frames": 124,
+  "fps": 24,
+  "assets": [
+    {
+      "path": "diffusion_models/minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors"
+    },
+    {
+      "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    },
+    {
+      "path": "vae/minimax_h3_video_vae_int8_convrot.safetensors"
+    },
+    {
+      "path": "vae/minimax_h3_audio_vae_fp32.safetensors"
+    }
+  ],
+  "prompt": {
+    "1": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "17": {
+      "class_type": "MiniMaxH3SigmaShift",
+      "inputs": {
+        "model": [
+          "1",
+          0
+        ],
+        "shift_video": 12.0,
+        "shift_audio": 3.0
+      }
+    },
+    "3": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "type": "minimax",
+        "device": "default"
+      }
+    },
+    "4": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+      }
+    },
+    "5": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+      }
+    },
+    "6": {
+      "class_type": "MiniMaxH3ImageToVideo",
+      "inputs": {
+        "clip": [
+          "3",
+          0
+        ],
+        "vae": [
+          "4",
+          0
+        ],
+        "prompt": "integrated_multimodal_description: [Shot 1] A quiet garden at blue hour. Grasses gently sway around a dark reflecting pool, with a dim lantern nearby.\n\nFollow the selected scene and user direction, including its movement and visual style.\n\noverall_soundscape: Follow the selected audio style and user direction, including music, rhythm, percussion or silence when specified.\n\nA layer of sustained warm tones with evolving harmonics, underneath other selected sounds.\n\nSmall ocean waves ebb and wash back, distant and unhurried.\n\nnon_diegetic_music: Follow overall_soundscape for music, rhythm, percussion and silence.",
+        "width": 576,
+        "height": 1024,
+        "length": 124
+      }
+    },
+    "7": {
+      "class_type": "BasicGuider",
+      "inputs": {
+        "model": [
+          "17",
+          0
+        ],
+        "conditioning": [
+          "6",
+          0
+        ]
+      }
+    },
+    "8": {
+      "class_type": "RandomNoise",
+      "inputs": {
+        "noise_seed": 42
+      }
+    },
+    "9": {
+      "class_type": "KSamplerSelect",
+      "inputs": {
+        "sampler_name": "res_multistep"
+      }
+    },
+    "10": {
+      "class_type": "BasicScheduler",
+      "inputs": {
+        "model": [
+          "17",
+          0
+        ],
+        "scheduler": "simple",
+        "steps": 4,
+        "denoise": 1.0
+      }
+    },
+    "11": {
+      "class_type": "SamplerCustomAdvanced",
+      "inputs": {
+        "noise": [
+          "8",
+          0
+        ],
+        "guider": [
+          "7",
+          0
+        ],
+        "sampler": [
+          "9",
+          0
+        ],
+        "sigmas": [
+          "10",
+          0
+        ],
+        "latent_image": [
+          "6",
+          1
+        ]
+      }
+    },
+    "12": {
+      "class_type": "MiniMaxH3FastVAEDecode",
+      "inputs": {
+        "samples": [
+          "11",
+          0
+        ],
+        "vae": [
+          "4",
+          0
+        ],
+        "tile_batch_size": 4
+      }
+    },
+    "13": {
+      "class_type": "VAEDecodeAudio",
+      "inputs": {
+        "samples": [
+          "11",
+          0
+        ],
+        "vae": [
+          "5",
+          0
+        ]
+      }
+    },
+    "14": {
+      "class_type": "CreateVideo",
+      "inputs": {
+        "images": [
+          "12",
+          0
+        ],
+        "audio": [
+          "13",
+          0
+        ],
+        "fps": 24
+      }
+    },
+    "15": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "video": [
+          "14",
+          0
+        ],
+        "filename_prefix": "evaluation/minimax-h3",
+        "format": "mp4",
+        "format.codec": "h264"
+      }
+    }
+  }
+}
