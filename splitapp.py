@@ -70,7 +70,7 @@ image = (
     .pip_install(
         f"comfyui-frontend-package=={FRONTEND_VERSION}",
         f"comfyui-manager=={MANAGER_VERSION}",
-        "modal==1.1.4",
+        "modal==1.6.0",
         "aiohttp==3.12.15",
     )
     .run_commands(

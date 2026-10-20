@@ -1000,13 +1000,16 @@ def application(controller):
 
 
 def make_controller(volumes=None, *, warmed_cpu=None):
+    from comfy_split.evaluation import ui_handle
+
     names = json.loads(os.environ["SPLIT_VOLUMES"])
     volumes = volumes or {key: modal.Volume.from_name(name) for key, name in names.items()}
     app_name = os.environ["SPLIT_APP"]
     return Controller(modal.Function.from_name(app_name, "gpu_worker"),
         modal.Queue.from_name(app_name + "-events", create_if_missing=True),
         modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
-        ui_function=modal.Function.from_name(app_name, "ui"), warmed_cpu=warmed_cpu)
+        ui_function=ui_handle(app_name, os.environ.get("SPLIT_UI_BACKEND", "function")),
+        warmed_cpu=warmed_cpu)
 
 
 if __name__ == "__main__":
