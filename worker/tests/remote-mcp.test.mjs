@@ -32,6 +32,12 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models","calculate","get_split_status","save_workflow","visualize_workflow","list_nodes","search_custom_nodes","get_job_workflow","reuse_output","list_inputs","list_outputs","inspect_media","prepare_environment","change_node","apply_environment","discard_environment","add_model","inspect_model","remove_model","restore_model","get_admin_operation"])
     assert.ok(list.result.tools.some(t => t.name === name));
   const upload=list.result.tools.find(t=>t.name==='upload_media');
+  const audio=list.result.tools.find(t=>t.name==="get_audio"),
+    part=list.result.tools.find(t=>t.name==="read_audio_part");
+  assert.deepEqual(part._meta.ui.visibility,["app"]);
+  const resource=await (await request(jwt,"resources/read",{uri:audio._meta.ui.resourceUri})).json();
+  assert.match(resource.result.contents[0].mimeType,/profile=mcp-app/);
+  assert.match(resource.result.contents[0].text,/<audio /);
   assert.deepEqual(upload._meta['openai/fileParams'],['file']);
   assert.deepEqual(upload.inputSchema.properties.file.required.sort(),['download_url','file_id']);
   assert.ok((await (await request(jwt,'ping')).json()).result);
@@ -68,6 +74,14 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.deepEqual((await discovery.json()).result.tools.map(t=>t.name).sort(),
     list.result.tools.map(t=>t.name).sort());
   assert.equal(hits.length,1);
+
+  const document=token=>worker.fetch(new Request("https://"+host+"/view?type=output&filename=test.wav",{
+    headers:{"CF-Access-Jwt-Assertion":token,"Sec-Fetch-Dest":"document","Sec-Fetch-Mode":"navigate","Sec-Fetch-Site":"cross-site"},
+  }),shared);
+  assert.equal((await document("")).status,403);
+  assert.equal((await document(jwt)).status,403);
+  assert.match(await (await document(browser)).text(),/<audio controls/);
+  assert.equal(hits.length,1); // Rendering the signed-in page never touches Modal.
 
   // Other ComfyUI hosts may already have custom-node routes below /mcp.
   const other = "ordinary.example.com", upstream = "https://ordinary.modal.run";

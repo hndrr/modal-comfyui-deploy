@@ -1,5 +1,6 @@
 import {browserReview, receiptLink, serviceReadAllowed} from "./job-review.ts";
 import { splitGui } from "./split-guis.ts";
+import { audioDocument } from "./audio-document.ts";
 import { remoteMcp } from "./remote-mcp.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
@@ -593,6 +594,11 @@ export default {
       if (request.method!=="GET" || !serviceReadAllowed(requestUrl.pathname) ||
           (isWebSocketUpgrade(request) && !/^\/(?:api\/)?ws$/.test(requestUrl.pathname)))
         return textResponse("Operation unavailable with MCP service credentials.",403);
+    }
+
+    if (splitUiHost && identity.kind === "browser") {
+      const page = audioDocument(request);
+      if (page) return page;
     }
 
     if (env.SPLIT_ADMIN_GUIS && env.SPLIT_UI_ORIGIN) {

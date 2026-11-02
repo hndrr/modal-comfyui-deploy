@@ -11,7 +11,8 @@ import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
-import { audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
+import { AUDIO_PLAYER_URI, audioPlayerHtml } from "./audio-player.ts";
+import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
 const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsWith("/") &&
@@ -65,8 +66,10 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
           const result=JSON.parse(new TextDecoder().decode(bytes));
           return {isError:!r.ok || (Object.hasOwn(adminTools,name) && ["failed","unknown"].includes(result?.status)),content:[{type:"text",text:JSON.stringify(result)}]};
         }
-        if (name === "get_video" || name === "get_audio") {
+        if (name === "get_video" || name === "get_audio" || name === "read_audio_part") {
           if (!browserOrigin) return failure("Missing split browser origin.");
+          if (name === "read_audio_part") return await getMedia("audio", send, browserOrigin,
+            {...z.object(audioPartInputs).parse(args), chunk_bytes:AUDIO_PART_BYTES}, true);
           return name === "get_audio"
             ? await getMedia("audio", send, browserOrigin, audioSchema.parse(args))
             : await getMedia("video", send, browserOrigin, videoSchema.parse(args));
@@ -153,8 +156,15 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI},
     annotations:read,inputSchema:videoInputs}, a=>callSplit(send,"get_video",a,browserOrigin));
   server.registerTool("get_audio",{title:"Retrieve generated audio",
-    description:"Read a saved WAV, FLAC, MP3, Ogg or Opus audio file from a completed split prompt_id. Small files return MCP audio; for larger files use the authenticated link or byte_offset and next_offset. Does not generate or extract sound from video.",
+    description:"Play a saved WAV, FLAC, MP3, Ogg or Opus from a completed split prompt_id in the audio player. Use this tool instead of posting the /view URL. Other MCP clients can read native audio or byte ranges. Does not generate.",
+    _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI},
     annotations:read,inputSchema:audioInputs}, a=>callSplit(send,"get_audio",a,browserOrigin));
+  server.registerResource("audio-player", AUDIO_PLAYER_URI, {mimeType:PLAYER_MIME}, async () => ({
+    contents:[{uri:AUDIO_PLAYER_URI, mimeType:PLAYER_MIME, text:audioPlayerHtml}],
+  }));
+  server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
+    _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
+    annotations:read,inputSchema:audioPartInputs}, a=>callSplit(send,"read_audio_part",a,browserOrigin));
   const transport = new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
   await server.connect(transport);
   try { return await transport.handleRequest(request); } finally { await server.close(); }

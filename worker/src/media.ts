@@ -16,6 +16,10 @@ export const videoInputs = {...commonInputs, index:outputIndex.describe("Zero-ba
 export const audioInputs = {...commonInputs, index:outputIndex.describe("Zero-based audio file index (default 0)")};
 export const videoSchema = z.object(videoInputs);
 export const audioSchema = z.object(audioInputs);
+// A bounded read for the audio widget. Its payload goes only to the app.
+export const audioPartInputs = {prompt_id:commonInputs.prompt_id, index:outputIndex,
+  byte_offset:commonInputs.byte_offset.unwrap()};
+export const AUDIO_PART_BYTES = 512 * 1024;
 type Kind = "audio" | "video";
 type Format = {mime: string; min: number; matches: (b: Uint8Array) => boolean};
 const tag = (b: Uint8Array, at: number, value: string) =>
@@ -75,7 +79,8 @@ function base64(bytes: Uint8Array): string {
 }
 
 export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
-  {prompt_id, index = 0, byte_offset, chunk_bytes}: z.infer<typeof videoSchema>): Promise<CallToolResult> {
+  {prompt_id, index = 0, byte_offset, chunk_bytes}: z.infer<typeof videoSchema>,
+  forPlayer = false): Promise<CallToolResult> {
   const get = (path: string, headers?: HeadersInit) =>
     send(path, {method:"GET", headers, signal:AbortSignal.timeout(50_000)});
   const history = await get("/history/" + prompt_id);
@@ -95,7 +100,7 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   const offset = byte_offset ?? 0, length = chunk_bytes ?? MAX_PART;
   const chunks = byte_offset !== undefined || chunk_bytes !== undefined;
   const file = await get(path, {Range:`bytes=${offset}-${offset + length - 1}`});
-  const metadata = {prompt_id, filename, index, [kind + "_count"]:files.length, url};
+  const metadata = {prompt_id, filename, index, [kind + "_count"]:files.length, mimeType:format.mime, url};
   const link = (size?: number): CallToolResult => ({
     structuredContent:{...metadata, delivery:"link", size},
     content:[{type:"text",text:"Open the " + kind + " after signing in: " + url +
@@ -133,6 +138,7 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   const info = {...metadata, delivery:complete ? "inline" : "chunk", size:total,
     byte_offset:offset, byte_length:data.length, next_offset:next};
   const blob = base64(data);
+  if (forPlayer) return {structuredContent:info, content:[], _meta:{"split/audioPart":blob}};
   return {structuredContent:info, content:[
     {type:"text", text:JSON.stringify(info)},
     complete && kind === "audio" ? {type:"audio", mimeType:format.mime, data:blob} :
