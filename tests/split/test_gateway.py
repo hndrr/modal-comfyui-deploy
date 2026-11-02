@@ -143,6 +143,34 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             run.assert_not_awaited()
         self.worker.spawn.aio.assert_not_awaited()
 
+    async def test_read_progress_reports_native_steps_timing_and_errors_only_for_one_job(self):
+        headers = {"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"}
+        job, other = [self.control.journal.enqueue({"prompt":{"1":{}}}) for _ in range(2)]
+        async def snapshot():
+            response = await self.client.post("/_remote_mcp/progress", json={"prompt_id": job["id"]}, headers=headers)
+            self.assertEqual(response.status, 200)
+            return await response.json()
+        self.assertIsNone((await snapshot())["progress"])
+        job.update(status="running", created_at=100)
+        async def event(kind, data):
+            await self.control.relay_event(job, {"type":"event", "event":{"type":kind,"data":data}})
+        await event("executing", {"node":"2", "prompt_id":job["id"]})
+        await event("progress", {"node":"2", "value":3, "max":8, "prompt_id":job["id"]})
+        await event("progress", {"node":"4", "value":4, "max":8, "prompt_id":other["id"]})
+        self.assertEqual((await snapshot())["progress"], {"node":"2", "value":3, "max":8})
+        await event("executing", {"node":"3", "prompt_id":job["id"]})
+        self.assertEqual((await snapshot())["progress"], {"node":"3"})
+        job.update(status="failed", seconds=6, finished_at=112, history={"status":{"messages":[
+            ["execution_start",{"timestamp":2000}], ["execution_error",{"timestamp":4500,"node_id":"3",
+             "exception_message":"missing input","current_inputs":{"private":"redacted"}}]]}})
+        result = await snapshot()
+        self.assertEqual((result["execution_seconds"],result["elapsed_seconds"],result["worker_seconds"]),(2.5,12,6))
+        self.assertEqual(result["error"], {"node_id":"3", "exception_message":"missing input"})
+        self.assertIsNone(result["progress"])
+        unauthorized = await self.client.post("/_remote_mcp/progress",json={"prompt_id":job["id"]})
+        self.assertEqual(unauthorized.status,403)
+        self.worker.spawn.aio.assert_not_awaited()
+
     async def test_remote_cancel_is_scoped_idempotent_and_preserves_terminal_outputs(self):
         headers = {"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"}
         jobs = [self.control.journal.enqueue({"prompt":{"1":{}}}) for _ in range(4)]

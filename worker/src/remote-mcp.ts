@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { readAtMost } from "./bounded-response.ts";
+import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
 import { audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
@@ -43,11 +44,12 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
         if (name === "upload_media") return uploadMedia(send,args,fetch,blobHosts);
-        if (name === "cancel_job") {
-          const r = await send("/_remote_mcp/cancel",{method:"POST",headers:{"X-Split-Remote-Tool":"1"},
+        if (name === "list_models") return await listModels(send,args);
+        if (name === "cancel_job" || name === "get_job_progress") {
+          const r = await send(name === "cancel_job" ? "/_remote_mcp/cancel" : "/_remote_mcp/progress",{method:"POST",headers:{"X-Split-Remote-Tool":"1"},
             body:JSON.stringify({prompt_id:args.prompt_id}),signal:AbortSignal.timeout(30_000)});
           if (r.status===409) return rejected(r);
-          if (!r.ok && r.status!==404) return failure("Cancellation request failed ("+r.status+"); check this prompt_id.");
+          if (!r.ok && r.status!==404) return failure(name+" failed ("+r.status+"); check this prompt_id.");
           return {isError:!r.ok,content:[{type:"text",text:JSON.stringify(await r.json())}]};
         }
         if (name === "get_workflow" && (args.action==="list" ? args.filename!==undefined || args.format!==undefined :
@@ -101,6 +103,9 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
     _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>callSplit(send,"upload_media",a,undefined,blobHosts));
+  server.registerTool("list_models",{description:"List installed ComfyUI model categories, or filenames in one category. Supports paging and substring search; reads only.",annotations:read,inputSchema:modelInputs}, a=>callSplit(send,"list_models",a));
+  server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe.",annotations:read,
+    inputSchema:{prompt_id:z.uuid()}}, a=>callSplit(send,"get_job_progress",a));
   server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
     annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false},
     inputSchema:{prompt_id:z.uuid()}},a=>callSplit(send,"cancel_job",a));

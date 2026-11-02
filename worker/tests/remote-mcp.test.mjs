@@ -29,7 +29,7 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();
-  for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job"])
+  for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models"])
     assert.ok(list.result.tools.some(t => t.name === name));
   const upload=list.result.tools.find(t=>t.name==='upload_media');
   assert.deepEqual(upload._meta['openai/fileParams'],['file']);
@@ -124,4 +124,18 @@ test('initializing, timed-out and failed CPU never receive a prompt',async t=>{
   assert.equal(attempts,2);assert.match(pending.content[0].text,/starting/);
   const failed=await callSplit(async path=>{assert.equal(path,'/split/startup');return Response.json({ready:false,failed:true});},'enqueue_workflow',{});
   assert.match(failed.content[0].text,/initialization failed/);
+});
+
+test('model inventory scopes reads to one category, filters and paginates filenames',async()=>{
+  const paths=[];
+  const send=async p=>{paths.push(p);return Response.json(p==='/split/startup'?{ready:true}:
+    p==='/models'?['loras','checkpoints']:['sub/B.safetensors','a.safetensors','skip.pt']);};
+  const call=async args=>JSON.parse((await callSplit(send,'list_models',args)).content[0].text);
+  assert.deepEqual((await call({})).categories,['checkpoints','loras']);
+  const first=await call({category:'loras',query:'.SAFE',limit:1});
+  assert.deepEqual(first.models,['a.safetensors']);assert.equal(first.next_offset,1);
+  assert.deepEqual((await call({category:'loras',query:'.SAFE',offset:1})).models,['sub/B.safetensors']);
+  const bad=await callSplit(send,'list_models',{category:'../queue'});
+  assert.ok(bad.isError);
+  assert.ok(paths.every(p=>['/split/startup','/models','/models/loras'].includes(p)));
 });
