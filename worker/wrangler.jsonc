@@ -2,6 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "comfyui-access-proxy",
   "main": "src/index.ts",
+  "compatibility_flags": ["nodejs_compat"],
   "compatibility_date": "2026-08-01",
 
   // カスタムドメイン以外の入口を塞ぐ。外すと Cloudflare Access を迂回できる経路が復活する。

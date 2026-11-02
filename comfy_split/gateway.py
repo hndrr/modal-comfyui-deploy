@@ -810,6 +810,11 @@ class Controller:
                 async with self.lock:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
+            if path == "/_remote_mcp/call":
+                from comfy_split.remote_mcp import call
+                if self.journal.data["mode"] != "split":
+                    return web.json_response({"error": "This client requires split mode."}, status=409)
+                return await call(request)
             if self.journal.data["mode"] == "legacy":
                 if request.headers.get("X-Modal-Execution-Mode") == "split":
                     return web.json_response({"error": "This client requires split mode."}, status=409)

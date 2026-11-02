@@ -1,10 +1,38 @@
 # MCP クライアントから Modal の ComfyUI split を使う
 
-手元の MCP クライアントが [stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio) で [artokun/comfyui-mcp](https://github.com/artokun/comfyui-mcp) を起動し、Cloudflare Access → Worker → split の CPU 入口に接続する。ノードの入力を調べる、ワークフローを編集・検証する、投入する、同じジョブを追跡する、画像を取得する操作が使える。生成を投入したときだけ split の GPU が必要になる。ブラウザ、Agent Panel、トンネルは不要。
+既存のローカル接続では、手元の MCP クライアントが [stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio) で [artokun/comfyui-mcp](https://github.com/artokun/comfyui-mcp) を起動し、Cloudflare Access → Worker → split の CPU 入口に接続する。ノードの入力を調べる、ワークフローを編集・検証する、投入する、同じジョブを追跡する、画像を取得する操作が使える。生成を投入したときだけ split の GPU が必要になる。ブラウザ、Agent Panel、トンネルは不要。
 
-[Comfy-Org/comfy-mcp](https://github.com/Comfy-Org/comfy-mcp) は Comfy 公式の別の MCP サーバー。ここでは既存の HTTPS 入口に Access のサービス認証を付けられる artokun 版を使う。Modal に MCP サーバーをインストールする構成ではない。
+[Comfy-Org/comfy-mcp](https://github.com/Comfy-Org/comfy-mcp) は Comfy 公式の別の MCP サーバー。ここでは既存の HTTPS 入口に Access のサービス認証を付けられる artokun 版を使う。リモート接続では同じ版を Modal の split CPU 上で起動する。
 
-## このマシンで一度だけ準備する
+## リモート URL で使う
+
+本人用の接続 URL は `https://<MCP専用ホスト>/mcp`。ChatGPT Web は「プラグイン → 追加 → カスタム MCP サーバーを追加」で URL と OAuth を選び、本人の Access ログインで接続する。生成の書き込み操作が許可されていることを確認する。Claude Code と Codex も同じ URL を使える。ローカル stdio と併用する場合は別名で登録する。
+
+```bash
+claude mcp add --transport http --scope local comfyui-remote https://<MCP専用ホスト>/mcp
+codex mcp add comfyui-remote --url https://<MCP専用ホスト>/mcp
+codex mcp login comfyui-remote
+```
+
+ツール一覧・接続維持は Worker 内で処理する。ノード照会・履歴・画像取得で初めて CPU が起動し、生成の受付後に GPU が起動する。結果の画像は MCP の画像コンテンツで受け取る。サーバーの保存パスを指定する必要はない。
+
+「EmptyImage と SaveImage の必須入力を調べて。生成はしないで」で照会を確認できる。生成時は `enqueue_workflow` に API 形式の `workflow` と新しい `request_id` を渡す。受付が不明なら**同じキーと同じワークフローでのみ再試行**する。キーを変えれば新しい生成になる。受付成功後は同じ `prompt_id` で `queue`・`get_history` を照会し、履歴のファイル名を `get_image` に渡す。チャットを閉じても受付済みの生成は続く。起動中は少し待って再試行する。初期化失敗や常時起動モードの競合は自動再試行しない。
+
+### リモート入口をデプロイする
+
+1. split の CPU イメージに固定版 Node.js と MCP をデプロイする（`scripts/modal.sh deploy splitapp.py`）。GPU に Node/MCP は不要。既存 Worker をテスト後にデプロイする。一般の中継ルートでは内部呼び出し用ヘッダーを必ず取り除く。
+2. MCP 専用ホストに self-hosted Access アプリを作成し、Include が本人のメール1件のみの Allow を関連付ける。ブラウザ用共有アプリとは別の AUD を使う。Managed OAuth を有効にし、CLI のループバックと、ChatGPT が表示する**正確なコールバック URI**を許可する。トークンや本人メールは Git に記録しない。
+3. Worker の secret `SPLIT_REMOTE_MCP` に次の JSON を対話入力する。既存の split ホストが解決する転送先と `origin` が一致しない限り中継されない。設定後、専用ホストを Worker の Custom Domain に関連付ける。MCP ホスト自体は通常の Modal 転送先マップに追加しない。
+
+   ```json
+   {"hostname":"mcp.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"<専用アプリのAUD>","owner_email":"owner@example.com"}
+   ```
+
+4. 認証なしでは OAuth のチャレンジとなること、別アプリの JWT では拒否されることを確認する。本人の OAuth で接続後、管理側から CPU/GPU の台数を読む。アプリの状態 API を定期照会すると CPU を起こすため、停止判定には使わない。
+5. CPU/GPU がともに0台の状態から、ツール一覧で0/0、実ノード照会で1/0を確認する。再び0/0になるのを待って、下記の検証ワークフローを1回投入。同じキーの再送でジョブは1件だけ、64×64 PNG の回収と停止を確認する。停止後の再取得は CPU だけを起こす。停止待ち設定30秒は実際の停止時刻の保証ではない。
+6. 切り戻しは専用ホストの Worker 割り当てを外してから `SPLIT_REMOTE_MCP` と専用 Access アプリを無効化する。既存のブラウザ用 Allow、stdio 用の Service Auth、Modal の Proxy Auth は維持する。
+
+## ローカル stdio：このマシンで一度だけ準備する
 
 リポジトリのルートで実行する。Node **24.22.2**、MCP **0.52.206**、ComfyUI **v0.43.0**（frontend **1.57.4**）で固定している。初めて split を構築する場合は、先に [Access と Worker](#access-と-worker) を設定する。
 
@@ -25,7 +53,7 @@ test -e .env.comfy-mcp || install -m 600 .env.comfy-mcp.example .env.comfy-mcp
 mise exec node@24.22.2 -- node mcp/client-config.mjs
 ```
 
-この構成はローカルプロセスを起動できるクライアント向け。リモートの MCP URL だけを受け付けるクライアントには、split の URL を登録できない。そこにあるのは ComfyUI の API で、MCP の HTTP エンドポイントではない。
+この stdio 構成はローカルプロセスを起動できるクライアント向け。リモートの MCP URL だけを受け付けるクライアントには、split の URL を登録できない。そこにあるのは ComfyUI の API で、MCP の HTTP エンドポイントではない。
 
 **Claude Code**: リポジトリのルートで一度だけ次を実行する。[`--scope local`](https://code.claude.com/docs/en/mcp#local-scope) はこのユーザーのこのプロジェクトだけに適用される。
 

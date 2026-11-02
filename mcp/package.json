@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "engines": { "node": "24.22.2" },
-  "scripts": { "test": "node --test start.test.mjs" },
+  "scripts": { "test": "node --test *.test.mjs" },
   "dependencies": { "comfyui-mcp": "0.52.206" }
 }
