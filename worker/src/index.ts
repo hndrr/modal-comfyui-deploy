@@ -541,7 +541,7 @@ export default {
           // workerd supports manual/follow. callSplit rejects non-2xx responses;
           // never follow a Location with Modal credentials.
           return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"manual"}));
-        });
+        }, "https://" + cfg.split_hostname);
       }
     }
     if (mcpPath) return textResponse("Not found.", 404);
