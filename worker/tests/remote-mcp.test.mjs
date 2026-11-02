@@ -42,6 +42,26 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   }
   assert.equal(hits[1].headers.get('X-Split-Remote-Tool'),'1');
   assert.equal(buildUpstreamHeaders(new Request(origin,{headers:{'X-Split-Remote-Tool':'1'}}),cfg,origin).get('X-Split-Remote-Tool'),null);
+
+  // After a host rename the UI and MCP share a hostname, never their audiences.
+  const shared={...cfg,SPLIT_UI_ORIGIN:JSON.stringify({[host]:origin}),
+    SPLIT_REMOTE_MCP:JSON.stringify({...JSON.parse(cfg.SPLIT_REMOTE_MCP),split_hostname:host})};
+  const at=(path,assertion,config=shared)=>worker.fetch(new Request('https://'+host+path,{
+    headers:{'CF-Access-Jwt-Assertion':assertion}}),config);
+  const browser=await sign('ui-aud','owner@example.com');
+  hits.length=0;
+  assert.equal((await at('/',jwt)).status,403);
+  assert.equal((await at('/mcp',browser)).status,403);
+  assert.equal((await at('/mcp/',browser)).status,404);
+  assert.equal((await at('/mcp',browser,{...shared,SPLIT_REMOTE_MCP:undefined})).status,404);
+  assert.equal(hits.length,0);
+  assert.equal((await at('/',browser)).status,200);
+  assert.deepEqual(hits.map(r=>r.url),[origin+'/']);
+  const discovery=await worker.fetch(new Request('https://'+host+'/mcp',{method:'POST',
+    headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream','CF-Access-Jwt-Assertion':jwt},
+    body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list'})}),shared);
+  assert.equal((await discovery.json()).result.tools.length,5);
+  assert.equal(hits.length,1);
 });
 
 test('a lost receipt uses exactly the same queue request on retry',async()=>{

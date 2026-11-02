@@ -6,11 +6,11 @@
 
 ## リモート URL で使う
 
-本人用の接続 URL は `https://<MCP専用ホスト>/mcp`。ChatGPT Web は「プラグイン → 追加 → カスタム MCP サーバーを追加」で URL と OAuth を選び、本人の Access ログインで接続する。生成の書き込み操作が許可されていることを確認する。Claude Code と Codex も同じ URL を使える。ローカル stdio と併用する場合は別名で登録する。
+以下の例では split ホストを `split.example.com` とする。本人用の接続 URL は `https://split.example.com/mcp`。ChatGPT Web は「プラグイン → 追加 → カスタム MCP サーバーを追加」で URL と OAuth を選び、本人の Access ログインで接続する。生成の書き込み操作が許可されていることを確認する。Claude Code と Codex も同じ URL を使える。ローカル stdio と併用する場合は別名で登録する。
 
 ```bash
-claude mcp add --transport http --scope local comfyui-remote https://<MCP専用ホスト>/mcp
-codex mcp add comfyui-remote --url https://<MCP専用ホスト>/mcp
+claude mcp add --transport http --scope local comfyui-remote https://split.example.com/mcp
+codex mcp add comfyui-remote --url https://split.example.com/mcp
 codex mcp login comfyui-remote
 ```
 
@@ -21,16 +21,18 @@ codex mcp login comfyui-remote
 ### リモート入口をデプロイする
 
 1. split の CPU イメージに固定版 Node.js と MCP をデプロイする（`scripts/modal.sh deploy splitapp.py`）。GPU に Node/MCP は不要。既存 Worker をテスト後にデプロイする。一般の中継ルートでは内部呼び出し用ヘッダーを必ず取り除く。
-2. MCP 専用ホストに self-hosted Access アプリを作成し、Include が本人のメール1件のみの Allow を関連付ける。ブラウザ用共有アプリとは別の AUD を使う。Managed OAuth を有効にし、CLI のループバックと、ChatGPT が表示する**正確なコールバック URI**を許可する。トークンや本人メールは Git に記録しない。
-3. Worker の secret `SPLIT_REMOTE_MCP` に次の JSON を対話入力する。既存の split ホストが解決する転送先と `origin` が一致しない限り中継されない。設定後、専用ホストを Worker の Custom Domain に関連付ける。MCP ホスト自体は通常の Modal 転送先マップに追加しない。
+2. split ホスト全体を従来のブラウザ・stdio 用 Access アプリに登録する。同じホストの `/mcp` に、より具体的なパスを持つ別の self-hosted Access アプリを設定し、Include が本人のメール1件のみの Allow を関連付ける。ブラウザ用共有アプリとは別の AUD を使う。Managed OAuth を有効にし、CLI のループバックと、ChatGPT が表示する**正確なコールバック URI**を許可する。トークンや本人メールは Git に記録しない。
+
+   ChatGPT の登録フォームで動的クライアント登録（DCR）を選ぶと、コールバック URL が見えない場合がある。「OAuthの詳細設定 → 登録方法」で一度「ユーザー定義の OAuth クライアント」を選ぶと、このフォーム用の URL が表示される。それを Cloudflare の「許可されたリダイレクト URI」に追加して保存し、**同じフォームで DCR に戻して**プラグインを作成する。クライアント ID やシークレットの手入力、ワイルドカードの許可は不要。「接続」で Cloudflare に移ったら本人のログインを完了する。
+3. Worker の secret `SPLIT_REMOTE_MCP` に次の JSON を対話入力する。既存の split ホストが解決する転送先と `origin` が一致しない限り中継されない。ホスト変更時は、既存の暗号化済みマップを置き換えずに `SPLIT_UI_ORIGIN` に `{"split.example.com":"https://example.modal.run"}` を設定できる。stdio の `SPLIT_MCP_ACCESS` とローカルの `COMFYUI_URL` も新ホストに合わせ、Worker の Custom Domain として登録する。
 
    ```json
-   {"hostname":"mcp.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"<専用アプリのAUD>","owner_email":"owner@example.com"}
+   {"hostname":"split.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"<専用アプリのAUD>","owner_email":"owner@example.com"}
    ```
 
 4. 認証なしでは OAuth のチャレンジとなること、別アプリの JWT では拒否されることを確認する。本人の OAuth で接続後、管理側から CPU/GPU の台数を読む。アプリの状態 API を定期照会すると CPU を起こすため、停止判定には使わない。
 5. CPU/GPU がともに0台の状態から、ツール一覧で0/0、実ノード照会で1/0を確認する。再び0/0になるのを待って、下記の検証ワークフローを1回投入。同じキーの再送でジョブは1件だけ、64×64 PNG の回収と停止を確認する。停止後の再取得は CPU だけを起こす。停止待ち設定30秒は実際の停止時刻の保証ではない。
-6. 切り戻しは専用ホストの Worker 割り当てを外してから `SPLIT_REMOTE_MCP` と専用 Access アプリを無効化する。既存のブラウザ用 Allow、stdio 用の Service Auth、Modal の Proxy Auth は維持する。
+6. MCP だけを切り戻す場合は `SPLIT_REMOTE_MCP` を外し、`/mcp` が Worker で拒否されることを確認してからパス専用の Access アプリを無効化する。共有ホストの Custom Domain と `SPLIT_UI_ORIGIN` は残す。既存のブラウザ用 Allow、stdio 用の Service Auth、Modal の Proxy Auth は維持する。
 
 **CPU 側の実測（2026-11-02）**: Modal の管理 API で CPU/GPU が 0/0 であることを確認後、デプロイした内部ツール経路から両ノードを照会した。準備完了まで63秒、照会後は1/0、アイドル後は0/0だった。もう一度0台から既存の64×64 PNGを取得し、起動中の応答を経てインライン画像が返った。これは本人用 OAuth を通す前の計測であり、ChatGPT からの生成結果とは区別する。
 
@@ -55,7 +57,7 @@ test -e .env.comfy-mcp || install -m 600 .env.comfy-mcp.example .env.comfy-mcp
 mise exec node@24.22.2 -- node mcp/client-config.mjs
 ```
 
-この stdio 構成はローカルプロセスを起動できるクライアント向け。リモートの MCP URL だけを受け付けるクライアントには、split の URL を登録できない。そこにあるのは ComfyUI の API で、MCP の HTTP エンドポイントではない。
+この stdio 構成はローカルプロセスを起動できるクライアント向け。リモートの MCP URL を使うクライアントには、ブラウザ用のルート URL ではなく同じホストの `/mcp` を登録する。
 
 **Claude Code**: リポジトリのルートで一度だけ次を実行する。[`--scope local`](https://code.claude.com/docs/en/mcp#local-scope) はこのユーザーのこのプロジェクトだけに適用される。
 
