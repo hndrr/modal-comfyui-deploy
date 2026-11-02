@@ -41,6 +41,8 @@ export interface Env {
   SPLIT_MCP_ACCESS?: string;
   /** Remote public hostname, dedicated audience, owner email, and existing split hostname. */
   SPLIT_REMOTE_MCP?: string;
+  /** Exact verified Azure storage hosts used by ChatGPT attachments, comma separated. */
+  SPLIT_ATTACHMENT_BLOB_HOSTS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -545,7 +547,7 @@ export default {
           // workerd supports manual/follow. callSplit rejects non-2xx responses;
           // never follow a Location with Modal credentials.
           return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"manual"}));
-        }, "https://" + cfg.split_hostname);
+        }, "https://" + cfg.split_hostname, env.SPLIT_ATTACHMENT_BLOB_HOSTS);
       }
     }
     if (mcpPath && splitUiHost) return textResponse("Not found.", 404);
