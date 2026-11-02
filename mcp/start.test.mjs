@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, copyFile, symlink, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +16,12 @@ test('split MCP exposes five tools and queries remote nodes with Access', async 
   await mkdir(mcp);
   await copyFile(new URL('../.node-version', import.meta.url), join(dir, '.node-version'));
   await copyFile(new URL('start.mjs', import.meta.url), join(mcp, 'start.mjs'));
+  await copyFile(new URL('client-config.mjs', import.meta.url), join(mcp, 'client-config.mjs'));
+  const config = JSON.parse(execFileSync(process.execPath, [join(mcp, 'client-config.mjs')], {
+    cwd: tmpdir(), encoding: 'utf8',
+  }));
+  const launch = config.mcpServers['comfyui-split'];
+  assert.deepEqual(Object.keys(launch).sort(), ['args', 'command']);
   await symlink(new URL('node_modules', import.meta.url), join(mcp, 'node_modules'));
   await writeFile(join(dir, '.env.comfy-mcp'),
     'COMFYUI_URL=https://split.example.com\nCF_ACCESS_CLIENT_ID=test.access\nCF_ACCESS_CLIENT_SECRET=fixture\n', { mode: 0o600 });
@@ -32,8 +39,8 @@ test('split MCP exposes five tools and queries remote nodes with Access', async 
     };
   `);
   const client = new Client({ name: 'split-test', version: '1' });
-  const transport = new StdioClientTransport({ command: process.execPath, args: ['--import',mock,join(mcp,'start.mjs')],
-    cwd: dir, stderr:'pipe', env: { PATH:process.env.PATH, COMFYUI_API_KEY:'must-not-enable-cloud' } });
+  const transport = new StdioClientTransport({ ...launch, args: ['--import', mock, ...launch.args],
+    cwd: tmpdir(), stderr:'pipe', env: { PATH:process.env.PATH, COMFYUI_API_KEY:'must-not-enable-cloud' } });
   t.after(() => client.close());
   await client.connect(transport);
   const names = (await client.listTools()).tools.map(x => x.name).sort();
