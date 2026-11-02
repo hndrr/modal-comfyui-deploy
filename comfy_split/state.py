@@ -119,6 +119,8 @@ class Journal:
             record = {"id": key, "number": job["number"], "status": job["status"]}
             if job.get("request_id"):
                 record.update(request_id=job["request_id"], body_digest=body_digest(job["body"]))
+                if "mcp_digest" in job:
+                    record["mcp_digest"] = job["mcp_digest"]
             self.data["retired_jobs"][key] = record
             del self.data["jobs"][key]
 

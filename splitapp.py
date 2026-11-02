@@ -184,9 +184,14 @@ def remote_mcp_image(base):
 
 
 # Apply the same deployment identity after all reusable CPU and GPU layers.
+billing_secret = os.environ.get("SPLIT_COMFY_BILLING_SECRET", "").strip()
+billing_label = os.environ.get("SPLIT_COMFY_BILLING_LABEL","").strip() or billing_secret
+billing_config = {"SPLIT_COMFY_BILLING_SECRET": billing_secret, "SPLIT_COMFY_BILLING_LABEL": billing_label}
 cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID,
+    **billing_config,
+    "SPLIT_COMFY_BILLING_ENABLED": "1" if billing_secret else "0",
     "SPLIT_IMAGE_NODE_NAMES": ",".join(repo.split("/")[-1] for repo in NODE_REVISIONS)})
-image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID, **billing_config})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 
@@ -207,7 +212,8 @@ import_model = app.function(image=model_image, min_containers=0, max_containers=
 @app.function(
     image=image,
     gpu=str(GPU_PROFILE["modal_gpu"]),
-    secrets=provider_secrets,
+    secrets=provider_secrets + ([modal.Secret.from_name(billing_secret, required_keys=["COMFY_API_KEY"])]
+                               if billing_secret else []),
     min_containers=0,
     max_containers=1,
     scaledown_window=30,

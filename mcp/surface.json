@@ -77,7 +77,7 @@
     {"actions":["status","assess","apply"],"mode":"deferred","note":"実行中のプロセスに最適化を適用する操作は split の宣言的なイメージと一致しない。"}
   ],
   "list_api_nodes": [
-    {"actions":["list","schema","generate"],"mode":"deferred","note":"外部 API の課金やキー選択をこの接続で自動化しない。"}
+    {"actions":["list","schema","generate"],"mode":"deferred","note":"上流の個別ツールは未提供。対応ノードは list_nodes・create_workflow で照会し、enqueue_workflow から本人の承認後に実行。"}
   ],
   "list_local_models": [
     {"actions":["list","embeddings","remove"],"mode":"split","note":"list_models は embeddings も対象。削除は inspect_model → remove_model。"},

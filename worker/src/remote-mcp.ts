@@ -1,3 +1,4 @@
+import {receiptLink} from "./job-review.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -71,15 +72,21 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
             : await getMedia("video", send, browserOrigin, videoSchema.parse(args));
         }
         const submit = name === "enqueue_workflow";
-        const r = await send(submit ? "/prompt" : "/_remote_mcp/call",{
+        const r = await send(submit ? "/_remote_mcp/submit" : "/_remote_mcp/call",{
           method:"POST",signal:AbortSignal.timeout(50_000),
-          headers: submit ? {"Idempotency-Key":"remote-mcp:"+args.request_id} : {"X-Split-Remote-Tool":"1"},
+          headers: submit ? {"X-Split-Remote-Tool":"1","Idempotency-Key":"remote-mcp:"+args.request_id} : {"X-Split-Remote-Tool":"1"},
           body:JSON.stringify(submit ? {prompt:args.workflow,client_id:"remote-mcp"} : {name,arguments:args}),
         });
         if (r.status === 409) return await rejected(r);
         if (!r.ok) return failure("Split tool returned HTTP "+r.status+
           (submit ? ". If retrying this submission, reuse the same request_id and workflow." : "."));
         if (submit) {
+          if (r.status===202) {
+            const pending=await r.json<{status:string;approval_path:string;expires_at:number}>();
+            return {content:[{type:"text",text:JSON.stringify({status:"approval_required",request_id:args.request_id,
+              approval_url:receiptLink(pending,browserOrigin),expires_at:pending.expires_at,
+              instructions:"Give this link to the owner. Do not open or approve it on their behalf. No job has started."})}]};
+          }
           const job = await r.json<{prompt_id:string;number:number}>();
           if (!job.prompt_id) throw new Error("Missing receipt");
           return {content:[{type:"text",text:JSON.stringify({request_id:args.request_id,prompt_id:job.prompt_id,number:job.number})}]};
@@ -128,9 +135,9 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:read,inputSchema:{action:z.enum(["node_info","create","modify","validate"]),node_type:z.string().optional(),
       template:z.string().optional(),params:graph.optional(),workflow:graph.optional(),operations:z.array(graph).optional(),
       health:z.boolean().optional(),verbose:z.boolean().optional(),refresh:z.boolean().optional(),raw:z.boolean().optional()}}, a=>callSplit(send,"create_workflow",a));
-  server.registerTool("enqueue_workflow",{description:"Generate once. Choose a unique request_id for each new render; preserve it and the identical graph across retries, disconnects and agents. Returns prompt_id.",
-    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
-    inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>callSplit(send,"enqueue_workflow",a));
+  server.registerTool("enqueue_workflow",{description:"Generate once. Choose a unique request_id for each new render; preserve it and the identical graph across retries, disconnects and agents. Local generation returns prompt_id immediately. External providers return an owner review URL; only the owner may approve sending the displayed data and incurring charges.",
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
+    inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>callSplit(send,"enqueue_workflow",a,browserOrigin));
   server.registerTool("queue",{description:"List jobs or check prompt_id status.",annotations:read,
     inputSchema:{action:z.enum(["list","status"]),prompt_id:z.string().optional()}},a=>callSplit(send,"queue",a));
   server.registerTool("get_history",{description:"Get job history, including the output filename and subfolder.",annotations:read,

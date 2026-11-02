@@ -1,3 +1,4 @@
+import {browserReview, receiptLink, serviceReadAllowed} from "./job-review.ts";
 import { splitGui } from "./split-guis.ts";
 import { remoteMcp } from "./remote-mcp.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
@@ -352,6 +353,7 @@ export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin:
   const headers = new Headers(request.headers);
   headers.delete("Host");
   headers.delete("X-Split-Remote-Tool");
+  headers.delete("X-Split-Browser-Review");
   for (const name of [...headers.keys()]) {
     if (name.toLowerCase().startsWith("cf-access-")) headers.delete(name);
   }
@@ -565,6 +567,34 @@ export default {
       return textResponse("Proxy is not configured for this hostname.", 500);
     }
 
+    if (/^\/mcp-approvals(?:\/|$)/.test(requestUrl.pathname)) {
+      let cfg;
+      try { cfg=JSON.parse(env.SPLIT_REMOTE_MCP || "{}"); } catch { return textResponse("Invalid MCP binding.",500); }
+      const owner=identity.kind==="browser" && !!identity.email && typeof cfg.owner_email==="string" &&
+        identity.email.toLowerCase()===cfg.owner_email.toLowerCase() && requestUrl.hostname===cfg.split_hostname &&
+        cfg.origin===modalOrigin && !!cfg.audience && cfg.audience!==env.POLICY_AUD.trim();
+      return browserReview(request,owner,modalOrigin,buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin));
+    }
+    if (identity.kind==="split-mcp") {
+      if (request.method==="POST" && /^\/(?:api\/)?prompt$/.test(requestUrl.pathname) && !requestUrl.search) {
+        const headers=buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin,true);
+        headers.set("Content-Type","application/json");
+        headers.set("X-Split-Remote-Tool","1");
+        headers.set("Idempotency-Key","stdio:"+crypto.randomUUID());
+        const r=await fetch(new Request(modalOrigin+"/_remote_mcp/submit",{
+          method:"POST",headers,body:request.body,...{duplex:"half"},redirect:"manual"}));
+        if (r.status!==202) return r;
+        try {
+          const url=receiptLink(await r.json(),requestUrl.origin);
+          return Response.json({error:{message:"Owner approval required. Open "+url+
+            ". Approval submits this job once; do not enqueue again."}},{status:409});
+        } catch {return textResponse("Invalid approval receipt.",502);}
+      }
+      if (request.method!=="GET" || !serviceReadAllowed(requestUrl.pathname) ||
+          (isWebSocketUpgrade(request) && !/^\/(?:api\/)?ws$/.test(requestUrl.pathname)))
+        return textResponse("Operation unavailable with MCP service credentials.",403);
+    }
+
     if (env.SPLIT_ADMIN_GUIS && env.SPLIT_UI_ORIGIN) {
       const gui = await splitGui(request, env.SPLIT_ADMIN_GUIS,
         parseOrigins(env.SPLIT_UI_ORIGIN).get(requestUrl.hostname) === modalOrigin, identity.email);
@@ -582,6 +612,7 @@ export default {
         method: request.method,
         headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity.kind === "split-mcp"),
         body: request.body,
+        ...(request.body ? {duplex:"half"} : {}),
         redirect: "manual",
       })
     );
