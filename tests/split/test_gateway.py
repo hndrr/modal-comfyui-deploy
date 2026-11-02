@@ -157,6 +157,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await cancel(running["id"]), (200, "cancel_requested"))
         self.commands.put.aio.assert_awaited_once_with({"type":"interrupt"}, partition=running["id"])
         self.assertEqual(await cancel(finished["id"]), (200,"completed"))
+        history = await (await self.client.get("/history/"+queued["id"])).json()
+        self.assertEqual(history[queued["id"]]["status"]["messages"][0][0], "execution_interrupted")
         self.assertEqual(finished["history"]["outputs"], {"file":"keep"})
         self.assertEqual(await cancel("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), (404,"not_found"))
         self.assertEqual(other["status"], "queued")
