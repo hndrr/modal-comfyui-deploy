@@ -1,7 +1,20 @@
 # ComfyUI 資産を管理する
 
+split ホストにブラウザでログインし、`/assets` を開くと入力・出力・モデルを管理できます。`/models` は Hugging Face からのモデル保存画面です。どちらも本人の Access ログインが必要です。操作するのは split と同じ環境の Volume です。GUI の閲覧は CPU だけを使い、split の ComfyUI や GPU は起動しません。
 
-`web/` の React + Hono アプリが、次の Modal Volume をローカル管理画面から操作します。
+**ホストへの設定**：既存の split と同じ Modal プロファイルを使い、以下を実行します。ホスト名は例です。
+
+```sh
+SPLIT_GUI_PUBLIC_ORIGIN=https://split.example.com scripts/modal.sh deploy split_guis.py
+```
+
+両方の Web 関数は Modal Proxy Auth が必須で、アイドル時の最小台数は 0 です。保存ジョブには既存の `huggingface-secret` が必要です。Worker の `SPLIT_ADMIN_GUIS` Secret に JSON で `hostname`（既存の `SPLIT_UI_ORIGIN` のホスト）、`owner_email`（許可する本人）、`models_origin`・`assets_origin`（各 web 関数の HTTPS origin）、`key`・`secret`（この Modal 環境の Proxy Auth）を登録して Worker をデプロイします。実際の値は Git に置きません。
+
+再確認は、本人のブラウザで保存フォームと資産一覧を開き、MCP のサービス認証では `/assets/_ui/api/volumes` が拒否されることを見ます。`/models` の JSON API、`/models/<folder>`、ComfyUI の `/assets/<bundle>` は従来どおりです。GUI だけを取り下げるには Worker の `SPLIT_ADMIN_GUIS` を削除し、GUI アプリを停止します。
+
+## 手元で起動する
+
+`web/` の React + Hono アプリは、ローカルでも同じ 3 つの Volume を操作できます。
 
 - `comfy-model`
 - `comfy-inputs`

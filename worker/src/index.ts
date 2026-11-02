@@ -1,3 +1,4 @@
+import { splitGui } from "./split-guis.ts";
 import { remoteMcp } from "./remote-mcp.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
@@ -32,6 +33,8 @@ export interface Env {
   MODAL_ADDITIONAL_ORIGINS?: string;
   /** Single split UI host -> origin; independent of MCP and other encrypted host maps. */
   SPLIT_UI_ORIGIN?: string;
+  /** Owner and fixed Modal origins for the two browser management pages. */
+  SPLIT_ADMIN_GUIS?: string;
   /** Modal origin -> { key, secret }; keep credentials for other workspaces intact. */
   MODAL_PROXY_CREDENTIALS?: string;
   /** Dedicated MCP service identity: { client_id, hostname, origin }. No client secret. */
@@ -267,7 +270,7 @@ function readAccessToken(request: Request): string | null {
  * ブラウザの利用者は Access のポリシーで制御する。サービス用トークンは
  * 同じ AUD の別ホストでも有効になり得るため、署名済みの Client ID と宛先を照合する。
  */
-async function authenticate(request: Request, env: Env): Promise<"browser" | "split-mcp" | null> {
+async function authenticate(request: Request, env: Env): Promise<{ kind: "browser" | "split-mcp"; email?: string } | null> {
   const token = readAccessToken(request);
   if (!token) {
     console.warn("Access token not found on request (neither header nor cookie)");
@@ -283,7 +286,7 @@ async function authenticate(request: Request, env: Env): Promise<"browser" | "sp
     });
     if (payload.type !== "app") return null;
     if (payload.common_name === undefined && typeof payload.sub === "string" && payload.sub.length > 0) {
-      return "browser";
+      return { kind: "browser", email: typeof payload.email === "string" ? payload.email : undefined };
     }
     if (payload.sub !== "" || typeof payload.common_name !== "string" || !payload.common_name ||
         !env.SPLIT_MCP_ACCESS) return null;
@@ -297,7 +300,7 @@ async function authenticate(request: Request, env: Env): Promise<"browser" | "sp
     const host = new URL(request.url).hostname;
     if (payload.common_name !== binding?.client_id || host !== binding?.hostname ||
         !binding.origin || resolveUpstreamOrigin(env, host) !== binding.origin) return null;
-    return "split-mcp";
+    return { kind: "split-mcp" };
   } catch (error) {
     // 失敗理由を残す。握り潰すと 403 の原因が追えなくなる。
     // トークン本体は出さない。
@@ -556,16 +559,22 @@ export default {
       return textResponse("Proxy is not configured for this hostname.", 500);
     }
 
+    if (env.SPLIT_ADMIN_GUIS && env.SPLIT_UI_ORIGIN) {
+      const gui = await splitGui(request, env.SPLIT_ADMIN_GUIS,
+        parseOrigins(env.SPLIT_UI_ORIGIN).get(requestUrl.hostname) === modalOrigin, identity.email);
+      if (gui) return gui;
+    }
+
     const upstreamUrl = upstreamUrlFor(requestUrl, modalOrigin);
 
     if (isWebSocketUpgrade(request)) {
-      return proxyWebSocket(request, env, upstreamUrl, identity === "split-mcp");
+      return proxyWebSocket(request, env, upstreamUrl, identity.kind === "split-mcp");
     }
 
     const upstream = await fetch(
       new Request(upstreamUrl, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity === "split-mcp"),
+        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity.kind === "split-mcp"),
         body: request.body,
         redirect: "manual",
       })

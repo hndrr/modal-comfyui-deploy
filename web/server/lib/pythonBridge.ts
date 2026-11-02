@@ -241,7 +241,8 @@ export class PythonAssetBridge {
         ),
         PYTHONUNBUFFERED: "1",
       };
-      const child = spawn("uv", ["run", "python", "asset_rpc.py"], {
+      const python = process.env.COMFY_ASSET_PYTHON;
+      const child = spawn(python || "uv", python ? ["asset_rpc.py"] : ["run", "python", "asset_rpc.py"], {
         cwd: REPO_ROOT,
         env,
         stdio: ["pipe", "pipe", "pipe"],
