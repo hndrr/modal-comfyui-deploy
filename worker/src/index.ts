@@ -31,6 +31,8 @@ export interface Env {
   MODAL_ADDITIONAL_ORIGINS?: string;
   /** Modal origin -> { key, secret }; keep credentials for other workspaces intact. */
   MODAL_PROXY_CREDENTIALS?: string;
+  /** Dedicated MCP service identity: { client_id, hostname, origin }. No client secret. */
+  SPLIT_MCP_ACCESS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -43,6 +45,7 @@ export interface Env {
 
 const ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
 const ACCESS_JWT_COOKIE = "CF_Authorization";
+const ACCESS_COOKIES = new Set([ACCESS_JWT_COOKIE, "CF_Binding", "CF_Session", "CF_AppSession", "CF_Device"]);
 
 const REQUIRED_CONFIG_KEYS = [
   "MODAL_ORIGINS",
@@ -248,30 +251,47 @@ function readAccessToken(request: Request): string | null {
  * 迂回を防ぐ責任はオリジン側、つまりこの Worker にある。workers_dev の設定漏れや
  * ルート誤設定があっても、ここで閉じられる。
  *
- * 許可メールアドレスの判定は Access のポリシー側に一本化しているので、
- * ここでは検証が通ったかどうかだけを見る。
+ * ブラウザの利用者は Access のポリシーで制御する。サービス用トークンは
+ * 同じ AUD の別ホストでも有効になり得るため、署名済みの Client ID と宛先を照合する。
  */
-async function isAuthenticated(request: Request, env: Env): Promise<boolean> {
+async function authenticate(request: Request, env: Env): Promise<"browser" | "split-mcp" | null> {
   const token = readAccessToken(request);
   if (!token) {
     console.warn("Access token not found on request (neither header nor cookie)");
-    return false;
+    return null;
   }
 
   const teamDomain = normalizeTeamDomain(env.TEAM_DOMAIN);
   try {
-    await jwtVerify(token, await getKeySet(teamDomain), {
+    const { payload } = await jwtVerify(token, await getKeySet(teamDomain), {
       issuer: teamDomain,
       audience: env.POLICY_AUD.trim(),
+      requiredClaims: ["exp", "type"],
     });
-    return true;
+    if (payload.type !== "app") return null;
+    if (payload.common_name === undefined && typeof payload.sub === "string" && payload.sub.length > 0) {
+      return "browser";
+    }
+    if (payload.sub !== "" || typeof payload.common_name !== "string" || !payload.common_name ||
+        !env.SPLIT_MCP_ACCESS) return null;
+    let binding;
+    try {
+      binding = JSON.parse(env.SPLIT_MCP_ACCESS);
+    } catch {
+      console.warn("Invalid SPLIT_MCP_ACCESS configuration");
+      return null;
+    }
+    const host = new URL(request.url).hostname;
+    if (payload.common_name !== binding?.client_id || host !== binding?.hostname ||
+        !binding.origin || resolveUpstreamOrigin(env, host) !== binding.origin) return null;
+    return "split-mcp";
   } catch (error) {
     // 失敗理由を残す。握り潰すと 403 の原因が追えなくなる。
     // トークン本体は出さない。
     console.warn(
       `Access token rejected: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
     );
-    return false;
+    return null;
   }
 }
 
@@ -310,10 +330,13 @@ function credentialOverrides(env: Env): Record<string, { key: string; secret: st
   return parsed as Record<string, { key: string; secret: string }>;
 }
 
-export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin: string): Headers {
+export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin: string, splitMcp = false): Headers {
   const headers = new Headers(request.headers);
   headers.delete("Host");
-  headers.delete(ACCESS_JWT_HEADER);
+  for (const name of [...headers.keys()]) {
+    if (name.toLowerCase().startsWith("cf-access-")) headers.delete(name);
+  }
+  if (splitMcp) headers.set("X-Modal-Execution-Mode", "split");
 
   // Access の JWT はクッキーにも入っている。ヘッダーだけ落としても
   // Cookie 経由で ComfyUI へ渡ってしまうため、そちらも取り除く。
@@ -332,7 +355,7 @@ export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin:
   return headers;
 }
 
-/** Cookie ヘッダーから CF_Authorization だけを取り除いて組み立て直す。 */
+/** Access 用の Cookie を除き、ComfyUI の Cookie を保持する。 */
 function stripAccessCookie(cookieHeader: string | null): string | null {
   if (!cookieHeader) {
     return null;
@@ -342,7 +365,7 @@ function stripAccessCookie(cookieHeader: string | null): string | null {
     .filter((pair) => {
       const separator = pair.indexOf("=");
       const name = (separator === -1 ? pair : pair.slice(0, separator)).trim();
-      return name !== ACCESS_JWT_COOKIE;
+      return !ACCESS_COOKIES.has(name);
     })
     .map((pair) => pair.trim())
     .filter((pair) => pair.length > 0);
@@ -370,9 +393,10 @@ function isWebSocketUpgrade(request: Request): boolean {
 async function proxyWebSocket(
   request: Request,
   env: Env,
-  upstreamUrl: URL
+  upstreamUrl: URL,
+  splitMcp: boolean
 ): Promise<Response> {
-  const headers = buildUpstreamHeaders(request, env, upstreamUrl.origin);
+  const headers = buildUpstreamHeaders(request, env, upstreamUrl.origin, splitMcp);
 
   // ブラウザのハンドシェイク用ヘッダーは上流へ持ち越さない。
   //
@@ -469,7 +493,8 @@ export default {
       return textResponse("Proxy is not configured.", 500);
     }
 
-    if (!(await isAuthenticated(request, env))) {
+    const identity = await authenticate(request, env);
+    if (!identity) {
       return textResponse("Cloudflare Access authentication required.", 403);
     }
 
@@ -486,13 +511,13 @@ export default {
     const upstreamUrl = upstreamUrlFor(requestUrl, modalOrigin);
 
     if (isWebSocketUpgrade(request)) {
-      return proxyWebSocket(request, env, upstreamUrl);
+      return proxyWebSocket(request, env, upstreamUrl, identity === "split-mcp");
     }
 
     const upstream = await fetch(
       new Request(upstreamUrl, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin),
+        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity === "split-mcp"),
         body: request.body,
         redirect: "manual",
       })

@@ -105,7 +105,7 @@ cp .dev.vars.example .dev.vars
 | `npm run deploy` | Cloudflare へデプロイする（`wrangler deploy`） |
 | `npm run tail` | 本番の Worker のログを追う（`wrangler tail`） |
 | `npm run typecheck` | 型チェック（`tsc --noEmit`） |
-| `npm test` | 追加ホストの分離と認証必須の回帰テスト（Node.js 22以降） |
+| `npm test` | 追加ホストの分離と認証必須の回帰テスト（Node.js 24.22.2） |
 
 ## セットアップ手順
 

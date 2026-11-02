@@ -16,6 +16,7 @@ from comfy_split.config import Settings, DEPLOYMENT_ENV
 from comfy_split.extension_sources import enabled_sources
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
+    DEFAULT_COMFYUI_REVISION,
     FLASH_ATTN_WHEEL_URL,
     FUNCTION_TIMEOUT,
     GPU_PROFILE,
@@ -44,8 +45,8 @@ if settings.node_packs or enabled_sources(settings):
                                                 required_keys=[node_packs.TOKEN_ENV])
     if settings.node_packs:
         github_secrets = [github_build_secret]
-COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
-FRONTEND_VERSION = "1.52.7"  # Version required by this ComfyUI revision.
+COMFY_REVISION = DEFAULT_COMFYUI_REVISION
+FRONTEND_VERSION = "1.57.4"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
 NODE_REVISIONS = {
     "crystian/ComfyUI-Crystools": "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
