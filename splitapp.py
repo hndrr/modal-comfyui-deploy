@@ -16,7 +16,6 @@ from comfy_split.config import Settings, DEPLOYMENT_ENV
 from comfy_split.extension_sources import enabled_sources
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
-    DEFAULT_COMFYUI_REVISION,
     FLASH_ATTN_WHEEL_URL,
     FUNCTION_TIMEOUT,
     GPU_PROFILE,
@@ -45,7 +44,7 @@ if settings.node_packs or enabled_sources(settings):
                                                 required_keys=[node_packs.TOKEN_ENV])
     if settings.node_packs:
         github_secrets = [github_build_secret]
-COMFY_REVISION = DEFAULT_COMFYUI_REVISION
+COMFY_REVISION = "426f5eea52a7ece1dd599fff4cb6cd1f352ddd24"  # split: ComfyUI v0.43.0
 FRONTEND_VERSION = "1.57.4"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
 NODE_REVISIONS = {

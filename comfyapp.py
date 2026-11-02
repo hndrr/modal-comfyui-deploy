@@ -433,20 +433,21 @@ NODES = [
     "https://github.com/rgthree/rgthree-comfy",
 ]
 
-# ComfyUI v0.43.0. The split image always uses this release.
-DEFAULT_COMFYUI_REVISION = "426f5eea52a7ece1dd599fff4cb6cd1f352ddd24"
-COMFYUI_REVISION = os.environ.get("COMFYUI_REVISION", "").strip() or DEFAULT_COMFYUI_REVISION
-if len(COMFYUI_REVISION) != 40 or any(c not in "0123456789abcdef" for c in COMFYUI_REVISION):
+# Optional exact ComfyUI pin. Unset preserves the existing install workflow.
+COMFYUI_REVISION = os.environ.get("COMFYUI_REVISION", "").strip()
+if COMFYUI_REVISION and (len(COMFYUI_REVISION) != 40 or any(c not in "0123456789abcdef" for c in COMFYUI_REVISION)):
     raise ValueError("COMFYUI_REVISION must be a full lowercase Git commit SHA")
-COMFYUI_PIN_COMMANDS = [
-    "python -c " + shlex.quote(
-        "from pathlib import Path; import subprocess; "
-        "root=next(p for p in [Path('/root/comfy/ComfyUI'),Path('/root/ComfyUI'),Path('/root/.cache/comfyui/ComfyUI')] if (p/'.git').exists()); "
-        f"subprocess.run(['git','-C',str(root),'fetch','origin','{COMFYUI_REVISION}'],check=True); "
-        f"subprocess.run(['git','-C',str(root),'checkout','--detach','{COMFYUI_REVISION}'],check=True); "
-        "subprocess.run(['python','-m','pip','install','-r',str(root/'requirements.txt')],check=True)"
-    )
-]
+COMFYUI_PIN_COMMANDS = []
+if COMFYUI_REVISION:
+    COMFYUI_PIN_COMMANDS = [
+        "python -c " + shlex.quote(
+            "from pathlib import Path; import subprocess; "
+            "root=next(p for p in [Path('/root/comfy/ComfyUI'),Path('/root/ComfyUI'),Path('/root/.cache/comfyui/ComfyUI')] if (p/'.git').exists()); "
+            f"subprocess.run(['git','-C',str(root),'fetch','origin','{COMFYUI_REVISION}'],check=True); "
+            f"subprocess.run(['git','-C',str(root),'checkout','--detach','{COMFYUI_REVISION}'],check=True); "
+            "subprocess.run(['python','-m','pip','install','-r',str(root/'requirements.txt')],check=True)"
+        )
+    ]
 
 # イメージファイルの作成
 base_image = (
