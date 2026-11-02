@@ -48,6 +48,10 @@ ChatGPT 添付が Azure Blob から配信される場合、管理者は ChatGPT 
 
 - 「この `prompt_id` のジョブだけ取り消して」で `cancel_job` を使う。待機中なら `cancelled`、割り込みを送った場合は `cancel_requested` が返る。後者はまだ停止完了ではないので `queue` で確認する。完了済みのジョブの出力は残る。
 
+実行状況は `get_job_progress(prompt_id)` で1回ずつ取得できる。ComfyUI が通知したノードとそのノード内の進捗（`value/max`）を返す。未通知のステップ数や残り時間を推定しない。`elapsed_seconds` は受付からの経過時間、`execution_seconds` は ComfyUI の開始・終了イベントの差、`worker_seconds` は GPU ワーカー内で準備・出力保存を含めた処理時間。記録がなければ `null`。失敗したノードと例外の要約も返し、詳細は既存の `get_history(action="diagnose", prompt_id=…)` で取得する。
+
+`list_models()` は split の ComfyUI が認識するモデルカテゴリ、`list_models(category="checkpoints")` はそのカテゴリのファイル名を返す。`query` で部分一致検索、`next_offset` で次ページを取得できる。
+
 ### HTTPS MCP の各ツールはどこで動くか
 
 | 操作 | 実装 |
@@ -55,6 +59,7 @@ ChatGPT 添付が Azure Blob から配信される場合、管理者は ChatGPT 
 | 初期化・ツール一覧 | Worker のみ。Modal は起動しない |
 | `create_workflow`・`get_workflow`・`queue`・`get_history`・`get_image` | Worker → split CPU → 固定版 artokun の stdio サーバー。CPU は呼び出しごとにプロセスを起動する |
 | `upload_media`・`cancel_job` | Worker → split CPU の入力 Volume またはジョブ台帳。新しい GPU は起動しない |
+| `get_job_progress`・`list_models` | Worker → split CPU のジョブ台帳または ComfyUI のモデル一覧 API。照会だけで GPU は起動しない |
 | `enqueue_workflow` | Worker → split の `/prompt`。受付を重複させないために `request_id` を使う。生成は GPU が実行する |
 | `get_video`・`get_audio` | Worker → split CPU の `/history/<prompt_id>` と `/view`。既存の出力を読むだけで GPU は不要 |
 

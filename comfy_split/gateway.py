@@ -21,6 +21,7 @@ from comfy_split.extensions import load_extensions, check_requirements, reserved
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
+from comfy_split import job_progress
 from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
@@ -396,6 +397,8 @@ class Controller:
         elif event["type"] in {"event", "preview"}:
             data = event.get("event", event.get("data"))
             kind = data.get("type") if isinstance(data, dict) else None
+            if kind:
+                job_progress.observe(record, kind, data.get("data"))
             # Terminal notifications are reconstructed from durable history
             # in finish(), after output reload and journal persistence.
             if kind in {"execution_success", "execution_error", "execution_interrupted"}:
@@ -814,7 +817,7 @@ class Controller:
             if path == "/_remote_mcp/call":
                 from comfy_split.remote_mcp import call
                 return await call(request, mode=self.journal.data["mode"])
-            if path in {"/_remote_mcp/media", "/_remote_mcp/cancel"}:
+            if path in {"/_remote_mcp/media", "/_remote_mcp/cancel", "/_remote_mcp/progress"}:
                 from comfy_split.remote_mcp import authorize
                 authorize(request, self.journal.data["mode"])
                 if path.endswith("/media"):
@@ -824,6 +827,11 @@ class Controller:
                 if not isinstance(body, dict) or not isinstance(body.get("prompt_id"), str):
                     raise web.HTTPBadRequest(text="Expected a prompt_id")
                 job_id = str(uuid.UUID(body["prompt_id"]))
+                if path.endswith("/progress"):
+                    job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
+                    if job is None:
+                        return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
+                    return web.json_response(job_progress.snapshot(job))
                 async with self.lock:
                     job = self.journal.data["jobs"].get(job_id)
                     if job is None:
