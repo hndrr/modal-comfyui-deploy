@@ -82,3 +82,9 @@ codex mcp get comfyui-split
 特定のクライアントだけを外す場合は、そのクライアントの登録だけを削除する。Claude Code はこのプロジェクトで `claude mcp remove --scope local comfyui-split`、Codex はこのチェックアウトの `.codex/config.toml` から `[mcp_servers.comfyui-split]` を削除する。ほかのクライアントで使う間は、専用トークンと `.env.comfy-mcp` を残す。
 
 すべてのクライアントの接続を終了するときは、Access で専用トークンを失効し、その Service Auth ポリシーだけをアプリから外す。Worker の `SPLIT_MCP_ACCESS` を削除して専用 JWT の転送も閉じる。既存のブラウザ用 Allow と Modal の Proxy Auth は維持する。元の Worker に戻す必要があれば、この順序で機械用の許可を外してから以前の Worker バージョンに戻す。ローカルの登録と専用の認証ファイルも削除する。ComfyUI 自体を戻すときは、`scripts/modal.sh app history comfyui-split` で更新前のバージョンを確認し、`scripts/modal.sh app rollback comfyui-split <バージョン>` で戻す。既存の Volume を削除する必要はない。
+
+### モデルの取得元と上流版の更新
+
+公開モデルの取得に追加設定は不要です。非公開・アクセス制限付きモデルを使う場合だけ、読み取り用の `HF_TOKEN` を Modal Secret に登録し、デプロイ時に `SPLIT_MODEL_HF_SECRET` でその Secret 名を指定します。ダウンロード専用の CPU 関数だけに渡されます。
+
+上流を更新する場合は `mcp/package.json` とロックファイルを更新し、`mcp/surface.json` で増減したアクションの扱いを決めます。`node mcp/surface-doc.mjs` で[対応表](split-mcp-tools.md)を更新し、`npm --prefix mcp test` で実パッケージの登録スキーマと照合してください。
