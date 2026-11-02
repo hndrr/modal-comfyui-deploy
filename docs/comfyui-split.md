@@ -30,7 +30,7 @@ GPUは生成、明示的な環境検証、常時起動モードで使用する�
 
 ComfyUI 本体は、デプロイ時に [公式の最新安定リリース](https://github.com/Comfy-Org/ComfyUI/releases/latest) のタグをコミット SHA に解決します。CPU と GPU はその SHA の共通イメージを使い、アイドル停止からの復帰時には再取得しません。フロントエンドはそのリリースの `requirements.txt` に従います。
 
-PyTorch、torchvision、torchaudio、xFormers、FlashAttention、SageAttention はベースイメージの wheel の版を維持します。ComfyUI やカスタムノードの依存関係がこれらと衝突する場合、またはリリースを取得できない場合はデプロイが失敗し、稼働中のデプロイはそのまま残ります。
+GPU 用の wheel と、それらがこの環境で必要とする依存パッケージは、ベースイメージにインストールされた版を維持します。wheel のメタデータから依存をたどるので、PyTorch・SageAttention に加え、Triton や cuDNN なども対象になります。ComfyUI やカスタムノードの依存関係がこれらと衝突する場合、またはリリースを取得できない場合はデプロイが失敗し、稼働中のデプロイはそのまま残ります。
 
 `SPLIT_NODE_PACKS`で選択したノードは、デプロイ後の最初のアイドル状態でのCPU起動時に更新を確認します。カタログに`revision`があれば固定コミット、なければ配布元の既定ブランチのHEADを使います。
 変更があれば候補環境で依存とCPUでの読み込みを検査してから採用します。この自動更新ではGPUを起動しません。失敗時は更新前の有効環境を使い、再試行条件は[取得と更新](split-integrations.md#取得と更新)に従います。CPU/GPUはジョブに固定した同じ環境版を使います。

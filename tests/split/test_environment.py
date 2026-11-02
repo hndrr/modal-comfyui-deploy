@@ -4,20 +4,37 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from comfy_split import runtime
-from comfy_split.build_constraints import build_constraints
+from comfy_split.build_constraints import build_constraints, wheel_pins, wheel_roots
 from comfy_split.check_environment import check_core_requirements, check_pins
 
 
 class EnvironmentTests(unittest.TestCase):
-    def test_upstream_frontend_changes_but_cannot_redefine_accelerator_versions(self):
-        wheels = {"torch": "2.10.0+cu130", "torchvision": "0.25.0+cu130", "torchaudio": "2.10.0+cu130",
-                  "xformers": "0.0.34", "flash-attn": "2.8.3+cu130torch2.10", "sageattention": "2.2.0"}
-        for frontend in ("1.57.4", "2.0"):
-            requirements = f"torch>=2.11\ncomfyui-frontend-package=={frontend}\ncomfy-kitchen==1.0"
-            constraints = build_constraints(requirements, "4.2.2", wheels.__getitem__)
-            self.assertEqual(set(constraints), {*(f"{name}=={ver}" for name, ver in wheels.items()),
-                                                f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
-                                                "comfyui-manager==4.2.2"})
+    def test_discovers_new_remote_and_local_wheels_without_a_package_list(self):
+        def installed(name, origin):
+            return Mock(metadata={"Name": name}, read_text=Mock(return_value=origin))
+        packages = [
+            installed("remote", '{"url":"https://example.invalid/kernel.whl#sha256=abc"}'),
+            installed("local", '{"url":"file:///opt/wheels/another.whl"}'),
+            installed("ordinary", None), installed("source", '{"url":"file:///src/pkg","dir_info":{}}'),
+        ]
+        with patch("comfy_split.build_constraints.distributions", return_value=packages):
+            self.assertEqual(set(wheel_roots()), {"remote", "local"})
+
+    def test_base_wheels_protect_transitive_runtime_and_requested_extras(self):
+        base = {"new-kernel": Mock(version="1", requires=["torch", "cuda[driver]", "uninstalled; python_version<'3'"]),
+                "torch": Mock(version="2.10.0+cu130", requires=["triton", "cuda"]),
+                "cuda": Mock(version="13", requires=["nv-lib; extra=='driver'", "optional; extra=='dev'"]),
+                "nv-lib": Mock(version="13.1", requires=[]), "triton": Mock(version="3", requires=["torch"])}
+        pins = wheel_pins(["new_kernel"], base.__getitem__)
+        self.assertEqual(set(pins), {"new-kernel==1", "torch==2.10.0+cu130", "cuda==13", "nv-lib==13.1", "triton==3"})
+        with self.assertRaisesRegex(RuntimeError, "wheel origins"):
+            wheel_pins([])
+        with patch("comfy_split.build_constraints.wheel_pins", return_value=pins):
+            for frontend in ("1.57.4", "2.0"):
+                requirements = f"torch>=2.11\ncomfyui-frontend-package=={frontend}\ncomfy-kitchen==1.0"
+                self.assertEqual(set(build_constraints(requirements, "4.2.2")),
+                                 {*pins, f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
+                                  "comfyui-manager==4.2.2"})
 
     def test_core_upgrade_rejects_a_stale_frontend_even_if_internal_constraints_match(self):
         requirements = "comfyui-frontend-package==1.57.4\ncomfy-kitchen==1.0"
