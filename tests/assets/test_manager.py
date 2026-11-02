@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +12,7 @@ from asset_manager import (
     MODEL_VOLUME,
     OUTPUT_VOLUME,
     AssetManager,
+    _default_cross_volume_mover,
     classify_media,
     normalize_volume_path,
 )
@@ -67,6 +70,25 @@ class FakeVolume:
 
 def entry(path: str, kind: int = 1, size: int = 10, mtime: int = 1_700_000_000):
     return SimpleNamespace(path=path, type=kind, size=size, mtime=mtime)
+
+
+class HostedMoveTests(unittest.TestCase):
+    def test_failed_destination_commit_preserves_source_and_symlinks_cannot_escape(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"COMFY_ASSET_MOUNT_ROOT": temp}):
+            src, dst = (Path(temp) / name for name in (INPUT_VOLUME, OUTPUT_VOLUME))
+            src.mkdir()
+            dst.mkdir()
+            (src / "a").write_bytes(b"asset")
+            handle = MagicMock()
+            handle.commit.side_effect = RuntimeError("commit failed")
+            with patch("asset_manager.modal.Volume.from_name", return_value=handle):
+                with self.assertRaisesRegex(RuntimeError, "commit failed"):
+                    _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "b", False)
+                self.assertEqual((src / "a").read_bytes(), b"asset")
+                (dst / "outside").symlink_to(src, target_is_directory=True)
+                with self.assertRaisesRegex(ValueError, "symlink"):
+                    _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "outside/a", True)
+                self.assertEqual((src / "a").read_bytes(), b"asset")
 
 
 class AssetManagerValidationTests(unittest.TestCase):

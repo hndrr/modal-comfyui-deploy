@@ -6,6 +6,8 @@ import type {
   VolumeInfo,
 } from "../types";
 
+const API = import.meta.env.BASE_URL + "api";
+
 async function parseError(response: Response): Promise<string> {
   try {
     const data = (await response.json()) as { detail?: string };
@@ -16,13 +18,13 @@ async function parseError(response: Response): Promise<string> {
 }
 
 export async function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
-  const response = await fetch("/api/health", { signal });
+  const response = await fetch(`${API}/health`, { signal });
   if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }
 
 export async function fetchVolumes(signal?: AbortSignal): Promise<VolumeInfo[]> {
-  const response = await fetch("/api/volumes", { signal });
+  const response = await fetch(`${API}/volumes`, { signal });
   if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }
@@ -49,7 +51,7 @@ export async function fetchAssets(
   if (params.pageSize) query.set("page_size", String(params.pageSize));
   if (params.refresh) query.set("refresh", "1");
 
-  const response = await fetch(`/api/assets?${query}`, {
+  const response = await fetch(`${API}/assets?${query}`, {
     signal,
     cache: "no-store",
   });
@@ -72,7 +74,7 @@ export function thumbnailUrl(
   if (meta?.size != null) query.set("size", String(meta.size));
   if (meta?.modified_at) query.set("modified_at", meta.modified_at);
   if (meta?.media_type) query.set("media_type", meta.media_type);
-  return `/api/assets/thumbnail?${query}`;
+  return `${API}/assets/thumbnail?${query}`;
 }
 
 export function contentUrl(
@@ -94,7 +96,7 @@ export function contentUrl(
   if (meta?.size != null) query.set("size", String(meta.size));
   if (meta?.modified_at) query.set("modified_at", meta.modified_at);
   if (meta?.media_type) query.set("media_type", meta.media_type);
-  return `/api/assets/content?${query}`;
+  return `${API}/assets/content?${query}`;
 }
 
 export async function uploadFiles(params: {
@@ -110,7 +112,7 @@ export async function uploadFiles(params: {
   for (const file of params.files) {
     body.append("files", file);
   }
-  const response = await fetch("/api/assets/upload", { method: "POST", body });
+  const response = await fetch(`${API}/assets/upload`, { method: "POST", body });
   if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }
@@ -122,7 +124,7 @@ export async function moveAsset(params: {
   destination_path: string;
   overwrite: boolean;
 }): Promise<{ message: string; paths: string[] }> {
-  const response = await fetch("/api/assets/move", {
+  const response = await fetch(`${API}/assets/move`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -135,7 +137,7 @@ export async function createDirectory(params: {
   volume: string;
   path: string;
 }): Promise<{ message: string; path: string; paths: string[] }> {
-  const response = await fetch("/api/assets/mkdir", {
+  const response = await fetch(`${API}/assets/mkdir`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -153,7 +155,7 @@ export async function deleteAsset(params: {
   paths: string[];
   failed?: { path: string; error: string }[];
 }> {
-  const response = await fetch("/api/assets", {
+  const response = await fetch(`${API}/assets`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -182,7 +184,7 @@ export async function deleteAssets(params: {
   failed_count?: number;
   total?: number;
 }> {
-  const response = await fetch("/api/assets", {
+  const response = await fetch(`${API}/assets`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
