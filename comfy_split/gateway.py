@@ -150,6 +150,8 @@ class Controller:
                     state = await response.json()
                 needed = bool(state["is_processing"] or state.get("pending_count", 0))
                 if not needed and self.cpu_pinned:
+                    from comfy_split.split_admin import refresh_nodes
+                    await refresh_nodes(self, state)
                     await self.volumes["environment"].commit.aio()
         await self.pin_cpu(needed)
 
@@ -703,6 +705,8 @@ class Controller:
             await self.volumes["environment"].commit.aio()
             await self.cpu.start(version, cpu=True)
             async with self.lock:
+                from comfy_split.split_admin import settle_apply
+                settle_apply(self, version, True)
                 self.journal.data.update(environment=version, candidate=None, session=None)
                 await self.persist()
                 self.cleanup_due = 0
@@ -710,6 +714,8 @@ class Controller:
         except Exception as error:
             log.exception("Environment validation failed")
             async with self.lock:
+                from comfy_split.split_admin import settle_apply
+                settle_apply(self, candidate["version"], False)
                 candidate["status"] = "failed"
                 candidate["error"] = str(error)
                 # Clear session to allow discard to proceed. Send interrupt command
@@ -814,6 +820,9 @@ class Controller:
                 async with self.lock:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
+            if path == "/_remote_mcp/operations":
+                from comfy_split.remote_mcp import operations
+                return await operations(self, request)
             if path == "/_remote_mcp/call":
                 from comfy_split.remote_mcp import call
                 return await call(request, mode=self.journal.data["mode"])

@@ -1,0 +1,146 @@
+{
+  "apply_manifest": [
+    {"actions":["(call)"],"mode":"deferred","note":"複数依存の一括変更は候補とモデル単位の確認を迂回する。"}
+  ],
+  "apps": [
+    {"actions":["list","get","run","run_status","import"],"mode":"deferred","note":"上流アプリ保管庫・実行台帳は共有していない。"}
+  ],
+  "batch": [
+    {"actions":["submit","status","output","wait"],"mode":"deferred","note":"永続バッチ台帳は未実装。個々のジョブは ID で追跡できる。"}
+  ],
+  "bisect": [
+    {"actions":["start","good","bad","reset","status"],"mode":"deferred","note":"再起動を伴うノード二分探索のセッション管理は未対応。"}
+  ],
+  "calculate": [
+    {"actions":["(call)"],"mode":"direct","note":"解像度・シードなどの式を計算する。"}
+  ],
+  "call_tool": [
+    {"actions":["(call)"],"mode":"deferred","note":"汎用ディスパッチによる非公開操作の迂回を許可しない。"}
+  ],
+  "clear_vram": [
+    {"actions":["(call)"],"mode":"deferred","note":"全ジョブに影響する。GPU はジョブ終了後に縮退。"}
+  ],
+  "comfy_cli": [
+    {"actions":["status"],"mode":"split","note":"get_split_status で active と candidate を確認。"},
+    {"actions":["jobs_list","jobs_status","jobs_wait","jobs_watch","jobs_cancel"],"mode":"split","note":"queue、get_job_progress、cancel_job。待機はクライアントが同じ ID で再照会。"},
+    {"actions":["search_nodes","workflow_validate","workflow_run"],"mode":"split","note":"list_nodes、create_workflow(validate)、enqueue_workflow。"},
+    {"actions":["transfer_upload","transfer_download"],"mode":"split","note":"upload_media と get_image／get_audio／get_video。"},
+    {"actions":["models_list_folders","models_list_folder","models_search","models_show","models_download","models_remove"],"mode":"split","note":"list_models、inspect_model、add_model、remove_model。追加は Hugging Face の単一ファイル。"},
+    {"actions":["server_start","server_stop","server_restart","skills_list","skills_show","skills_validate","skills_install","skills_status","skills_uninstall"],"mode":"deferred","note":"サーバーは Modal が管理。クライアントのローカル設定やスキルは変更しない。"}
+  ],
+  "create_workflow": [
+    {"actions":["create","modify","validate","node_info"],"mode":"direct","note":"同名ツールを使用。"}
+  ],
+  "describe_tool": [
+    {"actions":["(call)"],"mode":"split","note":"MCP の tools/list が実際に公開する入力スキーマを返す。"}
+  ],
+  "download_model": [
+    {"actions":["download","status"],"mode":"split","note":"add_model と get_admin_operation。任意 URL は受け付けない。"},
+    {"actions":["cancel","search","search_civitai","search_creators","download_civitai","resolve_missing"],"mode":"deferred","note":"ダウンロード中止・カタログ横断検索・不足モデルの自動選定は未対応。"}
+  ],
+  "enqueue_workflow": [
+    {"actions":["enqueue","rerun"],"mode":"split","note":"enqueue_workflow で一意の ID を指定。再生成は get_job_workflow → 編集 → 新しい ID で投入。"},
+    {"actions":["run_url","template_schema","run_template"],"mode":"deferred","note":"外部 URL や上流テンプレートの直接実行経路は未接続。保存グラフは投入できる。"}
+  ],
+  "generate_image": [
+    {"actions":["image","audio","video","3d","controlnet","ip_adapter","regenerate","upscale","remove_background"],"mode":"split","note":"該当ノード・モデルを持つグラフを明示的に enqueue_workflow。上流のワンクリック自動構築や有料プロバイダーの選択は含まない。"}
+  ],
+  "get_defaults": [
+    {"actions":["get","set","get_ui","set_ui"],"mode":"deferred","note":"上流のローカル設定／UI の個人設定はクライアント間で暗黙共有しない。"}
+  ],
+  "get_history": [
+    {"actions":["list","diagnose"],"mode":"direct","note":"同名ツールを使用。"},
+    {"actions":["stats","suggest"],"mode":"deferred","note":"上流の一時的なプロセス内の生成履歴 DB は split の永続ジョブ台帳とは異なる。"}
+  ],
+  "get_image": [
+    {"actions":["get"],"mode":"direct","note":"共有 output の画像をインラインで返す。"},
+    {"actions":["list_outputs","list_assets","asset_metadata"],"mode":"split","note":"list_outputs は prompt_id 単位、list_inputs は入力置き場、inspect_media は寸法・音声など。上流の asset ID は使わない。"},
+    {"actions":["view","convert","analyze_color"],"mode":"deferred","note":"任意パスの閲覧・形式変換・色解析は公開していない。取得は get_image。"}
+  ],
+  "get_system_stats": [
+    {"actions":["stats","health"],"mode":"split","note":"get_split_status は実際の GPU 台数と処理状態を返す。ハードウェア全項目を返すものではない。"},
+    {"actions":["logs"],"mode":"deferred","note":"CPU/GPU の運用ログは Modal 側。ジョブの失敗は get_history(diagnose)。"}
+  ],
+  "get_workflow": [
+    {"actions":["list","get","analyze","query","slice","strip"],"mode":"direct","note":"保存ライブラリ内の相対名に限定。"},
+    {"actions":["from_image","prompt_director"],"mode":"deferred","note":"画像内のグラフ抽出・プロンプト指示の抽出は未対応。既知の生成 ID は get_job_workflow。"}
+  ],
+  "install_comfyui": [
+    {"actions":["environment"],"mode":"split","note":"get_split_status で実際の環境を照会。"},
+    {"actions":["install","update","update_all","panel","self_update","configure_manager"],"mode":"deferred","note":"基盤イメージ・MCP・Manager の設定はデプロイで変更する。"}
+  ],
+  "install_custom_node": [
+    {"actions":["install","update"],"mode":"split","note":"change_node を候補コピーだけに実行。"},
+    {"actions":["reinstall","fix","uninstall","enable","disable","list","sync_deps"],"mode":"deferred","note":"パック一覧・削除・有効化・依存同期はこの版では Manager GUI。list_nodes はパックではなくノードクラス。"}
+  ],
+  "kitchen": [
+    {"actions":["status","assess","apply"],"mode":"deferred","note":"実行中のプロセスに最適化を適用する操作は split の宣言的なイメージと一致しない。"}
+  ],
+  "list_api_nodes": [
+    {"actions":["list","schema","generate"],"mode":"deferred","note":"外部 API の課金やキー選択をこの接続で自動化しない。"}
+  ],
+  "list_local_models": [
+    {"actions":["list","embeddings","remove"],"mode":"split","note":"list_models は embeddings も対象。削除は inspect_model → remove_model。"},
+    {"actions":["list_paths","add_path","remove_path"],"mode":"deferred","note":"ローダーの検索パスはデプロイ設定で管理する。"}
+  ],
+  "list_packs": [
+    {"actions":["list","read_workflow","read_manifest","list_templates","check_runtime","extract_deps","install_deps","skill_list","skill_read","generate_skill"],"mode":"deferred","note":"上流のローカルパック保管庫を共有 Volume としては構成していない。"}
+  ],
+  "list_tools": [
+    {"actions":["(call)"],"mode":"split","note":"MCP の tools/list が実際に公開する入力スキーマを返す。"}
+  ],
+  "model_metadata": [
+    {"actions":["read"],"mode":"split","note":"inspect_model は共有ファイルのサイズと変更検出トークン。埋め込みメタデータの解析は未対応。"},
+    {"actions":["propose","fetch_civitai"],"mode":"deferred","note":"外部情報の取得・タグ提案は未対応。"}
+  ],
+  "node_pack": [
+    {"actions":["scaffold","verify","publish","list_files","read","search","write","patch","git"],"mode":"deferred","note":"ソースの編集・公開は開発用リポジトリで行う。"}
+  ],
+  "node_snapshot": [
+    {"actions":["save","restore"],"mode":"split","note":"prepare_environment、apply_environment、discard_environment は候補コピーの作成・検証・破棄。過去バージョン全般の復元ではない。"},
+    {"actions":["list"],"mode":"deferred","note":"上流スナップショット一覧は split の環境台帳ではない。"}
+  ],
+  "queue": [
+    {"actions":["list","status"],"mode":"direct","note":"同名ツールを使用。"},
+    {"actions":["get_workflow","cancel","cancel_queued"],"mode":"split","note":"get_job_workflow、cancel_job で1件を指定。"},
+    {"actions":["move","edit","clear"],"mode":"deferred","note":"予約済みのグラフ・順番は変更しない。全消去は他ジョブに影響する。"}
+  ],
+  "report_issue": [
+    {"actions":["(call)"],"mode":"deferred","note":"外部への課題投稿を制作接続には含めない。"}
+  ],
+  "restart_comfyui": [
+    {"actions":["restart","start","stop"],"mode":"deferred","note":"コンテナ起動は Modal が管理。環境切替は apply_environment。"}
+  ],
+  "runpod": [
+    {"actions":["create","start","stop","status","list","connect","use_local","deploy_link"],"mode":"deferred","note":"別プロバイダー。Modal の管理と認証を共有しない。"}
+  ],
+  "runpod_watch": [
+    {"actions":["watch","unwatch","troubleshoot"],"mode":"deferred","note":"別プロバイダーの監視。"}
+  ],
+  "save_workflow": [
+    {"actions":["save"],"mode":"direct","note":"新規名のみ。既存ワークフローは上書きしない。"},
+    {"actions":["lock","verify_lock"],"mode":"deferred","note":"上流ロックファイルの永続化・依存解決をまだ扱わない。"}
+  ],
+  "search_custom_nodes": [
+    {"actions":["search","details"],"mode":"direct","note":"公開レジストリでパック ID とリリースを調べる。インストールは別操作。"}
+  ],
+  "train_doctor": [
+    {"actions":["doctor","bootstrap","build_image"],"mode":"deferred","note":"学習環境の構築・診断はデプロイの対象外。"}
+  ],
+  "train_prepare_dataset": [
+    {"actions":["prepare","list","detail","update","delete","file","caption_image","caption_dataset"],"mode":"deferred","note":"学習データ領域は生成用 input と別。学習基盤は未接続。"}
+  ],
+  "train_start": [
+    {"actions":["start","status","cancel","delete","list_flows","job_config","preview_config"],"mode":"deferred","note":"学習ジョブの実行先は生成ジョブ台帳と別。"}
+  ],
+  "upload_image": [
+    {"actions":["image","video","audio","stage"],"mode":"split","note":"upload_media と reuse_output。後者は以前のジョブの結果を素材にする。"},
+    {"actions":["output"],"mode":"deferred","note":"生成履歴に属さないファイルを output に書き込まない。"}
+  ],
+  "visualize_workflow": [
+    {"actions":["render","render_hierarchical","mermaid","to_dsl","from_dsl"],"mode":"direct","note":"引数のグラフまたは DSL を使う。"}
+  ],
+  "workspace": [
+    {"actions":["get","set_default","list"],"mode":"deferred","note":"転送先は認証済みの固定 split。接続先はツールで変更しない。"}
+  ]
+}

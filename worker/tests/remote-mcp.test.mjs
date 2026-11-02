@@ -29,7 +29,7 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();
-  for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models"])
+  for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models","calculate","get_split_status","save_workflow","visualize_workflow","list_nodes","search_custom_nodes","get_job_workflow","reuse_output","list_inputs","list_outputs","inspect_media","prepare_environment","change_node","apply_environment","discard_environment","add_model","inspect_model","remove_model","restore_model","get_admin_operation"])
     assert.ok(list.result.tools.some(t => t.name === name));
   const upload=list.result.tools.find(t=>t.name==='upload_media');
   assert.deepEqual(upload._meta['openai/fileParams'],['file']);
@@ -138,4 +138,19 @@ test('model inventory scopes reads to one category, filters and paginates filena
   const bad=await callSplit(send,'list_models',{category:'../queue'});
   assert.ok(bad.isError);
   assert.ok(paths.every(p=>['/split/startup','/models','/models/loras'].includes(p)));
+});
+
+test('management and production perform only the named operation after readiness',async()=>{
+  const hits=[];
+  const send=async(path,opts)=>{
+    hits.push(path);
+    if(path==='/split/startup')return Response.json({ready:true});
+    assert.equal(opts.headers['X-Split-Remote-Tool'],'1');
+    assert.equal(JSON.parse(opts.body).name,'change_node');
+    return Response.json({status:'failed',error:'Candidate version changed.'});
+  };
+  const result=await callSplit(send,'change_node',{candidate:'old',request_id:'test',action:'install',node:'example'});
+  assert.deepEqual(hits,['/split/startup','/_remote_mcp/operations']);
+  assert.equal(result.isError,true);
+  assert.match(result.content[0].text,/version changed/);
 });

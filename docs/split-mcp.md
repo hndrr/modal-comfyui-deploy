@@ -60,6 +60,28 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 MP4 動画と保存済み音声は、複数出力があれば `index`（0始まり）で選べます。4 MiB を超える場合やクライアントが再生に対応していない場合は、返ったリンクをブラウザで開いてログインしてください。MCP だけで保存する場合は `byte_offset: 0` から `next_offset` がなくなるまで順に取得します。動画内の音声を `get_audio` で抽出することはできません。
 
+## 保存したグラフを調べて、もう一度使う
+
+「このワークフローで動画の長さを決めているノードを探して」と頼むと、`get_workflow(action: "analyze")` で構成を読み、`query` でタイトル・クラス・接続を絞れます。`strip` は編集用 JSON を実行グラフに整理し、`slice` は指定グループを取り出します。`visualize_workflow` は渡したグラフの図や DSL を返します。変更を残すなら `save_workflow` に新しい保存名を渡してください。
+
+過去の生成をやり直すには `get_job_workflow(prompt_id)` で実際に投入したグラフを取得し、変更してから **新しい** `request_id` で投入します。元の出力を次の生成に渡したい場合は、`list_outputs(prompt_id)` の `index` を `reuse_output` に指定します。返ったファイル名はそのままローダーに渡せます。`list_inputs` は入力素材の検索、`inspect_media` は寸法・再生時間・音声情報の確認用です。
+
+## カスタムノードとモデルを管理する
+
+**カスタムノード**：「このクラスはインストール済み？」なら `list_nodes`、追加するパックを探すなら `search_custom_nodes` です。追加・更新は次の順番です。候補は稼働中の環境を維持する仕組みです。インストール時はパックのコードが共有 Volume を持つコンテナで動くので、使うパックを選んでください。
+
+1. `get_split_status` で稼働中の版（`active`）を取得し、`prepare_environment(active, request_id)` で検証用コピー（`candidate`）を作ります。候補がある間、通常の生成は受け付けません。
+2. `change_node(candidate, action: "install" または "update", node, request_id)` にレジストリのパック ID を渡します。`get_admin_operation(request_id)` で処理結果を確認します。`running` はインストール完了ではありません。
+3. `apply_environment(candidate, request_id)` は候補を CPU と GPU で検証し、成功時だけ稼働版を切り替えます。適用しない場合は `discard_environment` で候補を破棄できます。
+
+**モデル**：`list_models` でカテゴリを確認し、`add_model(repo, file, category, request_id)` で Hugging Face の safetensors・GGUF・ONNX ファイルを追加します。専用の CPU で取得するので GPU は使いません。必要なら `revision` と `sha256` を指定してください。`get_admin_operation` は完了後に取得したコミットと SHA-256 を返します。
+
+削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。そのファイルだけを退避します。元に戻すには `restore_model(removal_id, request_id)` に **削除時の** `request_id` を指定します。追加・復元は既存ファイルを上書きしません。
+
+管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。
+
+上流にある機能が見つからない場合は、[全ツールの対応表](split-mcp-tools.md)で、split での呼び方と未提供の理由を確認できます。
+
 ## 困ったとき
 
 - **CPU が起動中**：少し待って同じ操作を再試行してください。「初期化失敗」や実行モードの競合なら、再投入せず管理者に設定を確認してください。

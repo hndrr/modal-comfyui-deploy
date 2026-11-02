@@ -13,6 +13,7 @@ import modal
 
 from comfy_split import node_packs
 from comfy_split.config import Settings, DEPLOYMENT_ENV
+from comfy_split.model_import import import_model as import_model_file
 from comfy_split.extension_sources import enabled_sources
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
@@ -177,18 +178,30 @@ def remote_mcp_image(base):
     for filename in ("package.json", "package-lock.json", ".npmrc"):
         cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
     cpu = cpu.run_commands("cd /opt/split-mcp && npm ci --ignore-scripts --no-audit")
-    for filename in ("remote-call.mjs", "remote-env.mjs"):
+    for filename in ("remote-call.mjs", "remote-env.mjs", "library.mjs", "surface.json"):
         cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
     return cpu
 
 
 # Apply the same deployment identity after all reusable CPU and GPU layers.
-cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID})
+cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID,
+    "SPLIT_IMAGE_NODE_NAMES": ",".join(repo.split("/")[-1] for repo in NODE_REVISIONS)})
 image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 
     prepare()
+
+
+# Model downloads have no GPU, web endpoint or access to the node environment.
+model_image = (modal.Image.debian_slim(python_version="3.12").pip_install("huggingface_hub==0.35.1")
+               .add_local_python_source("comfy_split"))
+model_secret = os.environ.get("SPLIT_MODEL_HF_SECRET")
+
+import_model = app.function(image=model_image, min_containers=0, max_containers=1, scaledown_window=30,
+    timeout=14400, retries=0, volumes={MOUNTS["models"]: volumes["models"]},
+    secrets=[modal.Secret.from_name(model_secret, required_keys=["HF_TOKEN"])] if model_secret else []
+)(import_model_file)
 
 
 @app.function(

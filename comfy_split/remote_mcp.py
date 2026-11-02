@@ -56,3 +56,22 @@ async def run_tool(payload):
             except ProcessLookupError:
                 pass
             await proc.wait()
+
+
+async def operations(control, request):
+    from comfy_split import production, split_admin
+    authorize(request, control.journal.data["mode"])
+    try:
+        body = await request.json()
+        if not isinstance(body, dict) or not isinstance(body.get("arguments"), dict) or not isinstance(body.get("name"), str):
+            raise web.HTTPBadRequest(text="Expected operation and arguments")
+        name, args = body["name"], body["arguments"]
+        if name in ("get_job_workflow", "list_outputs", "reuse_output", "list_inputs", "inspect_media"):
+            result = await production.handle(control, name, args)
+        else:
+            result = await split_admin.handle(control, name, args)
+        return web.json_response(result)
+    except web.HTTPException as exc:
+        return web.json_response({"error":exc.text},status=exc.status)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error":"Invalid operation arguments or state"},status=400)

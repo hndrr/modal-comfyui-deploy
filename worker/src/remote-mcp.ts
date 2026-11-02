@@ -3,6 +3,9 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
+import {libraryRequest} from "../../mcp/library.mjs";
+import {adminTools} from "./admin-tools.ts";
+import {filename, workflowInputs, production} from "./production-tools.ts";
 import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
@@ -52,9 +55,15 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
           if (!r.ok && r.status!==404) return failure(name+" failed ("+r.status+"); check this prompt_id.");
           return {isError:!r.ok,content:[{type:"text",text:JSON.stringify(await r.json())}]};
         }
-        if (name === "get_workflow" && (args.action==="list" ? args.filename!==undefined || args.format!==undefined :
-            args.action!=="get" || typeof args.filename!=="string" || !workflowName.safeParse(args.filename).success))
-          return failure("Use list or get with a relative workflow library filename.");
+        if (name === "get_workflow" && !libraryRequest(args)) return failure("Invalid workflow operation or library filename.");
+        if (Object.hasOwn(production,name) || Object.hasOwn(adminTools,name)) {
+          const r=await send("/_remote_mcp/operations",{method:"POST",headers:{"X-Split-Remote-Tool":"1","Content-Type":"application/json"},
+            body:JSON.stringify({name,arguments:args}),signal:AbortSignal.timeout(55_000)});
+          const bytes=await readAtMost(r,8*1024*1024);
+          if(!bytes) return failure("Response too large; narrow the request.");
+          const result=JSON.parse(new TextDecoder().decode(bytes));
+          return {isError:!r.ok || (Object.hasOwn(adminTools,name) && ["failed","unknown"].includes(result?.status)),content:[{type:"text",text:JSON.stringify(result)}]};
+        }
         if (name === "get_video" || name === "get_audio") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           return name === "get_audio"
@@ -86,9 +95,6 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
   }
 }
 
-const workflowName = relative.refine(s => s.endsWith(".json") && !s.includes(":") &&
-  !/%(?:2e|2f|5c|25)/i.test(s) && s.split("/").every(p=>p && p!=="."));
-
 export async function remoteMcp(request:Request,send:Send, browserOrigin:string, blobHosts?:string) {
   const u = new URL(request.url);
   if (request.headers.has("Origin") && request.headers.get("Origin") !== u.origin)
@@ -97,9 +103,18 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   if (request.method !== "POST") return new Response(null,{status:405,headers:{Allow:"POST"}});
   const server = new McpServer({name:"comfyui-split",version:"1.0.0"});
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
-  server.registerTool("get_workflow",{description:"List saved ComfyUI workflows or read one by its library filename. Default api format can be edited and enqueued; ui returns the saved graph. Never generates.",
-    annotations:read,inputSchema:{action:z.enum(["list","get"]),filename:workflowName.optional(),format:z.enum(["api","ui"]).optional()}},
-    a=>callSplit(send,"get_workflow",a));
+  server.registerTool("calculate",{description:"Calculate dimensions, seeds or a batch of numeric expressions.",annotations:read,
+    inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>callSplit(send,"calculate",a));
+  server.registerTool("search_custom_nodes",{description:"Find a node pack in the public Comfy Registry or read its release details. Does not install it.",annotations:{...read,openWorldHint:true},
+    inputSchema:{action:z.enum(["search","details"]),query:z.string().max(150).optional(),id:z.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/).optional(),limit:z.number().int().min(1).max(50).optional(),page:z.number().int().positive().optional()}},a=>callSplit(send,"search_custom_nodes",a));
+  server.registerTool("get_workflow",{description:"List/get/analyze/query/strip/slice saved library workflows without generating. Use analyze for sections, query for matching nodes.",annotations:read,inputSchema:workflowInputs},a=>callSplit(send,"get_workflow",a));
+  server.registerTool("save_workflow",{description:"Save a NEW named workflow in the ComfyUI library. Existing names are never overwritten. Converts API graphs for the editor when possible.",annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
+    inputSchema:{filename,workflow:graph}},a=>callSplit(send,"save_workflow",{...a,action:"save"}));
+  server.registerTool("visualize_workflow",{description:"Draw or convert a supplied graph as Mermaid or workflow DSL, without running it.",annotations:read,inputSchema:{action:z.enum(["render","render_hierarchical","mermaid","to_dsl","from_dsl"]),workflow:graph.optional(),mermaid:z.string().optional(),dsl:z.string().optional(),show_values:z.boolean().optional(),direction:z.enum(["LR","TB"]).optional(),view:z.enum(["overview","detail","list","summary"]).optional(),section:z.string().optional()}},a=>callSplit(send,"visualize_workflow",a));
+  for(const [name,tool] of Object.entries({...production,...adminTools})) {
+    server.registerTool(name,{description:tool.description,annotations:{readOnlyHint:!tool.write,destructiveHint:tool.write && name!=="reuse_output",openWorldHint:name==="add_model" || name==="change_node"},
+      inputSchema:tool.inputs},(a:Record<string,unknown>)=>callSplit(send,name,a));
+  }
   server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
     _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>callSplit(send,"upload_media",a,undefined,blobHosts));
@@ -112,7 +127,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   server.registerTool("create_workflow",{description:"Inspect installed nodes, create, edit or validate an API workflow. Does not generate.",
     annotations:read,inputSchema:{action:z.enum(["node_info","create","modify","validate"]),node_type:z.string().optional(),
       template:z.string().optional(),params:graph.optional(),workflow:graph.optional(),operations:z.array(graph).optional(),
-      refresh:z.boolean().optional(),raw:z.boolean().optional()}}, a=>callSplit(send,"create_workflow",a));
+      health:z.boolean().optional(),verbose:z.boolean().optional(),refresh:z.boolean().optional(),raw:z.boolean().optional()}}, a=>callSplit(send,"create_workflow",a));
   server.registerTool("enqueue_workflow",{description:"Generate once. Choose a unique request_id for each new render; preserve it and the identical graph across retries, disconnects and agents. Returns prompt_id.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
     inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>callSplit(send,"enqueue_workflow",a));
