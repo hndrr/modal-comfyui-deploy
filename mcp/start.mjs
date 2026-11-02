@@ -18,7 +18,7 @@ if (!origin || !origin.startsWith('https://') || ![origin, origin + '/'].include
     new URL(origin).hostname.endsWith('.modal.run'))
   throw new Error('COMFYUI_URL must be the HTTPS origin of the split Access hostname');
 
-// A Codex process may also have credentials for other ComfyUI installations.
+// The MCP client may also have credentials for other ComfyUI installations.
 for (const k of Object.keys(process.env))
   if (!['HOME', 'PATH', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'LANG'].includes(k)) delete process.env[k];
 Object.assign(process.env, {

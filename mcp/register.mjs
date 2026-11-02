@@ -1,13 +1,11 @@
 // Add a checkout-local server. Credentials never appear in Codex configuration.
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { launch, serverName } from './client-config.mjs';
 
-const pin = readFileSync(new URL('../.node-version', import.meta.url), 'utf8').trim();
-if (process.versions.node !== pin) throw new Error('Run with Node.js ' + pin);
 const file = new URL('../.codex/config.toml', import.meta.url);
-const section = '[mcp_servers.comfyui-split]';
-const block = [section, 'command = ' + JSON.stringify(process.execPath),
-  'args = [' + JSON.stringify(fileURLToPath(new URL('start.mjs', import.meta.url))) + ']',
+const section = '[mcp_servers.' + serverName + ']';
+const block = [section, 'command = ' + JSON.stringify(launch.command),
+  'args = ' + JSON.stringify(launch.args),
   'enabled_tools = ["create_workflow", "enqueue_workflow", "get_history", "get_image", "queue"]',
   'startup_timeout_sec = 60', 'tool_timeout_sec = 180', ''].join('\n');
 let existing = '';
