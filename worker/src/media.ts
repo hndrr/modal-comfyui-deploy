@@ -1,6 +1,7 @@
 // A split gateway extension. No dependency on the upstream stdio server.
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { readAtMost } from "./bounded-response.ts";
 
 const MAX_PART = 4 * 1024 * 1024;
 const commonInputs = {
@@ -63,32 +64,6 @@ function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
     }
   }
   return result;
-}
-
-// Neither Content-Length nor upstream range handling is assumed. Stop reading
-// as soon as a bounded result cannot fit; never buffer an entire large output.
-async function readAtMost(response: Response, limit: number): Promise<Uint8Array | null> {
-  if (Number(response.headers.get("Content-Length")) > limit) {
-    await response.body?.cancel();
-    return null;
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const {done, value} = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > limit) { await reader.cancel(); return null; }
-      chunks.push(value);
-    }
-  } finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return bytes;
 }
 
 function base64(bytes: Uint8Array): string {

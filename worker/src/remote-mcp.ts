@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
+import { readAtMost } from "./bounded-response.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
 import { audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
@@ -11,6 +12,20 @@ const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsW
   !s.split("/").includes("..") && !/[\x00-\x1f]/.test(s));
 const failure = (text:string): CallToolResult => ({isError:true,content:[{type:"text",text}]});
 type Send = (path:string, options: RequestInit) => Promise<Response>;
+
+async function rejected(response: Response): Promise<CallToolResult> {
+  const fallback = "Request rejected with HTTP 409.";
+  try {
+    const bytes = await readAtMost(response, 8192);
+    if (!bytes) return failure(fallback);
+    const reason = JSON.parse(new TextDecoder().decode(bytes))?.error;
+    if (typeof reason !== "string") return failure(fallback);
+    const detail = reason.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, 300);
+    return failure(detail ? fallback + " " + detail : fallback);
+  } catch {
+    return failure(fallback);
+  }
+}
 
 // Only a tool invocation may call send(). No polling survives this invocation.
 export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string): Promise<CallToolResult> {
@@ -38,7 +53,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
           headers: submit ? {"Idempotency-Key":"remote-mcp:"+args.request_id} : {"X-Split-Remote-Tool":"1"},
           body:JSON.stringify(submit ? {prompt:args.workflow,client_id:"remote-mcp"} : {name,arguments:args}),
         });
-        if (r.status === 409) return failure("Conflict: a different workflow used this request_id, or split mode is unavailable.");
+        if (r.status === 409) return await rejected(r);
         if (!r.ok) return failure("Split tool returned HTTP "+r.status+
           (submit ? ". If retrying this submission, reuse the same request_id and workflow." : "."));
         if (submit) {
