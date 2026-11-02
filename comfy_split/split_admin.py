@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+from uuid import uuid4
 from pathlib import Path
 
 from aiohttp import ClientTimeout, web
@@ -13,7 +14,9 @@ from comfy_split.production import page
 from comfy_split.state import body_digest
 from comfy_split.storage import MOUNTS
 
+INLINE_HASH_LIMIT = 16 * 1024 * 1024
 MUTATIONS = {
+    "inspect_model": {"path"},
     "prepare_environment": {"active"},
     "change_node": {"candidate", "action", "node", "version"},
     "apply_environment": {"candidate"},
@@ -114,8 +117,38 @@ async def download_result(call_id):
     return await modal.FunctionCall.from_id(call_id).get.aio(timeout=0)
 
 
+async def hash_in_background(c, row, args, root):
+    # Keep polling and job dispatch responsive while reading a large model.
+    try:
+        verified = await asyncio.to_thread(model_files.fingerprint, root, args["path"])
+        async with c.lock:
+            if row["tool"] == "remove_model":
+                c.journal.assert_idle()
+                result = model_files.remove(
+                    root, args["path"], args["version"], row["request_id"], verified
+                )
+                await c.volumes["models"].commit.aio()
+            else:
+                result = verified[0]
+            row.update(status="completed", result=result)
+    except ValueError as exc:
+        row.update(status="failed", error=str(exc))
+    except Exception:
+        row.update(
+            status="unknown", error="Could not confirm the file operation. Inspect the model again."
+        )
+    finally:
+        async with c.lock:
+            c.model_hash_task = None
+            await c.persist()
+
+
 async def poll(c, row):
     if row["status"] in ACTIVE:
+        if row.get("_hash"):
+            if c.model_hash_task is None:
+                row["status"] = "unknown"
+            return receipt(row)
         if row["tool"] == "change_node":
             await refresh_nodes(c, await queue_status(c))
         elif row["tool"] == "apply_environment":
@@ -136,7 +169,8 @@ async def poll(c, row):
                 )
             else:
                 row["status"] = "completed"
-                await c.volumes["models"].reload.aio()
+                if c.model_hash_task is None:
+                    await c.volumes["models"].reload.aio()
         else:
             row["status"] = "unknown"
         await c.persist()
@@ -227,7 +261,19 @@ async def mutate(c, name, a, row):
             c.apply_task = asyncio.create_task(c.apply_environment())
     else:
         root = Path(MOUNTS["models"])
+        if c.model_hash_task is not None:
+            conflict("Another model inspection or removal is in progress.")
         await c.volumes["models"].reload.aio()
+        if name in {"inspect_model", "remove_model"}:
+            if name == "remove_model":
+                c.journal.assert_idle()
+            if model_files.target(root, a["path"]).lstat().st_size > INLINE_HASH_LIMIT:
+                row.update(status="running", _hash=True)
+                c.model_hash_task = asyncio.create_task(hash_in_background(c, row, a.copy(), root))
+                return
+            if name == "inspect_model":
+                row["result"] = await asyncio.to_thread(model_files.inspect, root, a["path"])
+                return
         if name == "add_model":
             spec = {k: v for k, v in a.items() if k != "request_id"}
             path = model_files.import_spec(**spec)
@@ -275,12 +321,17 @@ async def handle(c, name, args):
                 "gpu": await c.gpu_status(),
                 "manager_queue": await queue_status(c),
             }
-        if name == "inspect_model":
+        if name == "inspect_model" and "request_id" not in args:
+            root = Path(MOUNTS["models"])
+            if c.model_hash_task is not None:
+                conflict("Another model inspection or removal is in progress.")
             await c.volumes["models"].reload.aio()
             try:
-                return model_files.inspect(Path(MOUNTS["models"]), args["path"])
+                if model_files.target(root, args["path"]).lstat().st_size <= INLINE_HASH_LIMIT:
+                    return await asyncio.to_thread(model_files.inspect, root, args["path"])
             except FileNotFoundError:
                 raise web.HTTPNotFound(text="Model not found.") from None
+            args = dict(args, request_id="inspect-" + uuid4().hex)
         if name != "get_admin_operation" and name not in MUTATIONS:
             raise web.HTTPNotFound(text="Unknown operation.")
         key = args.get("request_id", "")

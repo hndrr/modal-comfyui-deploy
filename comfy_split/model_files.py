@@ -46,14 +46,24 @@ def target(root, name):
     return p
 
 
-def inspect(root, name):
+def identity(st):
+    # Only compare this within ONE mount, while hashing and before renaming.
+    return st.st_ino, st.st_ctime_ns, st.st_mtime_ns, st.st_size
+
+
+def fingerprint(root, name):
     p = target(root, name)
-    st = p.lstat()
-    checked(stat.S_ISREG(st.st_mode), "Expected one regular model file")
-    token = hashlib.sha256(
-        f"{name}:{st.st_size}:{st.st_mtime_ns}:{st.st_ino}:{st.st_ctime_ns}".encode()
-    ).hexdigest()
-    return {"path": name, "size_bytes": st.st_size, "version": token}
+    fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        st = os.fstat(fd)
+        checked(stat.S_ISREG(st.st_mode), "Expected one regular model file")
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        checked(identity(st) == identity(p.lstat()), "File changed while reading; inspect again")
+    return {"path": name, "size_bytes": st.st_size, "version": digest}, identity(st)
+
+
+def inspect(root, name):
+    return fingerprint(root, name)[0]
 
 
 def trash(root, operation):
@@ -64,10 +74,14 @@ def trash(root, operation):
     return base / operation
 
 
-def remove(root, name, version, operation):
+def remove(root, name, version, operation, verified=None):
     p = target(root, name)
     dest = trash(root, operation)
-    checked(inspect(root, name)["version"] == version, "Model changed; inspect it again")
+    info, local_identity = verified if verified is not None else fingerprint(root, name)
+    checked(
+        info["version"] == version and identity(p.lstat()) == local_identity,
+        "Model changed; inspect it again",
+    )
     checked(not os.path.lexists(dest), "Removal ID already used")
     p.rename(dest)
     return {"path": name, "removal_id": operation, "status": "removed"}
@@ -133,4 +147,10 @@ def download(root, repo, file, category, revision="main", sha256=None):
             digest = hashlib.file_digest(f, "sha256").hexdigest()
         checked(sha256 is None or digest == sha256, "Model checksum mismatch")
         reserve(dest, src)
-    return {**inspect(root, path), "revision": commit, "sha256": digest}
+    return {
+        "path": path,
+        "size_bytes": dest.stat().st_size,
+        "version": digest,
+        "revision": commit,
+        "sha256": digest,
+    }

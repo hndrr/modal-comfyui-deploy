@@ -76,7 +76,7 @@ MP4 動画と保存済み音声は、複数出力があれば `index`（0始ま�
 
 **モデル**：`list_models` でカテゴリを確認し、`add_model(repo, file, category, request_id)` で Hugging Face の safetensors・GGUF・ONNX ファイルを追加します。専用の CPU で取得するので GPU は使いません。必要なら `revision` と `sha256` を指定してください。`get_admin_operation` は完了後に取得したコミットと SHA-256 を返します。
 
-削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。そのファイルだけを退避します。元に戻すには `restore_model(removal_id, request_id)` に **削除時の** `request_id` を指定します。追加・復元は既存ファイルを上書きしません。
+削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。版はファイル全体の SHA-256 です。大きなファイルでは照会・退避の応答に `request_id` が返るので、`get_admin_operation` で完了を確認してください。そのファイルだけを退避します。元に戻すには `restore_model(removal_id, request_id)` に **削除時の** `request_id` を指定します。追加・復元は既存ファイルを上書きしません。
 
 管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。
 

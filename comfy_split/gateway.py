@@ -47,6 +47,7 @@ class Controller:
         self.sockets = {}
         self.task = None
         self.apply_task = None
+        self.model_hash_task = None
         self.client = None
         self.candidate_relays = {}
         self.gpu_stats_lock = asyncio.Lock()
@@ -120,7 +121,7 @@ class Controller:
 
     def background_work(self):
         data = self.journal.data
-        return bool(data["session"] or any(
+        return bool(self.model_hash_task or data["session"] or any(
             job["status"] in {"queued", "dispatching", "running"}
             for job in data["jobs"].values()) or
             (data["candidate"] and data["candidate"]["status"] in {"creating", "validating"}))
@@ -200,6 +201,9 @@ class Controller:
         await self.volumes["environment"].commit.aio()
         await self.volumes["data"].commit.aio()
         self.journal.recover()
+        for operation in self.journal.data.get("admin_operations", {}).values():
+            if operation.get("_hash") and operation["status"] == "running":
+                operation.update(status="unknown", error="CPU restarted during file verification.")
         candidate = self.journal.data["candidate"]
         session = self.journal.data["session"]
         if candidate and candidate["status"] in {"creating", "validating"}:

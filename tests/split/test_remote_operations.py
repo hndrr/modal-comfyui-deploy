@@ -216,3 +216,30 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "already in use"):
                 models.download(root, *args)
         self.assertEqual((root / result["path"]).read_bytes(), payload)
+
+    async def test_hash_id_survives_new_inode_and_large_inspections_report_progress(self):
+        f = self.dirs["models"] / "loras" / "a.gguf"
+        f.parent.mkdir()
+        f.write_bytes(b"same")
+        first = (await self.run_op("inspect_model", path="loras/a.gguf"))["version"]
+        # A new mount can give an identical blob a different inode.
+        tmp = f.with_suffix(".tmp")
+        tmp.write_bytes(b"same")
+        tmp.replace(f)
+        with patch.object(admin, "INLINE_HASH_LIMIT", 1):
+            row = await self.run_op("inspect_model", path="loras/a.gguf")
+            self.assertEqual(row["status"], "running")
+            self.assertTrue(self.c.background_work())
+            await self.c.model_hash_task
+            info = await self.run_op("get_admin_operation", request_id=row["request_id"])
+            self.assertEqual(info["result"]["version"], first)
+            f.write_bytes(b"diff")
+            row = await self.run_op(
+                "remove_model", request_id="stale-hash", path="loras/a.gguf", version=first
+            )
+            await self.c.model_hash_task
+            self.assertEqual(
+                (await self.run_op("get_admin_operation", request_id="stale-hash"))["status"], "failed"
+            )
+            self.assertTrue(f.exists())
+            self.assertFalse(self.c.background_work())
