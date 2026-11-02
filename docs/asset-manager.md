@@ -12,6 +12,8 @@ SPLIT_GUI_PUBLIC_ORIGIN=https://split.example.com scripts/modal.sh deploy split_
 
 再確認は、本人のブラウザで保存フォームと資産一覧を開き、MCP のサービス認証では `/assets/_ui/api/volumes` が拒否されることを見ます。`/models` の JSON API、`/models/<folder>`、ComfyUI の `/assets/<bundle>` は従来どおりです。GUI だけを取り下げるには Worker の `SPLIT_ADMIN_GUIS` を削除し、GUI アプリを停止します。
 
+split の `/assets` でアップロードすると、管理画面に届く前に [Cloudflare のリクエストサイズ上限](https://developers.cloudflare.com/workers/platform/limits/#request-limits)が適用されます。Free・Pro ドメインでは、添付ファイルと multipart の付加情報を含めて **1リクエスト100 MB** までです。ドメイン側の上限を超えると HTTP 413 になり、管理画面の設定を引き上げても通りません。より大きなファイルは、次のローカル画面から同じ Volume にアップロードできます。
+
 ## 手元で起動する
 
 `web/` の React + Hono アプリは、ローカルでも同じ 3 つの Volume を操作できます。
