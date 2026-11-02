@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "jose": "^6.2.8"
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "jose": "^6.2.8",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260804.1",

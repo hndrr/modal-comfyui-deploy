@@ -1,3 +1,4 @@
+import { remoteMcp } from "./remote-mcp.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
 /**
@@ -33,6 +34,8 @@ export interface Env {
   MODAL_PROXY_CREDENTIALS?: string;
   /** Dedicated MCP service identity: { client_id, hostname, origin }. No client secret. */
   SPLIT_MCP_ACCESS?: string;
+  /** Remote public hostname, dedicated audience, owner email, and existing split hostname. */
+  SPLIT_REMOTE_MCP?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -333,6 +336,7 @@ function credentialOverrides(env: Env): Record<string, { key: string; secret: st
 export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin: string, splitMcp = false): Headers {
   const headers = new Headers(request.headers);
   headers.delete("Host");
+  headers.delete("X-Split-Remote-Tool");
   for (const name of [...headers.keys()]) {
     if (name.toLowerCase().startsWith("cf-access-")) headers.delete(name);
   }
@@ -491,6 +495,37 @@ export default {
     if (configError) {
       console.error(configError);
       return textResponse("Proxy is not configured.", 500);
+    }
+
+    if (env.SPLIT_REMOTE_MCP) {
+      let cfg;
+      try { cfg = JSON.parse(env.SPLIT_REMOTE_MCP); }
+      catch {
+        if (!resolveUpstreamOrigin(env, new URL(request.url).hostname)) return textResponse("Invalid MCP binding.", 500);
+      }
+      const url = new URL(request.url);
+      if (url.hostname === cfg?.hostname) {
+        if (url.pathname !== "/mcp" || url.search) return textResponse("Not found.", 404);
+        const splitOrigin = resolveUpstreamOrigin(env, cfg.split_hostname);
+        if (!splitOrigin || splitOrigin !== cfg.origin || !cfg.audience || cfg.audience === env.POLICY_AUD ||
+            !cfg.owner_email || cfg.hostname === cfg.split_hostname) return textResponse("Invalid MCP binding.", 500);
+        try {
+          const issuer = normalizeTeamDomain(env.TEAM_DOMAIN);
+          const token = request.headers.get(ACCESS_JWT_HEADER);
+          if (!token) throw new Error();
+          const {payload} = await jwtVerify(token, await getKeySet(issuer), {issuer, audience:cfg.audience,
+            requiredClaims:["exp","type","sub","email"]});
+          if (payload.type !== "app" || !payload.sub || payload.common_name !== undefined ||
+              typeof payload.email !== "string" || payload.email.toLowerCase() !== cfg.owner_email.toLowerCase()) throw new Error();
+        } catch { return textResponse("MCP Access authentication required.",403); }
+        return remoteMcp(request, (path, init) => {
+          // Build from zero: never forward a user JWT, cookie, or arbitrary header.
+          const headers = buildUpstreamHeaders(new Request(url), env, splitOrigin, true);
+          new Headers(init.headers).forEach((v,k)=>headers.set(k,v));
+          headers.set("Content-Type","application/json");
+          return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"error"}));
+        });
+      }
     }
 
     const identity = await authenticate(request, env);
