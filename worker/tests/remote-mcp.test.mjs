@@ -36,6 +36,7 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.equal(r.result.content[0].text,'node definition');
   assert.deepEqual(hits.map(r=>new URL(r.url).pathname),['/split/startup','/_remote_mcp/call']);
   for(const r of hits) {
+    assert.equal(r.redirect,'manual');
     assert.equal(new URL(r.url).origin,origin);
     for(const h of ['Cookie','Authorization','CF-Access-Jwt-Assertion']) assert.equal(r.headers.get(h),null);
     assert.equal(r.headers.get('X-Modal-Execution-Mode'),'split');
