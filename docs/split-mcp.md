@@ -31,12 +31,27 @@ codex mcp login comfyui-remote
 
 「この `prompt_id` の音声を返して」で、エージェントが `get_audio` を呼ぶ。対象は完了したジョブが音声ファイルとして保存した FLAC・MP3・WAV・Ogg・Opus。複数あれば `index`（0 始まり）で選ぶ。4 MiB 以下は MCP の音声（`type: audio`）、それを超えるものは認証付きリンクで返す。分割取得は動画と同じく `byte_offset` と `next_offset` を使う。動画の中にしか音声がない場合は `get_video` で動画を取得するか、生成時に音声保存ノードも接続する。
 
+### 保存済みワークフロー・素材入力・取消
+
+- 「保存済みのワークフローを一覧にして」で `get_workflow(action: "list")` を使う。一覧に出た相対名（例：`動画/短いクリップ.json`）を `action: "get"` に渡す。既定の `format: "api"` は実行用、`format: "ui"` は保存した編集用グラフ。変換警告があれば確認してから、実行用グラフを既存の `enqueue_workflow` に渡す。取得だけでは生成しない。
+- ChatGPT Web では「この添付を `upload_media` で保存して」と頼む。画像（PNG・JPEG・WebP）、音源（WAV・MP3・FLAC・M4A・Ogg/Opus）、動画（MP4・MOV・WebM・MKV）を各 256 MiB まで受け付ける。返った `filename` を LoadImage、LoadAudio、LoadVideo などの入力に使う。ChatGPT の設定に古いツール一覧が残っていれば、プラグインの「管理 → ツールを更新」で取り直す。
+- CLI では次のヘルパーにファイルを渡す。初回のブラウザ認証には既存の本人用 OAuth を使う。1回のコマンドで複数の素材を送れる。ファイルパスはローカルでだけ読み、会話にファイルの Base64 を貼る必要はない。
+
+```bash
+node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
+```
+
+ヘルパーは OAuth のログイン URL を端末に表示する。すでに同じ MCP 用に発行したアクセストークンを持つ非対話クライアントでは、環境変数 `SPLIT_MCP_OAUTH_TOKEN` も利用できる。アップロードに失敗したら同じファイルで再実行する。転送 ID とオフセットが一致すれば続きから送る。未完了のデータは入力候補に出ず、24時間後以降の新規転送時に整理する。保存済み素材はこの整理では削除しない。
+
+- 「この `prompt_id` のジョブだけ取り消して」で `cancel_job` を使う。待機中なら `cancelled`、割り込みを送った場合は `cancel_requested` が返る。後者はまだ停止完了ではないので `queue` で確認する。完了済みのジョブの出力は残る。
+
 ### HTTPS MCP の各ツールはどこで動くか
 
 | 操作 | 実装 |
 | --- | --- |
 | 初期化・ツール一覧 | Worker のみ。Modal は起動しない |
-| `create_workflow`・`queue`・`get_history`・`get_image` | Worker → split CPU → 固定版 artokun の stdio サーバー。CPU は呼び出しごとにプロセスを起動する |
+| `create_workflow`・`get_workflow`・`queue`・`get_history`・`get_image` | Worker → split CPU → 固定版 artokun の stdio サーバー。CPU は呼び出しごとにプロセスを起動する |
+| `upload_media`・`cancel_job` | Worker → split CPU の入力 Volume またはジョブ台帳。新しい GPU は起動しない |
 | `enqueue_workflow` | Worker → split の `/prompt`。受付を重複させないために `request_id` を使う。生成は GPU が実行する |
 | `get_video`・`get_audio` | Worker → split CPU の `/history/<prompt_id>` と `/view`。既存の出力を読むだけで GPU は不要 |
 

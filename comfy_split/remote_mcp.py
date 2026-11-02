@@ -11,14 +11,18 @@ CALL_TIMEOUT = 55
 _slots = asyncio.Semaphore(4)
 
 
-async def call(request, *, mode):
+def authorize(request, mode):
     # Only the remote Worker adds this marker, after authentication. The UI
     # Worker strips it and the Modal origin itself requires Proxy Auth.
     if (request.method != "POST" or request.headers.get("X-Split-Remote-Tool") != "1"
             or request.headers.get("X-Modal-Execution-Mode") != "split"):
         raise web.HTTPForbidden()
     if mode != "split":
-        return web.json_response({"error": "This client requires split mode."}, status=409)
+        raise web.HTTPConflict(text='{"error":"This client requires split mode."}', content_type="application/json")
+
+
+async def call(request, *, mode):
+    authorize(request, mode)
     payload = await request.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("arguments"), dict):
         raise web.HTTPBadRequest()

@@ -541,7 +541,7 @@ export default {
           // Build from zero: never forward a user JWT, cookie, or arbitrary header.
           const headers = buildUpstreamHeaders(new Request(url), env, splitOrigin, true);
           new Headers(init.headers).forEach((v,k)=>headers.set(k,v));
-          headers.set("Content-Type","application/json");
+          if (!headers.has("Content-Type")) headers.set("Content-Type","application/json");
           // workerd supports manual/follow. callSplit rejects non-2xx responses;
           // never follow a Location with Modal credentials.
           return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"manual"}));
