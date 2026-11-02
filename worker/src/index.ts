@@ -1,3 +1,5 @@
+import { splitGui } from "./split-guis.ts";
+import { remoteMcp } from "./remote-mcp.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
 /**
@@ -29,8 +31,16 @@ export interface Env {
   MODAL_ORIGINS: string;
   /** Optional extra hosts, without replacing the encrypted production map. */
   MODAL_ADDITIONAL_ORIGINS?: string;
+  /** Single split UI host -> origin; independent of MCP and other encrypted host maps. */
+  SPLIT_UI_ORIGIN?: string;
+  /** Owner and fixed Modal origins for the two browser management pages. */
+  SPLIT_ADMIN_GUIS?: string;
   /** Modal origin -> { key, secret }; keep credentials for other workspaces intact. */
   MODAL_PROXY_CREDENTIALS?: string;
+  /** Dedicated MCP service identity: { client_id, hostname, origin }. No client secret. */
+  SPLIT_MCP_ACCESS?: string;
+  /** Remote public hostname, dedicated audience, owner email, and existing split hostname. */
+  SPLIT_REMOTE_MCP?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -43,6 +53,7 @@ export interface Env {
 
 const ACCESS_JWT_HEADER = "Cf-Access-Jwt-Assertion";
 const ACCESS_JWT_COOKIE = "CF_Authorization";
+const ACCESS_COOKIES = new Set([ACCESS_JWT_COOKIE, "CF_Binding", "CF_Session", "CF_AppSession", "CF_Device"]);
 
 const REQUIRED_CONFIG_KEYS = [
   "MODAL_ORIGINS",
@@ -185,6 +196,14 @@ function configuredOrigins(env: Env): Map<string, string> {
       origins.set(host, origin);
     }
   }
+  if (env.SPLIT_UI_ORIGIN?.trim()) {
+    const hosts = parseOrigins(env.SPLIT_UI_ORIGIN.trim());
+    if (hosts.size !== 1) throw new Error("Expected one SPLIT_UI_ORIGIN");
+    for (const [host, origin] of hosts) {
+      if (origins.has(host) && origins.get(host) !== origin) throw new Error("Conflicting split UI origin");
+      origins.set(host, origin);
+    }
+  }
   return origins;
 }
 
@@ -248,30 +267,47 @@ function readAccessToken(request: Request): string | null {
  * 迂回を防ぐ責任はオリジン側、つまりこの Worker にある。workers_dev の設定漏れや
  * ルート誤設定があっても、ここで閉じられる。
  *
- * 許可メールアドレスの判定は Access のポリシー側に一本化しているので、
- * ここでは検証が通ったかどうかだけを見る。
+ * ブラウザの利用者は Access のポリシーで制御する。サービス用トークンは
+ * 同じ AUD の別ホストでも有効になり得るため、署名済みの Client ID と宛先を照合する。
  */
-async function isAuthenticated(request: Request, env: Env): Promise<boolean> {
+async function authenticate(request: Request, env: Env): Promise<{ kind: "browser" | "split-mcp"; email?: string } | null> {
   const token = readAccessToken(request);
   if (!token) {
     console.warn("Access token not found on request (neither header nor cookie)");
-    return false;
+    return null;
   }
 
   const teamDomain = normalizeTeamDomain(env.TEAM_DOMAIN);
   try {
-    await jwtVerify(token, await getKeySet(teamDomain), {
+    const { payload } = await jwtVerify(token, await getKeySet(teamDomain), {
       issuer: teamDomain,
       audience: env.POLICY_AUD.trim(),
+      requiredClaims: ["exp", "type"],
     });
-    return true;
+    if (payload.type !== "app") return null;
+    if (payload.common_name === undefined && typeof payload.sub === "string" && payload.sub.length > 0) {
+      return { kind: "browser", email: typeof payload.email === "string" ? payload.email : undefined };
+    }
+    if (payload.sub !== "" || typeof payload.common_name !== "string" || !payload.common_name ||
+        !env.SPLIT_MCP_ACCESS) return null;
+    let binding;
+    try {
+      binding = JSON.parse(env.SPLIT_MCP_ACCESS);
+    } catch {
+      console.warn("Invalid SPLIT_MCP_ACCESS configuration");
+      return null;
+    }
+    const host = new URL(request.url).hostname;
+    if (payload.common_name !== binding?.client_id || host !== binding?.hostname ||
+        !binding.origin || resolveUpstreamOrigin(env, host) !== binding.origin) return null;
+    return { kind: "split-mcp" };
   } catch (error) {
     // 失敗理由を残す。握り潰すと 403 の原因が追えなくなる。
     // トークン本体は出さない。
     console.warn(
       `Access token rejected: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`
     );
-    return false;
+    return null;
   }
 }
 
@@ -310,10 +346,14 @@ function credentialOverrides(env: Env): Record<string, { key: string; secret: st
   return parsed as Record<string, { key: string; secret: string }>;
 }
 
-export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin: string): Headers {
+export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin: string, splitMcp = false): Headers {
   const headers = new Headers(request.headers);
   headers.delete("Host");
-  headers.delete(ACCESS_JWT_HEADER);
+  headers.delete("X-Split-Remote-Tool");
+  for (const name of [...headers.keys()]) {
+    if (name.toLowerCase().startsWith("cf-access-")) headers.delete(name);
+  }
+  if (splitMcp) headers.set("X-Modal-Execution-Mode", "split");
 
   // Access の JWT はクッキーにも入っている。ヘッダーだけ落としても
   // Cookie 経由で ComfyUI へ渡ってしまうため、そちらも取り除く。
@@ -332,7 +372,7 @@ export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin:
   return headers;
 }
 
-/** Cookie ヘッダーから CF_Authorization だけを取り除いて組み立て直す。 */
+/** Access 用の Cookie を除き、ComfyUI の Cookie を保持する。 */
 function stripAccessCookie(cookieHeader: string | null): string | null {
   if (!cookieHeader) {
     return null;
@@ -342,7 +382,7 @@ function stripAccessCookie(cookieHeader: string | null): string | null {
     .filter((pair) => {
       const separator = pair.indexOf("=");
       const name = (separator === -1 ? pair : pair.slice(0, separator)).trim();
-      return name !== ACCESS_JWT_COOKIE;
+      return !ACCESS_COOKIES.has(name);
     })
     .map((pair) => pair.trim())
     .filter((pair) => pair.length > 0);
@@ -370,9 +410,10 @@ function isWebSocketUpgrade(request: Request): boolean {
 async function proxyWebSocket(
   request: Request,
   env: Env,
-  upstreamUrl: URL
+  upstreamUrl: URL,
+  splitMcp: boolean
 ): Promise<Response> {
-  const headers = buildUpstreamHeaders(request, env, upstreamUrl.origin);
+  const headers = buildUpstreamHeaders(request, env, upstreamUrl.origin, splitMcp);
 
   // ブラウザのハンドシェイク用ヘッダーは上流へ持ち越さない。
   //
@@ -469,11 +510,50 @@ export default {
       return textResponse("Proxy is not configured.", 500);
     }
 
-    if (!(await isAuthenticated(request, env))) {
+    const requestUrl = new URL(request.url);
+    const mcpPath = requestUrl.pathname === "/mcp" || requestUrl.pathname.startsWith("/mcp/");
+    // Keep the shared split path closed even after its OAuth binding is removed.
+    const splitUiHost = env.SPLIT_UI_ORIGIN && parseOrigins(env.SPLIT_UI_ORIGIN.trim()).has(requestUrl.hostname);
+    if (env.SPLIT_REMOTE_MCP) {
+      let cfg;
+      try { cfg = JSON.parse(env.SPLIT_REMOTE_MCP); }
+      catch {
+        if (mcpPath || !resolveUpstreamOrigin(env, requestUrl.hostname)) return textResponse("Invalid MCP binding.", 500);
+      }
+      const url = requestUrl;
+      if (mcpPath && url.hostname === cfg?.split_hostname && url.hostname !== cfg.hostname)
+        return textResponse("Not found.", 404);
+      if (url.hostname === cfg?.hostname && (mcpPath || cfg.hostname !== cfg.split_hostname)) {
+        if (url.pathname !== "/mcp" || url.search) return textResponse("Not found.", 404);
+        const splitOrigin = resolveUpstreamOrigin(env, cfg.split_hostname);
+        if (!splitOrigin || splitOrigin !== cfg.origin || !cfg.audience || cfg.audience === env.POLICY_AUD ||
+            !cfg.owner_email) return textResponse("Invalid MCP binding.", 500);
+        try {
+          const issuer = normalizeTeamDomain(env.TEAM_DOMAIN);
+          const token = request.headers.get(ACCESS_JWT_HEADER);
+          if (!token) throw new Error();
+          const {payload} = await jwtVerify(token, await getKeySet(issuer), {issuer, audience:cfg.audience,
+            requiredClaims:["exp","type","sub","email"]});
+          if (payload.type !== "app" || !payload.sub || payload.common_name !== undefined ||
+              typeof payload.email !== "string" || payload.email.toLowerCase() !== cfg.owner_email.toLowerCase()) throw new Error();
+        } catch { return textResponse("MCP Access authentication required.",403); }
+        return remoteMcp(request, (path, init) => {
+          // Build from zero: never forward a user JWT, cookie, or arbitrary header.
+          const headers = buildUpstreamHeaders(new Request(url), env, splitOrigin, true);
+          new Headers(init.headers).forEach((v,k)=>headers.set(k,v));
+          headers.set("Content-Type","application/json");
+          // workerd supports manual/follow. callSplit rejects non-2xx responses;
+          // never follow a Location with Modal credentials.
+          return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"manual"}));
+        }, "https://" + cfg.split_hostname);
+      }
+    }
+    if (mcpPath && splitUiHost) return textResponse("Not found.", 404);
+
+    const identity = await authenticate(request, env);
+    if (!identity) {
       return textResponse("Cloudflare Access authentication required.", 403);
     }
-
-    const requestUrl = new URL(request.url);
 
     const modalOrigin = resolveUpstreamOrigin(env, requestUrl.hostname);
     if (!modalOrigin) {
@@ -483,16 +563,22 @@ export default {
       return textResponse("Proxy is not configured for this hostname.", 500);
     }
 
+    if (env.SPLIT_ADMIN_GUIS && env.SPLIT_UI_ORIGIN) {
+      const gui = await splitGui(request, env.SPLIT_ADMIN_GUIS,
+        parseOrigins(env.SPLIT_UI_ORIGIN).get(requestUrl.hostname) === modalOrigin, identity.email);
+      if (gui) return gui;
+    }
+
     const upstreamUrl = upstreamUrlFor(requestUrl, modalOrigin);
 
     if (isWebSocketUpgrade(request)) {
-      return proxyWebSocket(request, env, upstreamUrl);
+      return proxyWebSocket(request, env, upstreamUrl, identity.kind === "split-mcp");
     }
 
     const upstream = await fetch(
       new Request(upstreamUrl, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin),
+        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity.kind === "split-mcp"),
         body: request.body,
         redirect: "manual",
       })

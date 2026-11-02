@@ -22,6 +22,15 @@ def check_pins(constraints, version=importlib.metadata.version):
 KITCHEN_APIS = ("sol_attn", "sol_attn_chunked", "sol_attn_is_available", "int8_linear")
 
 
+def check_core_requirements(requirements, version=importlib.metadata.version):
+    for name in ("comfy-kitchen", "comfyui-frontend-package"):
+        pin = next((line for line in requirements.splitlines()
+                    if line.startswith(name + "==")), None)
+        if pin is None:
+            raise RuntimeError(f"Upstream ComfyUI must pin {name}; review its requirements")
+        check_pins(pin, version)
+
+
 def kitchen_report(constraints, version=importlib.metadata.version, kitchen=None):
     """Read the active interpreter; this never probes CUDA or calls a kernel."""
     expected = next(
@@ -63,16 +72,7 @@ if __name__ == "__main__":
     subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
     check_pins(constraints)
     if args.requirements:
-        upstream = "\n".join(
-            line
-            for line in args.requirements.read_text().splitlines()
-            if line.startswith("comfy-kitchen==")
-        )
-        if not upstream:
-            raise RuntimeError(
-                "Upstream ComfyUI must pin comfy-kitchen; review its requirements"
-            )
-        check_pins(upstream)
+        check_core_requirements(args.requirements.read_text())
     report = kitchen_report(constraints)["comfy-kitchen"]
     if not report["expected"] or report["missingApis"]:
         raise RuntimeError(f"Missing comfy-kitchen pin or APIs: {report}")

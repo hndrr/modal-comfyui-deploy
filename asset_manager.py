@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -139,6 +140,53 @@ def _default_cross_volume_mover(
     overwrite: bool,
 ) -> None:
     """Move an entry between the input and output Volumes inside Modal."""
+
+    # The hosted GUI already has both Volumes mounted. A container cannot
+    # create the ephemeral local-CLI App used below.
+    mount_root = os.getenv("COMFY_ASSET_MOUNT_ROOT")
+    if mount_root:
+        if {source_volume, destination_volume} != TRANSFERABLE_VOLUMES:
+            raise ValueError("Only the input and output Volumes can be exchanged.")
+        source = modal.Volume.from_name(source_volume)
+        destination = modal.Volume.from_name(destination_volume)
+        source.reload()
+        destination.reload()
+
+        def mounted_path(volume_name: str, relative: str) -> Path:
+            path = Path(mount_root) / volume_name
+            for part in PurePosixPath(normalize_volume_path(relative, allow_root=False)).parts:
+                path = path / part
+                if path.is_symlink():
+                    raise ValueError("Cross-volume moves cannot traverse a symlink.")
+            return path
+
+        src = mounted_path(source_volume, source_path)
+        dst = mounted_path(destination_volume, destination_path)
+        if not src.exists():
+            raise FileNotFoundError(source_path)
+        if dst.exists() and not overwrite:
+            raise FileExistsError(destination_path)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        # Finish the copy before replacing a previous destination. Commit the
+        # destination before deleting the source, even if the containers stop.
+        with tempfile.TemporaryDirectory(dir=dst.parent) as scratch:
+            staged = Path(scratch) / "asset"
+            if src.is_dir():
+                shutil.copytree(src, staged, symlinks=True)
+            else:
+                shutil.copy2(src, staged)
+            if dst.is_dir():
+                shutil.rmtree(dst)
+            elif staged.is_dir() and dst.exists():
+                dst.unlink()
+            staged.replace(dst)
+        destination.commit()
+        if src.is_dir():
+            shutil.rmtree(src)
+        else:
+            src.unlink()
+        source.commit()
+        return
 
     app = modal.App(name="comfy-asset-manager-mover")
     source = modal.Volume.from_name(source_volume)

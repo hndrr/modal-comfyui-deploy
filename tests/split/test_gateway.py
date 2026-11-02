@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import signal
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
+from comfy_split import remote_mcp
 from comfy_split.config import Settings
 from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS
 from comfy_split.gateway import Controller, api_path
@@ -124,6 +128,40 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/split/environment/repair-image-browsing")
         self.assertEqual(response.status, 409)
         self.assertIsNone(self.control.journal.data["candidate"])
+
+    async def test_internal_mcp_requires_both_headers_and_split_mode(self):
+        headers = {"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"}
+        with patch.object(remote_mcp, "run_tool", new_callable=AsyncMock) as run:
+            for mode in ("split", "legacy"):
+                self.control.journal.data["mode"] = mode
+                for missing in headers:
+                    response = await self.client.post("/_remote_mcp/call", json={"arguments": {}},
+                        headers={key: value for key, value in headers.items() if key != missing})
+                    self.assertEqual(response.status, 403)
+            response = await self.client.post("/_remote_mcp/call", json={"arguments": {}}, headers=headers)
+            self.assertEqual(response.status, 409)
+            run.assert_not_awaited()
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_internal_mcp_bad_subprocess_response_is_a_gateway_failure(self):
+        for script in ("raise SystemExit(7)", "print('invalid json')"):
+            with patch.object(remote_mcp, "BRIDGE_COMMAND", (sys.executable, "-c", script)):
+                response = await self.client.post("/_remote_mcp/call", json={"arguments": {}},
+                    headers={"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"})
+                self.assertEqual(response.status, 502)
+
+    async def test_internal_mcp_timeout_kills_the_child_process_group(self):
+        marker = Path(self.temp.name) / "child-group"
+        child = (f"import os,time; open({str(marker)!r},'w').write(str(os.getpgrp())); "
+                 "time.sleep(5)")
+        script = (f"import subprocess,sys; subprocess.run([sys.executable,'-c',{child!r}])")
+        with patch.object(remote_mcp, "BRIDGE_COMMAND", (sys.executable, "-c", script)), \
+             patch.object(remote_mcp, "CALL_TIMEOUT", 1.5), \
+             patch.object(remote_mcp.os, "killpg", wraps=os.killpg) as kill:
+            response = await self.client.post("/_remote_mcp/call", json={"arguments": {}},
+                headers={"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"})
+            self.assertEqual(response.status, 504)
+            kill.assert_called_once_with(int(marker.read_text()), signal.SIGKILL)
 
     async def test_edit_upload_view_and_websocket_never_spawn_gpu(self):
         for path in ("/", "/api/object_info", "/models", "/view?filename=a.png", "/extensions"):

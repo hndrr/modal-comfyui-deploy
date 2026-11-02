@@ -1,0 +1,9 @@
+{
+  "name": "modal-comfyui-split-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "24.22.2" },
+  "scripts": { "test": "node --test *.test.mjs" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.32.2", "comfyui-mcp": "0.52.206" }
+}

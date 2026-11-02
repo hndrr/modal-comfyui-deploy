@@ -4,10 +4,18 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from comfy_split import runtime
-from comfy_split.check_environment import check_pins
+from comfy_split.check_environment import check_core_requirements, check_pins
 
 
 class EnvironmentTests(unittest.TestCase):
+    def test_core_upgrade_rejects_a_stale_frontend_even_if_internal_constraints_match(self):
+        requirements = "comfyui-frontend-package==1.57.4\ncomfy-kitchen==1.0"
+        installed = {"comfyui-frontend-package": "1.52.7", "comfy-kitchen": "1.0"}
+        with self.assertRaisesRegex(RuntimeError, "comfyui-frontend-package"):
+            check_core_requirements(requirements, installed.__getitem__)
+        installed["comfyui-frontend-package"] = "1.57.4"
+        check_core_requirements(requirements, installed.__getitem__)
+
     def test_candidate_rejects_install_scripts_that_override_protected_packages(self):
         check_pins("torch==2.10.0+cu130\n", lambda _: "2.10.0+cu130")
         with self.assertRaisesRegex(RuntimeError, "固定依存の競合"):

@@ -44,8 +44,8 @@ if settings.node_packs or enabled_sources(settings):
                                                 required_keys=[node_packs.TOKEN_ENV])
     if settings.node_packs:
         github_secrets = [github_build_secret]
-COMFY_REVISION = "7a0b5eede3f9721c8faab290689893f36edc6d66"
-FRONTEND_VERSION = "1.52.7"  # Version required by this ComfyUI revision.
+COMFY_REVISION = "426f5eea52a7ece1dd599fff4cb6cd1f352ddd24"  # split: ComfyUI v0.43.0
+FRONTEND_VERSION = "1.57.4"  # Version required by this ComfyUI revision.
 MANAGER_VERSION = "4.2.2"
 NODE_REVISIONS = {
     "crystian/ComfyUI-Crystools": "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
@@ -154,13 +154,37 @@ for name, source in enabled_sources(settings):
         image = image.run_commands(
             "python -m comfy_split.extension_frontend " + shlex.quote(name)
         )
-# Deployment-only layer last, so source and dependency builds remain cached.
-image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
+# Persisted venvs can shadow the image pins. Both runtime roles load these
+# core packages from the image, without changing any shared node environment.
+image = image.run_commands(
+    "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
+    "comfyui-frontend-package comfy-kitchen",
+).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
+    "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
+)
+
 app = modal.App(APP_NAME)
 
 # Only this image preloads CPU ComfyUI during module import, before Modal's
 # snapshot point. Keep the existing function identity, proxy auth and URL.
-cpu_image = image.env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1"})
+def remote_mcp_image(base):
+    archive = "node-v24.22.2-linux-x64.tar.xz"
+    cpu = base.run_commands(
+        f"curl -fsSL --retry 3 https://nodejs.org/dist/v24.22.2/{archive} -o /tmp/{archive}",
+        f"echo '48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75  /tmp/{archive}' | sha256sum -c -",
+        f"tar -xJf /tmp/{archive} --strip-components=1 -C /usr/local && rm /tmp/{archive}",
+    )
+    for filename in ("package.json", "package-lock.json", ".npmrc"):
+        cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
+    cpu = cpu.run_commands("cd /opt/split-mcp && npm ci --ignore-scripts --no-audit")
+    for filename in ("remote-call.mjs", "remote-env.mjs"):
+        cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
+    return cpu
+
+
+# Apply the same deployment identity after all reusable CPU and GPU layers.
+cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID})
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 

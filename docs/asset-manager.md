@@ -1,7 +1,22 @@
 # ComfyUI 資産を管理する
 
+split ホストにブラウザでログインし、`/assets` を開くと入力・出力・モデルを管理できます。`/models` は Hugging Face からのモデル保存画面です。どちらも本人の Access ログインが必要です。操作するのは split と同じ環境の Volume です。GUI の閲覧は CPU だけを使い、split の ComfyUI や GPU は起動しません。
 
-`web/` の React + Hono アプリが、次の Modal Volume をローカル管理画面から操作します。
+**ホストへの設定**：既存の split と同じ Modal プロファイルを使い、以下を実行します。ホスト名は例です。
+
+```sh
+SPLIT_GUI_PUBLIC_ORIGIN=https://split.example.com scripts/modal.sh deploy split_guis.py
+```
+
+両方の Web 関数は Modal Proxy Auth が必須で、アイドル時の最小台数は 0 です。保存ジョブには既存の `huggingface-secret` が必要です。Worker の `SPLIT_ADMIN_GUIS` Secret に JSON で `hostname`（既存の `SPLIT_UI_ORIGIN` のホスト）、`owner_email`（許可する本人）、`models_origin`・`assets_origin`（各 web 関数の HTTPS origin）、`key`・`secret`（この Modal 環境の Proxy Auth）を登録して Worker をデプロイします。実際の値は Git に置きません。
+
+再確認は、本人のブラウザで保存フォームと資産一覧を開き、MCP のサービス認証では `/assets/_ui/api/volumes` が拒否されることを見ます。`/models` の JSON API、`/models/<folder>`、ComfyUI の `/assets/<bundle>` は従来どおりです。GUI だけを取り下げるには Worker の `SPLIT_ADMIN_GUIS` を削除し、GUI アプリを停止します。
+
+split の `/assets` でアップロードすると、管理画面に届く前に [Cloudflare のリクエストサイズ上限](https://developers.cloudflare.com/workers/platform/limits/#request-limits)が適用されます。Free・Pro ドメインでは、添付ファイルと multipart の付加情報を含めて **1リクエスト100 MB** までです。ドメイン側の上限を超えると HTTP 413 になり、管理画面の設定を引き上げても通りません。より大きなファイルは、次のローカル画面から同じ Volume にアップロードできます。
+
+## 手元で起動する
+
+`web/` の React + Hono アプリは、ローカルでも同じ 3 つの Volume を操作できます。
 
 - `comfy-model`
 - `comfy-inputs`
@@ -10,7 +25,7 @@
 前提:
 
 - Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
-- Node.js 22+ 推奨
+- Node.js 24.22.2（リポジトリの `.node-version` に合わせる）
 
 接続先は Modal CLI の既定アカウントです。画面ヘッダのバッジに接続先ワークスペース名が出るので、Volume が空に見えるときはまずそこを見てください。複数アカウントを使い分けている場合は [modal-profiles.md](modal-profiles.md) を参照してください。
 
