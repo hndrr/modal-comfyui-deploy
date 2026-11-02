@@ -29,8 +29,11 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();
-  for (const name of ["get_image", "get_video", "get_audio"])
+  for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job"])
     assert.ok(list.result.tools.some(t => t.name === name));
+  const upload=list.result.tools.find(t=>t.name==='upload_media');
+  assert.deepEqual(upload._meta['openai/fileParams'],['file']);
+  assert.deepEqual(upload.inputSchema.properties.file.required.sort(),['download_url','file_id']);
   assert.ok((await (await request(jwt,'ping')).json()).result);
   assert.equal(hits.length,0);
   const r=await (await request(jwt,'tools/call',{name:'create_workflow',arguments:{action:'node_info',node_type:'EmptyImage'}})).json();
@@ -62,7 +65,8 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const discovery=await worker.fetch(new Request('https://'+host+'/mcp',{method:'POST',
     headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream','CF-Access-Jwt-Assertion':jwt},
     body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list'})}),shared);
-  assert.equal((await discovery.json()).result.tools.length,7);
+  assert.deepEqual((await discovery.json()).result.tools.map(t=>t.name).sort(),
+    list.result.tools.map(t=>t.name).sort());
   assert.equal(hits.length,1);
 
   // Other ComfyUI hosts may already have custom-node routes below /mcp.

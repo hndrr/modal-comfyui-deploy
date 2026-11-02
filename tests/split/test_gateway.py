@@ -143,6 +143,25 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             run.assert_not_awaited()
         self.worker.spawn.aio.assert_not_awaited()
 
+    async def test_remote_cancel_is_scoped_idempotent_and_preserves_terminal_outputs(self):
+        headers = {"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"}
+        jobs = [self.control.journal.enqueue({"prompt":{"1":{}}}) for _ in range(4)]
+        queued, running, finished, other = jobs
+        running["status"] = "running"
+        finished.update(status="completed", history={"outputs":{"file":"keep"}})
+        async def cancel(job_id):
+            response = await self.client.post("/_remote_mcp/cancel",json={"prompt_id":job_id},headers=headers)
+            return response.status, (await response.json())["status"]
+        for _ in range(2):
+            self.assertEqual(await cancel(queued["id"]), (200, "cancelled"))
+            self.assertEqual(await cancel(running["id"]), (200, "cancel_requested"))
+        self.commands.put.aio.assert_awaited_once_with({"type":"interrupt"}, partition=running["id"])
+        self.assertEqual(await cancel(finished["id"]), (200,"completed"))
+        self.assertEqual(finished["history"]["outputs"], {"file":"keep"})
+        self.assertEqual(await cancel("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), (404,"not_found"))
+        self.assertEqual(other["status"], "queued")
+        self.worker.spawn.aio.assert_not_awaited()
+
     async def test_internal_mcp_bad_subprocess_response_is_a_gateway_failure(self):
         for script in ("raise SystemExit(7)", "print('invalid json')"):
             with patch.object(remote_mcp, "BRIDGE_COMMAND", (sys.executable, "-c", script)):

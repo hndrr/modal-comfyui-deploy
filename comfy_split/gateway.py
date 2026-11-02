@@ -813,6 +813,29 @@ class Controller:
             if path == "/_remote_mcp/call":
                 from comfy_split.remote_mcp import call
                 return await call(request, mode=self.journal.data["mode"])
+            if path in {"/_remote_mcp/media", "/_remote_mcp/cancel"}:
+                from comfy_split.remote_mcp import authorize
+                authorize(request, self.journal.data["mode"])
+                if path.endswith("/media"):
+                    from comfy_split.input_media import handle
+                    return await handle(request, self.volumes["input"])
+                body = await request.json()
+                if not isinstance(body, dict) or not isinstance(body.get("prompt_id"), str):
+                    raise web.HTTPBadRequest(text="Expected a prompt_id")
+                job_id = str(uuid.UUID(body["prompt_id"]))
+                async with self.lock:
+                    job = self.journal.data["jobs"].get(job_id)
+                    if job is None:
+                        return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
+                    if job["status"] == "queued":
+                        await self.cancel([job_id])
+                    elif job["status"] in {"dispatching", "running"}:
+                        if not job.get("cancel_requested"):
+                            await self.command(job_id, "interrupt")
+                            job["cancel_requested"] = True
+                            await self.persist()
+                        return web.json_response({"prompt_id": job_id, "status": "cancel_requested"})
+                    return web.json_response({"prompt_id": job_id, "status": job["status"]})
             if self.journal.data["mode"] == "legacy":
                 if request.headers.get("X-Modal-Execution-Mode") == "split":
                     return web.json_response({"error": "This client requires split mode."}, status=409)

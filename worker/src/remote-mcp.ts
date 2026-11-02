@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { readAtMost } from "./bounded-response.ts";
+import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
 import { audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
@@ -41,6 +42,17 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
+        if (name === "upload_media") return uploadMedia(send,args);
+        if (name === "cancel_job") {
+          const r = await send("/_remote_mcp/cancel",{method:"POST",headers:{"X-Split-Remote-Tool":"1"},
+            body:JSON.stringify({prompt_id:args.prompt_id}),signal:AbortSignal.timeout(30_000)});
+          if (r.status===409) return rejected(r);
+          if (!r.ok && r.status!==404) return failure("Cancellation request failed ("+r.status+"); check this prompt_id.");
+          return {isError:!r.ok,content:[{type:"text",text:JSON.stringify(await r.json())}]};
+        }
+        if (name === "get_workflow" && (args.action==="list" ? args.filename!==undefined || args.format!==undefined :
+            args.action!=="get" || typeof args.filename!=="string" || !workflowName.safeParse(args.filename).success))
+          return failure("Use list or get with a relative workflow library filename.");
         if (name === "get_video" || name === "get_audio") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           return name === "get_audio"
@@ -72,6 +84,9 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
   }
 }
 
+const workflowName = relative.refine(s => s.endsWith(".json") && !s.includes(":") &&
+  !/%(?:2e|2f|5c|25)/i.test(s) && s.split("/").every(p=>p && p!=="."));
+
 export async function remoteMcp(request:Request,send:Send, browserOrigin:string) {
   const u = new URL(request.url);
   if (request.headers.has("Origin") && request.headers.get("Origin") !== u.origin)
@@ -80,6 +95,15 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string)
   if (request.method !== "POST") return new Response(null,{status:405,headers:{Allow:"POST"}});
   const server = new McpServer({name:"comfyui-split",version:"1.0.0"});
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
+  server.registerTool("get_workflow",{description:"List saved ComfyUI workflows or read one by its library filename. Default api format can be edited and enqueued; ui returns the saved graph. Never generates.",
+    annotations:read,inputSchema:{action:z.enum(["list","get"]),filename:workflowName.optional(),format:z.enum(["api","ui"]).optional()}},
+    a=>callSplit(send,"get_workflow",a));
+  server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
+    _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>callSplit(send,"upload_media",a));
+  server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
+    annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false},
+    inputSchema:{prompt_id:z.uuid()}},a=>callSplit(send,"cancel_job",a));
   server.registerTool("create_workflow",{description:"Inspect installed nodes, create, edit or validate an API workflow. Does not generate.",
     annotations:read,inputSchema:{action:z.enum(["node_info","create","modify","validate"]),node_type:z.string().optional(),
       template:z.string().optional(),params:graph.optional(),workflow:graph.optional(),operations:z.array(graph).optional(),

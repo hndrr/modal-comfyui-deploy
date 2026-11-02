@@ -5,10 +5,18 @@ import { join } from 'node:path';
 
 const actions = {
   create_workflow: ['create', 'modify', 'validate', 'node_info'],
-  queue: ['list', 'status'], get_history: ['list', 'diagnose'], get_image: ['get'],
+  queue: ['list', 'status'], get_history: ['list', 'diagnose'], get_image: ['get'], get_workflow: ['list', 'get'],
 };
 export async function invoke({name, arguments: args}, dir, origin = 'http://127.0.0.1:8000') {
   if (!Object.hasOwn(actions, name) || !actions[name].includes(args?.action)) throw new Error('Unsupported action');
+  if (name === 'get_workflow') {
+    const file = args.filename;
+    if (Object.keys(args).some(k => !['action','filename','format'].includes(k)) ||
+        (args.action === 'list' ? file !== undefined || args.format !== undefined :
+          typeof file !== 'string' || file.length > 512 || !file.endsWith('.json') ||
+          /[\\:\x00-\x1f\x7f]|%(?:2e|2f|5c|25)/i.test(file) || file.split('/').some(p=>!p || p==='.' || p==='..') ||
+          (args.format !== undefined && !['api','ui'].includes(args.format)))) throw new Error('Invalid workflow library request');
+  }
   if (name === 'get_image' && ('save_dir' in args || args.type && args.type !== 'output')) throw new Error('Output images only');
   const client = new Client({name:'split-cpu',version:'1'});
   const transport = new StdioClientTransport({
