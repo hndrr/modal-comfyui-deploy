@@ -4,7 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
-import { getVideo, videoInputs, videoSchema } from "./video.ts";
+import { audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
 const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsWith("/") &&
@@ -26,9 +26,11 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
-        if (name === "get_video") {
+        if (name === "get_video" || name === "get_audio") {
           if (!browserOrigin) return failure("Missing split browser origin.");
-          return await getVideo(send, browserOrigin, videoSchema.parse(args));
+          return name === "get_audio"
+            ? await getMedia("audio", send, browserOrigin, audioSchema.parse(args))
+            : await getMedia("video", send, browserOrigin, videoSchema.parse(args));
         }
         const submit = name === "enqueue_workflow";
         const r = await send(submit ? "/prompt" : "/_remote_mcp/call",{
@@ -84,6 +86,9 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string)
     description:"Retrieve the MP4 from a completed split prompt_id. Returns video bytes or an authenticated browser link. For larger files request chunks using byte_offset and next_offset. Does not generate.",
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI},
     annotations:read,inputSchema:videoInputs}, a=>callSplit(send,"get_video",a,browserOrigin));
+  server.registerTool("get_audio",{title:"Retrieve generated audio",
+    description:"Read a saved WAV, FLAC, MP3, Ogg or Opus audio file from a completed split prompt_id. Small files return MCP audio; for larger files use the authenticated link or byte_offset and next_offset. Does not generate or extract sound from video.",
+    annotations:read,inputSchema:audioInputs}, a=>callSplit(send,"get_audio",a,browserOrigin));
   const transport = new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
   await server.connect(transport);
   try { return await transport.handleRequest(request); } finally { await server.close(); }

@@ -25,6 +25,10 @@ codex mcp login comfyui-remote
 
 4 MiB 以下は MCP の埋め込みリソース（`video/mp4`）としてバイト列を返す。MCP Apps 対応クライアント向けには再生画面も返す。埋め込みに対応しないクライアントでは、結果の URL をブラウザで開く（既存の split の Access ログインが必要）。4 MiB を超える動画はリンクで返す。MCP だけでファイルを保存する場合は `byte_offset: 0` で呼び、各応答の `resource.blob` を Base64 デコードして順番に連結する。`next_offset` が null になれば完了。`chunk_bytes` で小さめの応答も指定できる。ファイルパスや任意の URL を入力する機能はない。
 
+### 音声を取り出す
+
+「この `prompt_id` の音声を返して」で、エージェントが `get_audio` を呼ぶ。対象は完了したジョブが音声ファイルとして保存した FLAC・MP3・WAV・Ogg・Opus。複数あれば `index`（0 始まり）で選ぶ。4 MiB 以下は MCP の音声（`type: audio`）、それを超えるものは認証付きリンクで返す。分割取得は動画と同じく `byte_offset` と `next_offset` を使う。動画の中にしか音声がない場合は `get_video` で動画を取得するか、生成時に音声保存ノードも接続する。
+
 ### HTTPS MCP の各ツールはどこで動くか
 
 | 操作 | 実装 |
@@ -32,9 +36,9 @@ codex mcp login comfyui-remote
 | 初期化・ツール一覧 | Worker のみ。Modal は起動しない |
 | `create_workflow`・`queue`・`get_history`・`get_image` | Worker → split CPU → 固定版 artokun の stdio サーバー。CPU は呼び出しごとにプロセスを起動する |
 | `enqueue_workflow` | Worker → split の `/prompt`。受付を重複させないために `request_id` を使う。生成は GPU が実行する |
-| `get_video` | Worker → split CPU の `/history/<prompt_id>` と `/view`。既存の出力を読むだけで GPU は不要 |
+| `get_video`・`get_audio` | Worker → split CPU の `/history/<prompt_id>` と `/view`。既存の出力を読むだけで GPU は不要 |
 
-`get_video` はこのリポジトリの `worker/src/video.ts` にあり、artokun のコード、npm パッケージ、ローカル stdio サーバーは変更しない。artokun のバージョンを更新する際に動画取得のパッチを移植する必要はない。
+`get_video` と `get_audio` はこのリポジトリの `worker/src/media.ts` にあり、artokun のコード、npm パッケージ、ローカル stdio サーバーは変更しない。artokun のバージョンを更新する際に動画・音声取得のパッチを移植する必要はない。
 
 ### リモート入口をデプロイする
 

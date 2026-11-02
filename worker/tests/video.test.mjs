@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {getVideo, videoSchema} from "../src/video.ts";
+import {getMedia, videoSchema} from "../src/media.ts";
 import {callSplit} from "../src/remote-mcp.ts";
 
+const getVideo = getMedia.bind(null, "video");
 const id = "afdb2c73-44e7-4c88-a01e-effbc8dbe762", origin = "https://split.example.com";
 const src = {filename:"波 #1.mp4",subfolder:"render/test",type:"output"};
 const mp4 = Buffer.concat([Buffer.from([0,0,0,20]),Buffer.from("ftypisom12345678")]);
