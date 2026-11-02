@@ -43,6 +43,10 @@ export async function splitGui(request: Request, raw: string | undefined, splitH
   // Assign pathname on the fixed origin; a tail beginning with // can never select another host.
   target.pathname = entry ? "/" : url.pathname.slice(base.length);
   target.search = url.search;
+  // Hono decodes unreserved characters before matching its content route.
+  // Classify the same path without rewriting the URL sent to Modal.
+  let route: string;
+  try { route = decodeURI(target.pathname); } catch { return deny(400); }
   const headers = new Headers({ "Modal-Key": cfg.key, "Modal-Secret": cfg.secret });
   for (const name of ["Accept","Content-Type","Range","If-None-Match","If-Modified-Since","Last-Event-ID"]) {
     const value = request.headers.get(name);
@@ -61,7 +65,7 @@ export async function splitGui(request: Request, raw: string | undefined, splitH
     if (redirect.origin !== target.origin) return deny(502);
     downstream.set("Location", base + redirect.pathname + redirect.search + redirect.hash);
   }
-  if (gui === "assets" && target.pathname === "/api/assets/content") {
+  if (gui === "assets" && route === "/api/assets/content") {
     downstream.set("Content-Security-Policy", "sandbox; default-src 'none'");
     const type = downstream.get("Content-Type")?.split(";")[0] || "";
     // Even an attachment can be loaded as a script by another page on this origin.

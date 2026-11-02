@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 import modal
 
@@ -13,7 +14,23 @@ app.include(download_app)
 
 # Modal can replace forwarded headers. Give Gradio the canonical public URL so
 # its queue, generated links and file requests always come back through Access.
-public_url = os.environ.get("SPLIT_GUI_PUBLIC_ORIGIN", "").rstrip("/")
+def public_origin(value: str) -> str:
+    error = "Set SPLIT_GUI_PUBLIC_ORIGIN to the split HTTPS origin before deploying."
+    try:
+        url = urlsplit(value)
+        port = url.port  # Also validates an explicit port.
+    except ValueError:
+        raise ValueError(error) from None
+    if (url.scheme != "https" or not url.hostname or url.username is not None or port == 0
+            or url.path not in ("", "/") or any(c in value for c in "\\?#")
+            or any(c.isspace() or ord(c) < 32 for c in value)):
+        raise ValueError(error)
+    return "https://" + url.netloc
+
+
+public_url = os.environ.get("SPLIT_GUI_PUBLIC_ORIGIN", "")
+if modal.is_local():
+    public_url = public_origin(public_url)
 models_image = gui_image({
     "PRESERVE_MODEL_DEPLOYED_APP": APP_NAME,
     "SPLIT_GUI_PUBLIC_ORIGIN": public_url,
@@ -29,11 +46,9 @@ def models():
     from gradio import mount_gradio_app
     from preserve_model_gui import build_interface
 
-    if not public_url.startswith("https://"):
-        raise ValueError("Set SPLIT_GUI_PUBLIC_ORIGIN to the split HTTPS origin before deploying.")
     blocks = build_interface(show_standalone_options=False)
     blocks.queue()
-    return mount_gradio_app(FastAPI(), blocks, path="/", root_path=public_url + "/models/_ui")
+    return mount_gradio_app(FastAPI(), blocks, path="/", root_path=public_origin(public_url) + "/models/_ui")
 
 
 asset_image = (

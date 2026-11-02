@@ -53,3 +53,30 @@ test("owner-only pages share paths with existing ComfyUI JSON and bundles", asyn
     assert.equal(calls.at(-1).url,ui+path);
   }
 });
+
+test("asset content safeguards follow the decoded route; malformed paths never reach Modal", async t => {
+  const {splitGui} = await import("../src/split-guis.ts");
+  const host = "split.example.com", origin = "https://asset-gui.modal.run";
+  const email = "owner@example.com", cfg = JSON.stringify({hostname:host,owner_email:email,
+    models_origin:"https://model-gui.modal.run",assets_origin:origin,key:"test",secret:"test"});
+  const seen = [];
+  t.mock.method(globalThis,"fetch",async req => {
+    seen.push(req.url);
+    return new Response("<script></script>", {headers:{"Content-Type":"text/html"}});
+  });
+  const get = suffix => splitGui(new Request("https://"+host+"/assets/_ui"+suffix),cfg,true,email);
+  for (const path of ["/api/assets/content", "/api/assets/%63ontent", "/%61pi/%61ssets/con%74ent"]) {
+    const r = await get(path+"?name=file");
+    assert.equal(r.status,200);
+    assert.equal(seen.at(-1),origin+path+"?name=file");
+    assert.equal(r.headers.get("Content-Security-Policy"),"sandbox; default-src 'none'");
+    assert.equal(r.headers.get("Content-Type"),"application/octet-stream");
+    assert.equal(r.headers.get("X-Content-Type-Options"),"nosniff");
+  }
+  const count = seen.length;
+  for (const path of ["/api/assets/%", "/api/assets/%FF"]) {
+    assert.equal((await get(path)).status,400);
+    assert.equal(seen.length,count);
+  }
+  assert.equal((await get("/api/assets/Content")).headers.get("Content-Security-Policy"),null);
+});

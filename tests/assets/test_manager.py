@@ -73,22 +73,60 @@ def entry(path: str, kind: int = 1, size: int = 10, mtime: int = 1_700_000_000):
 
 
 class HostedMoveTests(unittest.TestCase):
+    def setUp(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict(os.environ, {"COMFY_ASSET_MOUNT_ROOT": str(root)}))
+        self.src, self.dst = (root / name for name in (INPUT_VOLUME, OUTPUT_VOLUME))
+        self.src.mkdir()
+        self.dst.mkdir()
+        self.volumes = {name: MagicMock() for name in (INPUT_VOLUME, OUTPUT_VOLUME)}
+        self.enterContext(patch("asset_manager.modal.Volume.from_name", side_effect=self.volumes.__getitem__))
+
+    def test_success_commits_destination_before_removing_source(self):
+        (self.src / "a").write_bytes(b"asset")
+        target = self.dst / "nested/b"
+        def check_copy():
+            self.assertEqual(target.read_bytes(), b"asset")
+            self.assertTrue((self.src / "a").is_file())
+        self.volumes[OUTPUT_VOLUME].commit.side_effect = check_copy
+        _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "nested/b", False)
+        self.assertFalse((self.src / "a").exists())
+        self.assertEqual(target.read_bytes(), b"asset")
+        for volume in self.volumes.values():
+            volume.commit.assert_called_once()
+
+    def test_existing_destination_without_overwrite_preserves_both(self):
+        (self.src / "a").write_bytes(b"new")
+        (self.dst / "b").write_bytes(b"existing")
+        with self.assertRaises(FileExistsError):
+            _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "b", False)
+        self.assertEqual((self.src / "a").read_bytes(), b"new")
+        self.assertEqual((self.dst / "b").read_bytes(), b"existing")
+        for volume in self.volumes.values():
+            volume.commit.assert_not_called()
+
+    def test_overwrite_replaces_file_with_directory_and_directory_with_file(self):
+        (self.src / "folder").mkdir()
+        (self.src / "folder/item").write_bytes(b"item")
+        (self.dst / "target").write_bytes(b"old file")
+        _default_cross_volume_mover(INPUT_VOLUME, "folder", OUTPUT_VOLUME, "target", True)
+        self.assertFalse((self.src / "folder").exists())
+        self.assertEqual((self.dst / "target/item").read_bytes(), b"item")
+        (self.src / "file").write_bytes(b"new file")
+        _default_cross_volume_mover(INPUT_VOLUME, "file", OUTPUT_VOLUME, "target", True)
+        self.assertFalse((self.src / "file").exists())
+        self.assertEqual((self.dst / "target").read_bytes(), b"new file")
+
     def test_failed_destination_commit_preserves_source_and_symlinks_cannot_escape(self):
-        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"COMFY_ASSET_MOUNT_ROOT": temp}):
-            src, dst = (Path(temp) / name for name in (INPUT_VOLUME, OUTPUT_VOLUME))
-            src.mkdir()
-            dst.mkdir()
-            (src / "a").write_bytes(b"asset")
-            handle = MagicMock()
-            handle.commit.side_effect = RuntimeError("commit failed")
-            with patch("asset_manager.modal.Volume.from_name", return_value=handle):
-                with self.assertRaisesRegex(RuntimeError, "commit failed"):
-                    _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "b", False)
-                self.assertEqual((src / "a").read_bytes(), b"asset")
-                (dst / "outside").symlink_to(src, target_is_directory=True)
-                with self.assertRaisesRegex(ValueError, "symlink"):
-                    _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "outside/a", True)
-                self.assertEqual((src / "a").read_bytes(), b"asset")
+        (self.src / "a").write_bytes(b"asset")
+        self.volumes[OUTPUT_VOLUME].commit.side_effect = RuntimeError("commit failed")
+        with self.assertRaisesRegex(RuntimeError, "commit failed"):
+            _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "b", False)
+        self.assertEqual((self.src / "a").read_bytes(), b"asset")
+        (self.dst / "outside").symlink_to(self.src, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            _default_cross_volume_mover(INPUT_VOLUME, "a", OUTPUT_VOLUME, "outside/a", True)
+        self.assertEqual((self.src / "a").read_bytes(), b"asset")
 
 
 class AssetManagerValidationTests(unittest.TestCase):
