@@ -564,6 +564,7 @@ class Controller:
             if job["status"] == "queued":
                 job["status"] = "cancelled"
                 job["finished_at"] = time.time()
+                job["history"] = job_history(job)
             elif job["status"] in {"dispatching", "running"}:
                 await self.command(job_id, "interrupt")
         await self.persist()
