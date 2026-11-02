@@ -29,7 +29,7 @@ async function rejected(response: Response): Promise<CallToolResult> {
 }
 
 // Only a tool invocation may call send(). No polling survives this invocation.
-export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string): Promise<CallToolResult> {
+export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string): Promise<CallToolResult> {
   const deadline = Date.now() + 12_000;
   try {
     for (;;) {
@@ -42,7 +42,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
-        if (name === "upload_media") return uploadMedia(send,args);
+        if (name === "upload_media") return uploadMedia(send,args,fetch,blobHosts);
         if (name === "cancel_job") {
           const r = await send("/_remote_mcp/cancel",{method:"POST",headers:{"X-Split-Remote-Tool":"1"},
             body:JSON.stringify({prompt_id:args.prompt_id}),signal:AbortSignal.timeout(30_000)});
@@ -87,7 +87,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
 const workflowName = relative.refine(s => s.endsWith(".json") && !s.includes(":") &&
   !/%(?:2e|2f|5c|25)/i.test(s) && s.split("/").every(p=>p && p!=="."));
 
-export async function remoteMcp(request:Request,send:Send, browserOrigin:string) {
+export async function remoteMcp(request:Request,send:Send, browserOrigin:string, blobHosts?:string) {
   const u = new URL(request.url);
   if (request.headers.has("Origin") && request.headers.get("Origin") !== u.origin)
     return new Response("Invalid origin",{status:403});
@@ -100,7 +100,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string)
     a=>callSplit(send,"get_workflow",a));
   server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
-    _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>callSplit(send,"upload_media",a));
+    _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>callSplit(send,"upload_media",a,undefined,blobHosts));
   server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
     annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false},
     inputSchema:{prompt_id:z.uuid()}},a=>callSplit(send,"cancel_job",a));

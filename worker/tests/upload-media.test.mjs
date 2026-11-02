@@ -35,3 +35,21 @@ test('unapproved URLs, redirect, wrong resume range and oversized source are not
     assert.ok(r.isError);
   }
 });
+
+test('Azure requires the exact configured attachment account and a signed URL', async()=>{
+  const host='fixturecdn.blob.core.windows.net', allowed=host+',secondfixture.blob.core.windows.net';
+  for(const [url,hosts,ok] of [
+    ['https://'+host+'/f?sig=test',allowed,true],
+    ['https://'+host+'/f?sig=test','',false], ['https://'+host+'/f?sig=test','*.blob.core.windows.net',false],
+    ['https://otherfixture.blob.core.windows.net/f?sig=test',allowed,false],
+    ['https://'+host+'/f',allowed,false], ['http://'+host+'/f?sig=test',allowed,false],
+    ['https://'+host+'.evil.com/f?sig=test',allowed,false],
+  ]) {
+    let contacted=false;
+    const r=await uploadMedia(async()=>Response.json({complete:false,next_offset:0}),{file:{...file,download_url:url}},async(_u,init)=>{
+      contacted=true;assert.deepEqual(init.headers,{});assert.equal(init.redirect,'manual');
+      return new Response(new Uint8Array([1]));
+    },hosts);
+    assert.equal(contacted,ok);assert.equal(!r.isError,ok);
+  }
+});

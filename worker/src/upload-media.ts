@@ -27,15 +27,18 @@ async function update(send:Send, id:string, op:string, fields:Record<string,stri
   return JSON.parse(new TextDecoder().decode(bytes!));
 }
 
-function attachmentUrl(value:string) {
+function attachmentUrl(value:string, blobHosts = "") {
   const u = new URL(value);
-  if (u.protocol !== "https:" || u.port || u.username || u.password || !u.hostname.endsWith(".oaiusercontent.com"))
+  // Azure is multi-tenant: only operator-verified accounts with a signed download URL.
+  const azure = /^[a-z0-9]{3,24}\.blob\.core\.windows\.net$/.test(u.hostname)
+    && blobHosts.split(",").some(h=>h.trim().toLowerCase()===u.hostname) && !!u.searchParams.get("sig");
+  if (u.protocol !== "https:" || u.port || u.username || u.password || (!u.hostname.endsWith(".oaiusercontent.com") && !azure))
     throw new Error("Unapproved attachment origin");
   return u;
 }
 
-async function attachment(send:Send, item:z.infer<typeof file>, download:typeof fetch) {
-  const url = attachmentUrl(item.download_url);
+async function attachment(send:Send, item:z.infer<typeof file>, download:typeof fetch, blobHosts?:string) {
+  const url = attachmentUrl(item.download_url, blobHosts);
   const hash = await crypto.subtle.digest("SHA-256",new TextEncoder().encode("chatgpt-file:"+item.file_id));
   const id = Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("");
   const initial = await update(send,id,"status",{name:item.file_name || "attachment"});
@@ -78,13 +81,13 @@ async function attachment(send:Send, item:z.infer<typeof file>, download:typeof 
   } finally { await reader.cancel(); reader.releaseLock(); }
 }
 
-export async function uploadMedia(send:Send, raw:unknown, download=fetch):Promise<CallToolResult> {
+export async function uploadMedia(send:Send, raw:unknown, download=fetch, blobHosts?:string):Promise<CallToolResult> {
   try {
     const a=schema.parse(raw);
     let receipt:Receipt;
     if (a.file) {
       if (Object.keys(a).length!==1) throw new Error("Pass only the ChatGPT attachment");
-      receipt=await attachment(send,a.file,download);
+      receipt=await attachment(send,a.file,download,blobHosts);
     } else {
       if (!a.upload_id) throw new Error("Missing upload_id");
       if (a.data!==undefined && a.offset!==undefined && a.total_bytes===undefined && !a.filename) {

@@ -38,8 +38,11 @@ codex mcp login comfyui-remote
 - CLI では次のヘルパーにファイルを渡す。初回のブラウザ認証には既存の本人用 OAuth を使う。1回のコマンドで複数の素材を送れる。ファイルパスはローカルでだけ読み、会話にファイルの Base64 を貼る必要はない。
 
 ```bash
+npm ci --prefix mcp
 node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 ```
+
+ChatGPT 添付が Azure Blob から配信される場合、管理者は ChatGPT の実際の添付で確認した配信ホストだけを Worker の `SPLIT_ATTACHMENT_BLOB_HOSTS` にカンマ区切りで設定する（`wrangler secret put SPLIT_ATTACHMENT_BLOB_HOSTS`）。ワイルドカードは使えない。署名なしの Blob URL、別アカウント、リダイレクトは拒否する。署名付き URL はログや Git に保存しない。
 
 ヘルパーは OAuth のログイン URL を端末に表示する。すでに同じ MCP 用に発行したアクセストークンを持つ非対話クライアントでは、環境変数 `SPLIT_MCP_OAUTH_TOKEN` も利用できる。アップロードに失敗したら同じファイルで再実行する。転送 ID とオフセットが一致すれば続きから送る。未完了のデータは入力候補に出ず、24時間後以降の新規転送時に整理する。保存済み素材はこの整理では削除しない。
 
