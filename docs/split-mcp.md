@@ -10,6 +10,7 @@
 
 ```bash
 claude mcp add --transport http --scope local comfyui-remote https://split.example.com/mcp
+claude mcp login comfyui-remote
 codex mcp add comfyui-remote --url https://split.example.com/mcp
 codex mcp login comfyui-remote
 ```
@@ -35,6 +36,8 @@ codex mcp login comfyui-remote
 6. MCP だけを切り戻す場合は `SPLIT_REMOTE_MCP` を外し、`/mcp` が Worker で拒否されることを確認してからパス専用の Access アプリを無効化する。共有ホストの Custom Domain と `SPLIT_UI_ORIGIN` は残す。既存のブラウザ用 Allow、stdio 用の Service Auth、Modal の Proxy Auth は維持する。
 
 **CPU 側の実測（2026-11-02）**: Modal の管理 API で CPU/GPU が 0/0 であることを確認後、デプロイした内部ツール経路から両ノードを照会した。準備完了まで63秒、照会後は1/0、アイドル後は0/0だった。もう一度0台から既存の64×64 PNGを取得し、起動中の応答を経てインライン画像が返った。これは本人用 OAuth を通す前の計測であり、ChatGPT からの生成結果とは区別する。
+
+**同じホストの HTTPS MCP での実測（2026-11-02）**: ChatGPT Web で OAuth 接続後、CPU/GPU が0/0の状態でツールを更新し、ノード照会で1/0、アイドル後に0/0へ戻った。そこから ChatGPT で `EmptyImage → SaveImage` を投入すると1/1になり、ジョブ台帳に完了1件・出力1枚を記録した。受付済みの内容とキーを再送すると同じ `prompt_id` が返り、GPU の呼び出し ID と出力は同じだった。0/0に戻った後、Claude Code で PNG を再取得した。初回は起動中、再試行でインライン画像を取得し、保存された64×64 PNGとバイト単位で一致した。再取得時の台数は0/0 → 1/0 → 0/0。ChatGPT の画面では最終回答を表示できなかったため、ジョブ完了と画像は台帳と取得したファイルで確認した。
 
 ## ローカル stdio：このマシンで一度だけ準備する
 
