@@ -30,7 +30,7 @@ mise exec node@24.22.2 -- node mcp/register.mjs
 codex mcp get comfyui-split
 ```
 
-`COMFYUI_URL` は split の **Access 公開ホストの HTTPS オリジン**。Modal 直 URL や `/api` を付けた URL は使わない。ランチャーはプロジェクト専用の認証ファイルを使い、別オリジンへの HTTP リクエストとリダイレクトを拒否する。Codex の設定には起動コマンド、許可ツールとタイムアウトを保存し、認証情報は含めない。登録後、このプロジェクトで新しい Codex セッションを開く。
+`COMFYUI_URL` は split の **Access 公開ホストの HTTPS オリジン**。Modal 直 URL や `/api` を付けた URL は使わない。ランチャーはプロジェクト専用の認証ファイルを使い、別オリジンへの HTTP リクエストとリダイレクトを拒否する。Codex の設定には起動コマンド、許可ツールとタイムアウトを保存し、認証情報は含めない。登録後、このプロジェクトで新しい Codex セッションを開く。対話画面では必要な MCP 呼び出しを承認する。非対話の `codex exec` で「approval policy is never」と出る場合は、`codex exec --approve-for-me` で個別の承認レビューを有効にできる。
 
 ## 1回だけ生成して確認する
 
@@ -43,6 +43,8 @@ codex mcp get comfyui-split
 MODAL_PROFILE=<このcheckoutのプロファイル> uv run python -c \
   'import modal; print(modal.Function.from_name("comfyui-split","gpu_worker").get_current_stats().num_total_runners)'
 ```
+
+2026年11月2日の実機検証では、Codex から両ノードを照会した前後の GPU は0台だった。上記ワークフローを1回投入し、返された同じ ID の成功履歴から 64×64 の PNG を取得してローカルで開いた。Modal の GPU 台数は0台 → 1台 → 0台。専用トークンを使った HTTP は split が200、共有アプリの他2ホストは403。WebSocket も split が101、別ホストが403だった。
 
 ## 切り戻し
 
