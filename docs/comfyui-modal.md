@@ -131,19 +131,19 @@ COMFYUI_MANAGER_INSTALL=off
 - `COMFYUI_SCALEDOWN_WINDOW`: 接続終了後にコンテナを縮退するまでの最大秒数（`2`〜`1200`、既定値 `30`）
 - `COMFYUI_FUNCTION_TIMEOUT`: 1入力または接続の最大実行秒数（`1`〜`86400`、既定値 `1800`）
 - `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
-- `COMFYUI_REVISION`: 標準構成で使うコミット SHA。未指定なら split と同じ ComfyUI v0.43.0。
+- `COMFYUI_REVISION`: 標準構成で特定の版を使いたい場合だけ、40桁の小文字コミット SHA を指定します。未指定または空なら、`comfy install` がインストールした版をそのまま使います。
 - `COMFYUI_FORCE_BUILD`: ComfyUIのインストール層以降を再ビルドする場合は `on`
 - `COMFYUI_MANAGER_INSTALL`: ComfyUI Manager からノードをインストールする場合は `on`（既定 `off`、下記）
 
 `COMFYUI_SAGE_ATTENTION=on` が既定です。`COMFYUI_CLI_ARGS` に `--use-sage-attention` を自分で含めていない限り、自動で付与されます。
 
-標準構成で別の ComfyUI リビジョンを使う場合は、更新先の40桁の小文字コミット SHA を指定します。
+標準構成で ComfyUI のインストール層から再ビルドする例:
 
 ```bash
-COMFYUI_REVISION="<更新先の40桁のSHA>" COMFYUI_FORCE_BUILD=on uv run modal deploy comfyapp.py
+COMFYUI_FORCE_BUILD=on uv run modal deploy comfyapp.py
 ```
 
-`COMFYUI_FORCE_BUILD=on` だけなら同じリビジョンを再ビルドします。この指定では CUDA、PyTorch、SageAttention のビルド層には既存キャッシュを利用し、ComfyUI のインストール層とそれ以降の層だけを再ビルドします。
+`COMFYUI_FORCE_BUILD` はキャッシュを使うかを決める設定です。`COMFYUI_REVISION` が空ならビルド時の `comfy install` に任せ、指定していればその SHA をチェックアウトします。split の固定版は通常版には適用されません。
 
 Modal の公開 URL に `Modal-Key` / `Modal-Secret` ヘッダーを必須にする場合:
 

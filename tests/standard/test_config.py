@@ -1,5 +1,6 @@
 import configparser
 import os
+import runpy
 import shutil
 import tempfile
 import unittest
@@ -8,6 +9,29 @@ from unittest.mock import patch
 
 import comfyapp
 from tests.env_checks import IntegerEnvChecks
+
+
+class ComfyInstallTests(unittest.TestCase):
+    def test_standard_build_only_checks_out_a_revision_when_requested(self):
+        import modal
+
+        sha = "a" * 40
+        for revision in (None, "", sha):
+            with self.subTest(revision=revision), patch.dict(os.environ), \
+                    patch("dotenv.load_dotenv"), patch.object(modal.Image, "run_commands", autospec=True,
+                        side_effect=lambda image, *args, **kw: image) as build:
+                os.environ.pop("COMFYUI_REVISION", None)
+                if revision is not None:
+                    os.environ["COMFYUI_REVISION"] = revision
+                runpy.run_path(comfyapp.__file__)
+                step, = (call.args[1:] for call in build.call_args_list
+                         if call.args[1:2] == ("comfy --skip-prompt install --nvidia",))
+                if revision:
+                    self.assertIn(sha, step[1])
+                    self.assertIn("checkout", step[1])
+                    self.assertIn("requirements.txt", step[1])
+                else:
+                    self.assertEqual(step, ("comfy --skip-prompt install --nvidia",))
 
 
 class ResolveIntEnvTests(IntegerEnvChecks, unittest.TestCase):
