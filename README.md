@@ -11,9 +11,11 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 | ComfyUI | Modal | `comfyapp.py` | GPU上でComfyUIを動かす通常構成 |
 | ComfyUI split **（Experimental・実験的）** | Modal | `splitapp.py` | UIをCPU、生成をオンデマンドGPUで動かす分離構成。現在開発・検証中 |
 | モデル保存 Web GUI | Modal | `preserve_model.py` | ブラウザからHugging FaceのモデルをVolumeに取り込む。CLIからも利用可能 |
-| モデル保存 GUI | ローカル | `preserve_model_gui.py` | 手元で開くGUIから、Modal上のモデル保存処理を呼び出す |
-| 資産管理画面 | ローカル | `web/` | Volume内のモデル・入力・出力を閲覧、アップロード、移動、削除する |
+| モデル保存 GUI | split の `/models` またはローカル | `preserve_model_gui.py` | Hugging Face のモデルを Modal Volume に保存する |
+| 資産管理画面 | split の `/assets` またはローカル | `web/` | Volume内のモデル・入力・出力を閲覧、アップロード、移動、削除する |
 | 認証用リバースプロキシ | Cloudflare Workers | `worker/` | Modal上のComfyUIやモデル保存GUIをCloudflare Accessで保護する |
+
+ChatGPT Web、Claude Code、Codex から split に接続するには、[ComfyUI MCP の設定と検証](docs/split-mcp.md)を参照してください。
 
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 

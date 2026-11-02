@@ -24,3 +24,9 @@ MODAL_KEY=
 
 # 同じく Token Secret（ws- 始まり。作成時にしか表示されない）
 MODAL_SECRET=
+
+# Optional: allow only this signed Access service identity on this exact split host.
+# SPLIT_MCP_ACCESS={"client_id":"example.access","hostname":"split.example.com","origin":"https://<workspace>--comfyui-split-ui.modal.run"}
+
+# Optional separate user OAuth application (no client or Modal credentials).
+# SPLIT_REMOTE_MCP={"hostname":"mcp.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"dedicated-aud","owner_email":"owner@example.com"}

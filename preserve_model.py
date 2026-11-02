@@ -74,6 +74,8 @@ download_image = (
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})  # and enable it
 )
 app = modal.App("preserve-model")
+# Share the download job with the split GUIs without deploying the standalone web route.
+download_app = modal.App()
 
 
 def _publish_progress(call_id: str, payload: dict[str, Any]) -> None:
@@ -146,7 +148,7 @@ def verify_sha256(path: Path, expected: str) -> None:
         raise ValueError(f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}")
 
 
-@app.function(
+@download_app.function(
     volumes={MODEL_DIR.as_posix(): volume},  # Volume をマウントして関数と共有する
     image=download_image,
     timeout=60 * 60 * 24,  # 24時間に延長して大容量ダウンロードを許容
@@ -282,6 +284,9 @@ def preserve_model(
         raise
 
 
+app.include(download_app)
+
+
 # Gradio Web UI -------------------------------------------------------------
 
 # preserve_model_gui.py を Web UI イメージ内で配置するディレクトリ。
@@ -394,28 +399,33 @@ FUNCTION_TIMEOUT = _resolve_int_env(
 
 # GUI 自体には GPU も Volume も不要。モデル保存は同じ App の
 # preserve_model 関数へ委譲する。
-web_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(f"gradio=={GRADIO_VERSION}", f"modal=={MODAL_VERSION}")
-    # コンテナ内で再 import されてもデプロイ時と同じ設定にする。
-    .env(
-        {
-            PRESERVE_WEB_REQUIRES_PROXY_AUTH_ENV: (
-                "on" if REQUIRES_PROXY_AUTH else "off"
-            ),
-            PRESERVE_WEB_SCALEDOWN_WINDOW_ENV: str(SCALEDOWN_WINDOW),
-            PRESERVE_WEB_FUNCTION_TIMEOUT_ENV: str(FUNCTION_TIMEOUT),
-        }
+def gui_image(extra_env: dict[str, str] | None = None):
+    return (
+        modal.Image.debian_slim(python_version="3.12")
+        .pip_install(f"gradio=={GRADIO_VERSION}", f"modal=={MODAL_VERSION}")
+        # コンテナ内で再 import されてもデプロイ時と同じ設定にする。
+        .env(
+            {
+                **(extra_env or {}),
+                PRESERVE_WEB_REQUIRES_PROXY_AUTH_ENV: (
+                    "on" if REQUIRES_PROXY_AUTH else "off"
+                ),
+                PRESERVE_WEB_SCALEDOWN_WINDOW_ENV: str(SCALEDOWN_WINDOW),
+                PRESERVE_WEB_FUNCTION_TIMEOUT_ENV: str(FUNCTION_TIMEOUT),
+            }
+        )
+        .add_local_file(
+            Path(__file__).as_posix(),
+            f"{REMOTE_SOURCE_DIR}/preserve_model.py",
+        )
+        .add_local_file(
+            Path(__file__).with_name("preserve_model_gui.py").as_posix(),
+            f"{REMOTE_SOURCE_DIR}/preserve_model_gui.py",
+        )
     )
-    .add_local_file(
-        Path(__file__).as_posix(),
-        f"{REMOTE_SOURCE_DIR}/preserve_model.py",
-    )
-    .add_local_file(
-        Path(__file__).with_name("preserve_model_gui.py").as_posix(),
-        f"{REMOTE_SOURCE_DIR}/preserve_model_gui.py",
-    )
-)
+
+
+web_image = gui_image()
 
 
 @app.function(

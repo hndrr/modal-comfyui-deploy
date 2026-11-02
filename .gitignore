@@ -13,6 +13,10 @@ uv.lock
 .vscode
 
 .env
+# Machine-specific ComfyUI MCP credentials and local Codex registration
+.env.comfy-mcp
+/mcp/node_modules/
+/.codex/config.toml
 # このチェックアウトで使う Modal プロファイル（docs/modal-profiles.md）
 .modal-profile
 comfy-docker
@@ -26,6 +30,8 @@ web/.cache/
 # Cloudflare Access proxy worker
 worker/node_modules/
 worker/.wrangler/
+/.wrangler/
 worker/.dev.vars
 # Local split validation evidence (logs, snapshots and measurements)
 /docs/validation/
+/mcp/.state/
