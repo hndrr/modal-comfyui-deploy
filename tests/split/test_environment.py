@@ -4,10 +4,21 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from comfy_split import runtime
+from comfy_split.build_constraints import build_constraints
 from comfy_split.check_environment import check_core_requirements, check_pins
 
 
 class EnvironmentTests(unittest.TestCase):
+    def test_upstream_frontend_changes_but_cannot_redefine_accelerator_versions(self):
+        wheels = {"torch": "2.10.0+cu130", "torchvision": "0.25.0+cu130", "torchaudio": "2.10.0+cu130",
+                  "xformers": "0.0.34", "flash-attn": "2.8.3+cu130torch2.10", "sageattention": "2.2.0"}
+        for frontend in ("1.57.4", "2.0"):
+            requirements = f"torch>=2.11\ncomfyui-frontend-package=={frontend}\ncomfy-kitchen==1.0"
+            constraints = build_constraints(requirements, "4.2.2", wheels.__getitem__)
+            self.assertEqual(set(constraints), {*(f"{name}=={ver}" for name, ver in wheels.items()),
+                                                f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
+                                                "comfyui-manager==4.2.2"})
+
     def test_core_upgrade_rejects_a_stale_frontend_even_if_internal_constraints_match(self):
         requirements = "comfyui-frontend-package==1.57.4\ncomfy-kitchen==1.0"
         installed = {"comfyui-frontend-package": "1.52.7", "comfy-kitchen": "1.0"}
