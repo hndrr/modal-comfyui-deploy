@@ -3,6 +3,9 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
+import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
+import { getVideo, videoInputs, videoSchema } from "./video.ts";
+
 const graph = z.record(z.string(), z.unknown());
 const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsWith("/") &&
   !s.split("/").includes("..") && !/[\x00-\x1f]/.test(s));
@@ -10,7 +13,7 @@ const failure = (text:string): CallToolResult => ({isError:true,content:[{type:"
 type Send = (path:string, options: RequestInit) => Promise<Response>;
 
 // Only a tool invocation may call send(). No polling survives this invocation.
-export async function callSplit(send:Send, name:string, args:Record<string,unknown>): Promise<CallToolResult> {
+export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string): Promise<CallToolResult> {
   const deadline = Date.now() + 12_000;
   try {
     for (;;) {
@@ -23,6 +26,10 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
+        if (name === "get_video") {
+          if (!browserOrigin) return failure("Missing split browser origin.");
+          return await getVideo(send, browserOrigin, videoSchema.parse(args));
+        }
         const submit = name === "enqueue_workflow";
         const r = await send(submit ? "/prompt" : "/_remote_mcp/call",{
           method:"POST",signal:AbortSignal.timeout(50_000),
@@ -48,7 +55,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
   }
 }
 
-export async function remoteMcp(request:Request,send:Send) {
+export async function remoteMcp(request:Request,send:Send, browserOrigin:string) {
   const u = new URL(request.url);
   if (request.headers.has("Origin") && request.headers.get("Origin") !== u.origin)
     return new Response("Invalid origin",{status:403});
@@ -70,6 +77,13 @@ export async function remoteMcp(request:Request,send:Send) {
     a=>callSplit(send,"get_history",a));
   server.registerTool("get_image",{description:"Return a generated output image inline using its history filename.",annotations:read,
     inputSchema:{filename:relative,subfolder:relative.optional()}},a=>callSplit(send,"get_image",{...a,action:"get"}));
+  server.registerResource("video-player", PLAYER_URI, {mimeType:PLAYER_MIME}, async () => ({
+    contents:[{uri:PLAYER_URI, mimeType:PLAYER_MIME, text:playerHtml}],
+  }));
+  server.registerTool("get_video",{title:"Retrieve a generated video",
+    description:"Retrieve the MP4 from a completed split prompt_id. Returns video bytes or an authenticated browser link. For larger files request chunks using byte_offset and next_offset. Does not generate.",
+    _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI},
+    annotations:read,inputSchema:videoInputs}, a=>callSplit(send,"get_video",a,browserOrigin));
   const transport = new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
   await server.connect(transport);
   try { return await transport.handleRequest(request); } finally { await server.close(); }

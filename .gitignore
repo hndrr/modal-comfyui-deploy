@@ -30,6 +30,7 @@ web/.cache/
 # Cloudflare Access proxy worker
 worker/node_modules/
 worker/.wrangler/
+/.wrangler/
 worker/.dev.vars
 # Local split validation evidence (logs, snapshots and measurements)
 /docs/validation/

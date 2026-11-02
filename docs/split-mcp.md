@@ -19,6 +19,23 @@ codex mcp login comfyui-remote
 
 「EmptyImage と SaveImage の必須入力を調べて。生成はしないで」で照会を確認できる。生成時は `enqueue_workflow` に API 形式の `workflow` と新しい `request_id` を渡す。受付が不明なら**同じキーと同じワークフローでのみ再試行**する。キーを変えれば新しい生成になる。受付成功後は同じ `prompt_id` で `queue`・`get_history` を照会し、履歴のファイル名を `get_image` に渡す。チャットを閉じても受付済みの生成は続く。起動中は少し待って再試行する。初期化失敗や常時起動モードの競合は自動再試行しない。
 
+### 動画を取り出す
+
+生成時の `prompt_id` を渡して `get_video` を呼ぶと、完了したジョブの MP4 を取得できる。例：「さっきの prompt_id の動画を get_video で返して」。再生成や Modal SDK は不要。1件のジョブに複数の MP4 があれば、`index`（0 始まり）で選ぶ。
+
+4 MiB 以下は MCP の埋め込みリソース（`video/mp4`）としてバイト列を返す。MCP Apps 対応クライアント向けには再生画面も返す。埋め込みに対応しないクライアントでは、結果の URL をブラウザで開く（既存の split の Access ログインが必要）。4 MiB を超える動画はリンクで返す。MCP だけでファイルを保存する場合は `byte_offset: 0` で呼び、各応答の `resource.blob` を Base64 デコードして順番に連結する。`next_offset` が null になれば完了。`chunk_bytes` で小さめの応答も指定できる。ファイルパスや任意の URL を入力する機能はない。
+
+### HTTPS MCP の各ツールはどこで動くか
+
+| 操作 | 実装 |
+| --- | --- |
+| 初期化・ツール一覧 | Worker のみ。Modal は起動しない |
+| `create_workflow`・`queue`・`get_history`・`get_image` | Worker → split CPU → 固定版 artokun の stdio サーバー。CPU は呼び出しごとにプロセスを起動する |
+| `enqueue_workflow` | Worker → split の `/prompt`。受付を重複させないために `request_id` を使う。生成は GPU が実行する |
+| `get_video` | Worker → split CPU の `/history/<prompt_id>` と `/view`。既存の出力を読むだけで GPU は不要 |
+
+`get_video` はこのリポジトリの `worker/src/video.ts` にあり、artokun のコード、npm パッケージ、ローカル stdio サーバーは変更しない。artokun のバージョンを更新する際に動画取得のパッチを移植する必要はない。
+
 ### リモート入口をデプロイする
 
 1. split の CPU イメージに固定版 Node.js と MCP をデプロイする（`scripts/modal.sh deploy splitapp.py`）。GPU に Node/MCP は不要。既存 Worker をテスト後にデプロイする。一般の中継ルートでは内部呼び出し用ヘッダーを必ず取り除く。
