@@ -155,6 +155,14 @@ for name, source in enabled_sources(settings):
         image = image.run_commands(
             "python -m comfy_split.extension_frontend " + shlex.quote(name)
         )
+# The UI follows the core revision in the image. A persisted Manager venv can
+# contain its own older copy, ahead of inherited system site-packages. Put just
+# the frontend (assets AND distribution metadata) ahead of that venv on both
+# CPU and GPU; never modify a shared revision or run pip during a cold start.
+image = image.run_commands(
+    f"python -m pip install --no-deps --target /opt/split-frontend comfyui-frontend-package=={FRONTEND_VERSION}",
+).env({"PYTHONPATH": "/opt/split:/opt/split-frontend"})
+
 # Deployment-only layer last, so source and dependency builds remain cached.
 image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 app = modal.App(APP_NAME)
