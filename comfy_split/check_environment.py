@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from comfy_split.build_constraints import core_pins
+
 
 def check_pins(constraints, version=importlib.metadata.version):
     for line in constraints.splitlines():
@@ -23,11 +25,7 @@ KITCHEN_APIS = ("sol_attn", "sol_attn_chunked", "sol_attn_is_available", "int8_l
 
 
 def check_core_requirements(requirements, version=importlib.metadata.version):
-    for name in ("comfy-kitchen", "comfyui-frontend-package"):
-        pin = next((line for line in requirements.splitlines()
-                    if line.startswith(name + "==")), None)
-        if pin is None:
-            raise RuntimeError(f"Upstream ComfyUI must pin {name}; review its requirements")
+    for pin in core_pins(requirements):
         check_pins(pin, version)
 
 

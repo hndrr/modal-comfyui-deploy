@@ -64,7 +64,7 @@ codex mcp login comfyui-remote
 
 ## ローカル stdio：このマシンで一度だけ準備する
 
-リポジトリのルートで実行する。Node **24.22.2**、MCP **0.52.206**、ComfyUI **v0.43.0**（frontend **1.57.4**）で固定している。初めて split を構築する場合は、先に [Access と Worker](#access-と-worker) を設定する。
+リポジトリのルートで実行する。Node は **24.22.2**、MCP は **0.52.206** を使う。ComfyUI は [split のデプロイ時に選んだ安定リリース](comfyui-split.md) を使う。初めて split を構築する場合は、先に [Access と Worker](#access-と-worker) を設定する。
 
 ```bash
 mise install node@24.22.2
