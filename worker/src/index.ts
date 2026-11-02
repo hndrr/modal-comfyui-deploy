@@ -30,6 +30,8 @@ export interface Env {
   MODAL_ORIGINS: string;
   /** Optional extra hosts, without replacing the encrypted production map. */
   MODAL_ADDITIONAL_ORIGINS?: string;
+  /** Single split UI host -> origin; independent of MCP and other encrypted host maps. */
+  SPLIT_UI_ORIGIN?: string;
   /** Modal origin -> { key, secret }; keep credentials for other workspaces intact. */
   MODAL_PROXY_CREDENTIALS?: string;
   /** Dedicated MCP service identity: { client_id, hostname, origin }. No client secret. */
@@ -188,6 +190,14 @@ function configuredOrigins(env: Env): Map<string, string> {
       if (origins.has(host)) {
         throw new Error(`Additional origin cannot replace existing hostname: ${host}`);
       }
+      origins.set(host, origin);
+    }
+  }
+  if (env.SPLIT_UI_ORIGIN?.trim()) {
+    const hosts = parseOrigins(env.SPLIT_UI_ORIGIN.trim());
+    if (hosts.size !== 1) throw new Error("Expected one SPLIT_UI_ORIGIN");
+    for (const [host, origin] of hosts) {
+      if (origins.has(host) && origins.get(host) !== origin) throw new Error("Conflicting split UI origin");
       origins.set(host, origin);
     }
   }
@@ -497,18 +507,20 @@ export default {
       return textResponse("Proxy is not configured.", 500);
     }
 
+    const requestUrl = new URL(request.url);
+    const mcpPath = requestUrl.pathname === "/mcp" || requestUrl.pathname.startsWith("/mcp/");
     if (env.SPLIT_REMOTE_MCP) {
       let cfg;
       try { cfg = JSON.parse(env.SPLIT_REMOTE_MCP); }
       catch {
-        if (!resolveUpstreamOrigin(env, new URL(request.url).hostname)) return textResponse("Invalid MCP binding.", 500);
+        if (mcpPath || !resolveUpstreamOrigin(env, requestUrl.hostname)) return textResponse("Invalid MCP binding.", 500);
       }
-      const url = new URL(request.url);
-      if (url.hostname === cfg?.hostname) {
+      const url = requestUrl;
+      if (url.hostname === cfg?.hostname && (mcpPath || cfg.hostname !== cfg.split_hostname)) {
         if (url.pathname !== "/mcp" || url.search) return textResponse("Not found.", 404);
         const splitOrigin = resolveUpstreamOrigin(env, cfg.split_hostname);
         if (!splitOrigin || splitOrigin !== cfg.origin || !cfg.audience || cfg.audience === env.POLICY_AUD ||
-            !cfg.owner_email || cfg.hostname === cfg.split_hostname) return textResponse("Invalid MCP binding.", 500);
+            !cfg.owner_email) return textResponse("Invalid MCP binding.", 500);
         try {
           const issuer = normalizeTeamDomain(env.TEAM_DOMAIN);
           const token = request.headers.get(ACCESS_JWT_HEADER);
@@ -527,13 +539,12 @@ export default {
         });
       }
     }
+    if (mcpPath) return textResponse("Not found.", 404);
 
     const identity = await authenticate(request, env);
     if (!identity) {
       return textResponse("Cloudflare Access authentication required.", 403);
     }
-
-    const requestUrl = new URL(request.url);
 
     const modalOrigin = resolveUpstreamOrigin(env, requestUrl.hostname);
     if (!modalOrigin) {
