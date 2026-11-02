@@ -131,6 +131,7 @@ COMFYUI_MANAGER_INSTALL=off
 - `COMFYUI_SCALEDOWN_WINDOW`: 接続終了後にコンテナを縮退するまでの最大秒数（`2`〜`1200`、既定値 `30`）
 - `COMFYUI_FUNCTION_TIMEOUT`: 1入力または接続の最大実行秒数（`1`〜`86400`、既定値 `1800`）
 - `COMFYUI_CLI_ARGS`: `comfy launch -- ...` の末尾に追加する引数
+- `COMFYUI_REVISION`: 標準構成で使うコミット SHA。未指定なら split と同じ ComfyUI v0.43.0。
 - `COMFYUI_FORCE_BUILD`: ComfyUIのインストール層以降を再ビルドする場合は `on`
 - `COMFYUI_MANAGER_INSTALL`: ComfyUI Manager からノードをインストールする場合は `on`（既定 `off`、下記）
 

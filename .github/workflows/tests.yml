@@ -50,6 +50,7 @@ jobs:
               - 'extensions/**/web/**'
               - 'scripts/modal.sh'
             web:
+              - '.node-version'
               - '.github/workflows/tests.yml'
               - 'web/**'
               - 'asset_manager.py'
@@ -59,6 +60,8 @@ jobs:
               - 'uv.lock'
               - '.python-version'
             worker:
+              - '.node-version'
+              - 'mcp/**'
               - '.github/workflows/tests.yml'
               - 'worker/**'
 
@@ -105,7 +108,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
@@ -130,9 +133,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: worker/package-lock.json
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
+      - name: Test the split MCP server over stdio
+        working-directory: mcp
+        run: |
+          npm ci --ignore-scripts
+          npm test

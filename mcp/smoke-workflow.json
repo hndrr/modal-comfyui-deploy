@@ -1,0 +1,10 @@
+{
+  "1": {
+    "class_type": "EmptyImage",
+    "inputs": { "width": 64, "height": 64, "batch_size": 1, "color": 3368601 }
+  },
+  "2": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["1", 0], "filename_prefix": "split-verification/mcp" }
+  }
+}
