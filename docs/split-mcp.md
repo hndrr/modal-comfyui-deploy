@@ -6,6 +6,8 @@
 
 ## リモート URL で使う
 
+ChatGPT Web から画像・動画の生成を投入するには、書き込み操作を使える Business または Enterprise/Edu ワークスペースが必要です。Business で接続を作成できるのは管理者・オーナー、Enterprise/Edu では権限を付与されたメンバーも作成できます。`enqueue_workflow` の実行はワークスペースの操作権限にも従います。Pro のカスタム MCP 接続は読み取り・取得のみです。これは ChatGPT Web の条件で、Claude Code や Codex の接続条件とは別です。[OpenAI の接続条件](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
+
 以下の例では split ホストを `split.example.com` とする。本人用の接続 URL は `https://split.example.com/mcp`。ChatGPT Web は「プラグイン → 追加 → カスタム MCP サーバーを追加」で URL と OAuth を選び、本人の Access ログインで接続する。生成の書き込み操作が許可されていることを確認する。Claude Code と Codex も同じ URL を使える。ローカル stdio と併用する場合は別名で登録する。
 
 ```bash
@@ -17,11 +19,11 @@ codex mcp login comfyui-remote
 
 ツール一覧・接続維持は Worker 内で処理する。ノード照会・履歴・画像取得で初めて CPU が起動し、生成の受付後に GPU が起動する。結果の画像は MCP の画像コンテンツで受け取る。サーバーの保存パスを指定する必要はない。
 
-「EmptyImage と SaveImage の必須入力を調べて。生成はしないで」で照会を確認できる。生成時は `enqueue_workflow` に API 形式の `workflow` と新しい `request_id` を渡す。受付が不明なら**同じキーと同じワークフローでのみ再試行**する。キーを変えれば新しい生成になる。受付成功後は同じ `prompt_id` で `queue`・`get_history` を照会し、履歴のファイル名を `get_image` に渡す。チャットを閉じても受付済みの生成は続く。起動中は少し待って再試行する。初期化失敗や常時起動モードの競合は自動再試行しない。
+「EmptyImage と SaveImage の必須入力を調べて。生成はしないで」で照会を確認できる。生成時は `enqueue_workflow` に API 形式の `workflow` と新しい `request_id` を渡す。受付が不明なら**同じキーと同じワークフローでのみ再試行**する。キーを変えれば新しい生成になる。受付成功時の応答で返った `prompt_id` で `queue`・`get_history` を照会し、履歴のファイル名を `get_image` に渡す。チャットを閉じても受付済みの生成は続く。起動中は少し待って再試行する。初期化失敗や常時起動モードの競合は自動再試行しない。
 
 ### 動画を取り出す
 
-生成時の `prompt_id` を渡して `get_video` を呼ぶと、完了したジョブの MP4 を取得できる。例：「さっきの prompt_id の動画を get_video で返して」。再生成や Modal SDK は不要。1件のジョブに複数の MP4 があれば、`index`（0 始まり）で選ぶ。
+生成の受付後に返った `prompt_id` を渡して `get_video` を呼ぶと、完了したジョブの MP4 を取得できる。例：「さっきの prompt_id の動画を get_video で返して」。再生成や Modal SDK は不要。1件のジョブに複数の MP4 があれば、`index`（0 始まり）で選ぶ。
 
 4 MiB 以下は MCP の埋め込みリソース（`video/mp4`）としてバイト列を返す。MCP Apps 対応クライアント向けには再生画面も返す。埋め込みに対応しないクライアントでは、結果の URL をブラウザで開く（既存の split の Access ログインが必要）。4 MiB を超える動画はリンクで返す。MCP だけでファイルを保存する場合は `byte_offset: 0` で呼び、各応答の `resource.blob` を Base64 デコードして順番に連結する。`next_offset` が null になれば完了。`chunk_bytes` で小さめの応答も指定できる。ファイルパスや任意の URL を入力する機能はない。
 
@@ -104,7 +106,7 @@ codex mcp get comfyui-split
 
 > comfyui-split で EmptyImage と SaveImage の必須入力を調べて。生成はしないで。
 
-ツール呼び出しの承認が出たら、内容を確認して進める。生成したいときは「64×64 の青い画像を1枚だけ生成して、同じジョブの完了を待ち、PNG を手元に保存して」と依頼できる。複数のクライアントで同じジョブを見る場合は、投入時の `prompt_id` を渡す。
+ツール呼び出しの承認が出たら、内容を確認して進める。生成したいときは「64×64 の青い画像を1枚だけ生成して、同じジョブの完了を待ち、PNG を手元に保存して」と依頼できる。複数のクライアントで同じジョブを見る場合は、受付後に返った `prompt_id` を渡す。
 
 ## 1回だけ生成して確認する
 

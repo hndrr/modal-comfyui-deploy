@@ -155,16 +155,15 @@ for name, source in enabled_sources(settings):
         image = image.run_commands(
             "python -m comfy_split.extension_frontend " + shlex.quote(name)
         )
-# The UI follows the core revision in the image. A persisted Manager venv can
-# contain its own older copy, ahead of inherited system site-packages. Put just
-# the frontend (assets AND distribution metadata) ahead of that venv on both
-# CPU and GPU; never modify a shared revision or run pip during a cold start.
+# Persisted venvs can shadow the image pins. Both runtime roles load these
+# core packages from the image, without changing any shared node environment.
 image = image.run_commands(
-    f"python -m pip install --no-deps --target /opt/split-frontend comfyui-frontend-package=={FRONTEND_VERSION}",
-).env({"PYTHONPATH": "/opt/split:/opt/split-frontend"})
+    "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
+    "comfyui-frontend-package comfy-kitchen",
+).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
+    "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
+)
 
-# Deployment-only layer last, so source and dependency builds remain cached.
-image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 app = modal.App(APP_NAME)
 
 # Only this image preloads CPU ComfyUI during module import, before Modal's
@@ -184,7 +183,9 @@ def remote_mcp_image(base):
     return cpu
 
 
-cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1"})
+# Apply the same deployment identity after all reusable CPU and GPU layers.
+cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID})
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 

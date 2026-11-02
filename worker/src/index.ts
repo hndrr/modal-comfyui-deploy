@@ -512,6 +512,8 @@ export default {
 
     const requestUrl = new URL(request.url);
     const mcpPath = requestUrl.pathname === "/mcp" || requestUrl.pathname.startsWith("/mcp/");
+    // Keep the shared split path closed even after its OAuth binding is removed.
+    const splitUiHost = env.SPLIT_UI_ORIGIN && parseOrigins(env.SPLIT_UI_ORIGIN.trim()).has(requestUrl.hostname);
     if (env.SPLIT_REMOTE_MCP) {
       let cfg;
       try { cfg = JSON.parse(env.SPLIT_REMOTE_MCP); }
@@ -519,6 +521,8 @@ export default {
         if (mcpPath || !resolveUpstreamOrigin(env, requestUrl.hostname)) return textResponse("Invalid MCP binding.", 500);
       }
       const url = requestUrl;
+      if (mcpPath && url.hostname === cfg?.split_hostname && url.hostname !== cfg.hostname)
+        return textResponse("Not found.", 404);
       if (url.hostname === cfg?.hostname && (mcpPath || cfg.hostname !== cfg.split_hostname)) {
         if (url.pathname !== "/mcp" || url.search) return textResponse("Not found.", 404);
         const splitOrigin = resolveUpstreamOrigin(env, cfg.split_hostname);
@@ -544,7 +548,7 @@ export default {
         }, "https://" + cfg.split_hostname);
       }
     }
-    if (mcpPath) return textResponse("Not found.", 404);
+    if (mcpPath && splitUiHost) return textResponse("Not found.", 404);
 
     const identity = await authenticate(request, env);
     if (!identity) {

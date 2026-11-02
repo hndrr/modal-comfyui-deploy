@@ -64,6 +64,18 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
     body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list'})}),shared);
   assert.equal((await discovery.json()).result.tools.length,7);
   assert.equal(hits.length,1);
+
+  // Other ComfyUI hosts may already have custom-node routes below /mcp.
+  const other = "ordinary.example.com", upstream = "https://ordinary.modal.run";
+  for (const binding of [shared.SPLIT_REMOTE_MCP, undefined]) {
+    const env = {...shared, MODAL_ORIGINS:JSON.stringify({[other]:upstream}), SPLIT_REMOTE_MCP:binding};
+    for (const path of ["/mcp", "/mcp/panel"]) {
+      const response = await worker.fetch(new Request("https://"+other+path, {
+        headers:{"CF-Access-Jwt-Assertion":browser}}),env);
+      assert.equal(response.status,200);
+      assert.equal(hits.at(-1).url,upstream+path);
+    }
+  }
 });
 
 test('a lost receipt uses exactly the same queue request on retry',async()=>{
@@ -81,6 +93,20 @@ test('a lost receipt uses exactly the same queue request on retry',async()=>{
   assert.equal(JSON.parse(retried.content[0].text).prompt_id,'original');
   assert.ok((await callSplit(send,'enqueue_workflow',{...args,workflow:{other:1}})).isError);
   assert.deepEqual([commits,calls],[1,3]);
+});
+
+test('409 reports a bounded gateway reason or a neutral rejection', async()=>{
+  for (const [body, expected] of [
+    [JSON.stringify({error:"Enable the integration before submitting these nodes."}), " Enable the integration before submitting these nodes."],
+    [JSON.stringify({error:"a".repeat(1000)}), " "+"a".repeat(300)],
+    [JSON.stringify({error:["invalid"]}), ""], ["upstream error page", ""],
+    [JSON.stringify({error:"x".repeat(9000)}), ""],
+  ]) {
+    const r=await callSplit(async path => path==="/split/startup" ? Response.json({ready:true}) :
+      new Response(body,{status:409}),"enqueue_workflow",{request_id:"key",workflow:{}});
+    assert.equal(r.isError,true);
+    assert.equal(r.content[0].text,"Request rejected with HTTP 409."+expected);
+  }
 });
 
 test('initializing, timed-out and failed CPU never receive a prompt',async t=>{
