@@ -4,7 +4,7 @@ import {callSplit} from "../src/remote-mcp.ts";
 
 const id = "fe08cba3-93d1-439f-b5c4-ccb6d9be3421", origin = "https://split.example.com";
 const output = filename => ({filename, subfolder:"music/mix", type:"output"});
-function saved(entries, contents, extra = {}, index = 0) {
+function saved(entries, contents, extra = {}, index = 0, tool = "get_audio") {
   return callSplit(async (path, init) => {
     if (path === "/split/startup") return Response.json({ready:true});
     if (path === "/history/"+id) return Response.json({[id]:{status:{status_str:"success",completed:true},
@@ -13,7 +13,7 @@ function saved(entries, contents, extra = {}, index = 0) {
     assert.equal(url.pathname, "/view");
     assert.deepEqual(Object.fromEntries(url.searchParams), output(contents.name));
     return contents.read(init.headers.Range);
-  }, "get_audio", {prompt_id:id, index, ...extra}, origin);
+  }, tool, {prompt_id:id, index, ...extra}, origin);
 }
 const formats = [
   ["flac","audio/flac",Buffer.from("fLaCexample")],
@@ -61,4 +61,22 @@ test("does not treat a video track or arbitrary content as an audio file", async
   assert.match(noAudio.content[0].text,/0 audio output/);
   const invalid=await saved([output("fake.wav")],{name:"fake.wav",read:() => new Response("<html>wrong file</html>")});
   assert.match(invalid.content[0].text,/expected format/);
+});
+
+test("widget reads verified chunks without putting base64 in model-visible output",async()=>{
+  const bytes=Buffer.alloc(512*1024+3);bytes.write("fLaC");const name="take.flac",parts=[];
+  let offset=0;
+  do {
+    const r=await saved([output(name)],{name,read:range=>{
+      const last=Math.min(offset+512*1024,bytes.length)-1;
+      assert.equal(range,`bytes=${offset}-${offset+512*1024-1}`);
+      return new Response(bytes.subarray(offset,last+1),{status:206,
+        headers:{"Content-Range":`bytes ${offset}-${last}/${bytes.length}`}});
+    }},{byte_offset:offset},0,"read_audio_part");
+    assert.deepEqual(r.content,[]);
+    assert.equal(r.structuredContent.mimeType,"audio/flac");
+    parts.push(Buffer.from(r._meta["split/audioPart"],"base64"));
+    offset=r.structuredContent.next_offset;
+  } while(offset!==null);
+  assert.deepEqual(Buffer.concat(parts),bytes);
 });
