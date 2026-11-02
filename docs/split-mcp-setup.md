@@ -24,6 +24,14 @@ ChatGPT 添付が Azure Blob から配信される場合は、ChatGPT の添付�
 
 HTTPS 接続を閉じるには、Worker の `SPLIT_REMOTE_MCP` を削除してから、専用の Access アプリを無効にする。ブラウザ用 Access アプリと stdio のトークンはそのまま使える。
 
+## 外部サービスの課金先を設定する
+
+確認ページの `/mcp-approvals/*` には **通常のブラウザ用 Access アプリ**を適用する。MCP の OAuth アプリは `/mcp` のままにする。Worker は署名済みブラウザ JWT のメールが `SPLIT_REMOTE_MCP.owner_email` と一致する場合だけページを返す。MCP のアクセストークンと stdio のサービス資格情報では閲覧・承認できない。
+
+Comfy の Partner Node でクレジットを使う場合は、`COMFY_API_KEY` を持つ Modal Secret を作り、その**名前**をデプロイ時の `SPLIT_COMFY_BILLING_SECRET` に指定する。確認画面に表示する課金アカウントの説明は `SPLIT_COMFY_BILLING_LABEL` に指定できる（空なら Secret 名）。キー自体は GPU の実行時だけ使い、履歴・承認ページ・MCP の応答には含めない。未設定なら課金先の確認はできるが実行ボタンは無効になる。直接接続ノードでは、[対応するパックとプロバイダーの Secret](split-integrations.md) を設定する。
+
+更新時は Worker と split の両方を更新する。MCP は専用の生成受付ルートにのみ送信するため、未対応の旧バックエンドには生成を投入できない。標準の ComfyUI ブラウザからの手動生成は従来どおり。これは MCP から投入する生成グラフの制御であり、任意の Python パックをサンドボックス化する機能ではない。インストール・更新するカスタムノードのコードは管理者が信頼できるものに限定する。
+
 ## ローカル stdio：このマシンで一度だけ準備する
 
 リポジトリのルートで実行する。Node **24.22.2**、MCP **0.52.206**、ComfyUI **v0.43.0**（frontend **1.57.4**）で固定している。初めて split を構築する場合は、先に [Access と Worker](#access-と-worker) を設定する。

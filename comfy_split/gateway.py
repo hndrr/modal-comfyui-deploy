@@ -73,6 +73,8 @@ class Controller:
         if stats.num_total_runners or stats.backlog:
             return
         data = self.journal.data
+        from comfy_split.mcp_approvals import prune
+        prune(data.get("mcp_reviews", {}))
         environment_volume = self.volumes["environment"]
         environments = [Path(entry.path).name async for entry in
                         environment_volume.iterdir.aio("/", recursive=False)]
@@ -341,7 +343,7 @@ class Controller:
                 hook = getattr(extension, "before_dispatch", None)
                 if hook:
                     values = hook(record)
-                    if set(values) & {"id", "operation", "environment", "body", "token"}:
+                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard"}:
                         raise ValueError("Extension attempted to replace core worker fields")
                     extra.update(values)
         except ValueError as error:
@@ -353,7 +355,7 @@ class Controller:
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
                 "environment": record["environment"]}
-        for key in ("body", "token"):
+        for key in ("body", "token", "mcp_guard"):
             if key in record:
                 spec[key] = record[key]
         spec.update(extra)
@@ -775,9 +777,37 @@ class Controller:
                 origin = self.cpu.url
             return await proxy(request, self.client, origin, body=body)
 
+    @staticmethod
+    def receipt(job):
+        return {"prompt_id": job["id"], "number": job["number"], "node_errors": {}}
+
+    def prepare_prompt(self, body):
+        for extension in self.plugins:
+            body = extension.prepare(body)
+        check_requirements(body)
+        return body
+
+    def admit_prompt(self, body, request_id):
+        existing = request_id and any(
+            j.get("request_id") == request_id
+            for j in (*self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values())
+        )
+        admissions = [(ext, ext.admit(body, existing)) for ext in self.plugins if hasattr(ext, "admit")]
+        job = self.journal.enqueue(body, request_id)
+        for ext, admission in admissions:
+            ext.accepted(job, admission)
+        return job
+
+    async def commit_prompt(self):
+        await self.volumes["input"].commit.aio()
+        await self.persist()
+
     async def handle(self, request):
         path = api_path(request.path)
         try:
+            if path.startswith("/_remote_mcp/review/"):
+                from comfy_split.mcp_approvals import review
+                return await review(self, request, path)
             if path.startswith("/_split/"):
                 raise web.HTTPNotFound()
             if reserved_route(path):
@@ -824,6 +854,17 @@ class Controller:
                 async with self.lock:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
+            if path == "/_remote_mcp/submit":
+                from comfy_split.remote_mcp import authorize
+                from comfy_split.mcp_approvals import MAX_BODY, submit
+                authorize(request, self.journal.data["mode"])
+                key = request.headers.get("Idempotency-Key")
+                if not key or len(key) > 160:
+                    raise ValueError("MCP submission requires a bounded idempotency key.")
+                body = await request.clone(client_max_size=MAX_BODY + 1).json()
+                async with self.lock:
+                    authorize(request, self.journal.data["mode"])
+                    return await submit(self, body, key)
             if path == "/_remote_mcp/operations":
                 from comfy_split.remote_mcp import operations
                 return await operations(self, request)
@@ -889,20 +930,21 @@ class Controller:
                     if self.journal.data["mode"] != "split":
                         raise ValueError("This client requires split mode.")
                     request_id = request.headers.get("Idempotency-Key")
-                    existing = request_id and any(j.get("request_id") == request_id for j in (
-                        *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
-                    for extension in self.plugins:
-                        body = extension.prepare(body)
-                    check_requirements(body)
-                    admissions = [(extension, extension.admit(body, existing))
-                                  for extension in self.plugins if hasattr(extension, "admit")]
-                    job = self.journal.enqueue(body, request_id)
-                    for extension, admission in admissions:
-                        extension.accepted(job, admission)
-                    await self.volumes["input"].commit.aio()
-                    await self.persist()
+                    # Older MCP Workers must fail closed during an independent rollout.
+                    if request.headers.get("X-Modal-Execution-Mode") == "split" and (
+                        (request_id or "").startswith("remote-mcp:")
+                        or (
+                            isinstance(body, dict)
+                            and body.get("client_id") in {"comfyui-mcp", "remote-mcp"}
+                        )
+                    ):
+                        raise ValueError(
+                            "Update the Worker to submit through the MCP approval endpoint."
+                        )
+                    job = self.admit_prompt(self.prepare_prompt(body), request_id)
+                    await self.commit_prompt()
                 await self.status()
-                return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
+                return web.json_response(self.receipt(job))
             for extension in self.plugins:
                 response = await extension.handle(request, path)
                 if response is not None:

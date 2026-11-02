@@ -86,7 +86,7 @@ test('a lost receipt uses exactly the same queue request on retry',async()=>{
   const receipts=new Map();let commits=0,calls=0;
   const send=async(path,init)=>{
     if(path==='/split/startup')return Response.json({ready:true});
-    assert.equal(path,'/prompt'); const key=init.headers['Idempotency-Key'];
+    assert.equal(path,'/_remote_mcp/submit');assert.equal(init.headers['X-Split-Remote-Tool'],'1'); const key=init.headers['Idempotency-Key'];
     assert.equal(key,'remote-mcp:job-1');calls++;
     if(!receipts.has(key)){commits++;receipts.set(key,init.body);throw new Error('connection lost after commit');}
     return receipts.get(key)===init.body?Response.json({prompt_id:'original',number:1}):new Response(null,{status:409});
@@ -153,4 +153,22 @@ test('management and production perform only the named operation after readiness
   assert.deepEqual(hits,['/split/startup','/_remote_mcp/operations']);
   assert.equal(result.isError,true);
   assert.match(result.content[0].text,/version changed/);
+});
+
+test('an external submission advertises only its trusted browser link, never a prompt id',async()=>{
+  const args={request_id:'music',workflow:{'1':{}}};
+  const path='/mcp-approvals/'+Array(4).fill('a'.repeat(8)).join('.');
+  for(const approval_path of [path,'//different.example/steal',path+'/media/0']){
+    const send=async p=>{
+      if(p==='/split/startup')return Response.json({ready:true});
+      assert.equal(p,'/_remote_mcp/submit');
+      return Response.json({status:'approval_required',approval_path,expires_at:1500},{status:202});
+    };
+    const r=await callSplit(send,'enqueue_workflow',args,'https://split.example.com');
+    if(approval_path===path){
+      const info=JSON.parse(r.content[0].text);
+      assert.equal(info.approval_url,'https://split.example.com'+path);
+      assert.equal(info.prompt_id,undefined);
+    }else assert.ok(r.isError);
+  }
 });

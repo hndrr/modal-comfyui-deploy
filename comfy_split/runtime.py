@@ -249,6 +249,7 @@ class ComfyProcess:
             command.append("--use-sage-attention")
         environment = dict(os.environ)
         environment.pop(node_packs.TOKEN_ENV, None)
+        environment.pop("COMFY_API_KEY", None)
         environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),

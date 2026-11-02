@@ -41,7 +41,7 @@ artokun/comfyui-mcp 0.52.206 の全ツール（41件）とそのアクション�
 | `install_custom_node` | `install`、`update` | split で代替 | change_node を候補コピーだけに実行。 |
 | `install_custom_node` | `reinstall`、`fix`、`uninstall`、`enable`、`disable`、`list`、`sync_deps` | 未提供 | パック一覧・削除・有効化・依存同期はこの版では Manager GUI。list_nodes はパックではなくノードクラス。 |
 | `kitchen` | `status`、`assess`、`apply` | 未提供 | 実行中のプロセスに最適化を適用する操作は split の宣言的なイメージと一致しない。 |
-| `list_api_nodes` | `list`、`schema`、`generate` | 未提供 | 外部 API の課金やキー選択をこの接続で自動化しない。 |
+| `list_api_nodes` | `list`、`schema`、`generate` | 未提供 | 上流の個別ツールは未提供。対応ノードは list_nodes・create_workflow で照会し、enqueue_workflow から本人の承認後に実行。 |
 | `list_local_models` | `list`、`embeddings`、`remove` | split で代替 | list_models は embeddings も対象。削除は inspect_model → remove_model。 |
 | `list_local_models` | `list_paths`、`add_path`、`remove_path` | 未提供 | ローダーの検索パスはデプロイ設定で管理する。 |
 | `list_packs` | `list`、`read_workflow`、`read_manifest`、`list_templates`、`check_runtime`、`extract_deps`、`install_deps`、`skill_list`、`skill_read`、`generate_skill` | 未提供 | 上流のローカルパック保管庫を共有 Volume としては構成していない。 |
