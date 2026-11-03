@@ -53,7 +53,7 @@
     {"actions":["stats","suggest"],"mode":"deferred","note":"上流の一時的なプロセス内の生成履歴 DB は split の永続ジョブ台帳とは異なる。"}
   ],
   "get_image": [
-    {"actions":["get"],"mode":"split","note":"配信用 CPU が共有 output の画像を返す。8 MiB超は認証付きリンク。ComfyUI は起動しない。"},
+    {"actions":["get"],"mode":"split","note":"配信用 CPU が共有 output の画像と認証付きリンクを返す。8 MiBまでは画像ビューアにも表示。ComfyUI は起動しない。"},
     {"actions":["list_outputs","list_assets","asset_metadata"],"mode":"split","note":"list_outputs は prompt_id 単位、list_inputs は入力置き場、inspect_media は寸法・音声など。上流の asset ID は使わない。"},
     {"actions":["view","convert","analyze_color"],"mode":"deferred","note":"任意パスの閲覧・形式変換・色解析は公開していない。取得は get_image。"}
   ],
