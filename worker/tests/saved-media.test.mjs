@@ -62,8 +62,13 @@ test("image links work for small and oversized files, including the legacy Comfy
   assert.equal(large.structuredContent.url,small.structuredContent.url);
   assert.equal(large.content.some(c=>c.type==="image"),false);
   assert.equal(large.content.find(c=>c.type==="resource_link").uri,small.structuredContent.url);
-  const missing=await callSplit(send,"get_image",args);
+  const missing=await callSplit(async path=>{
+    if(path==="/split/startup")return Response.json({ready:true});
+    assert.equal(new URL(path,host).pathname,"/view");
+    return new Response("missing",{status:404});
+  },"get_image",args,host);
   assert.equal(missing.isError,true);
+  assert.match(missing.content[0].text,/HTTP 404/);
 });
 
 test("only original output requests qualify, never inputs, transforms or other routes",()=>{
