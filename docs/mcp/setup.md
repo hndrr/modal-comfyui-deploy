@@ -1,8 +1,8 @@
-# ComfyUI MCP の管理
+# Split app の MCP 設定・運用
 
-すでに HTTPS の接続先がある場合は、[利用ガイド](usage.md)から始めてください。このページは split の管理者向けの手順です。クライアントはすべて HTTPS `/mcp` と OAuth を使います。
+このページは、CPU/GPU 分離構成の **Split app（`splitapp.py`）の管理者向け**です。MCP の接続先を用意し、実行環境やモデルを管理する手順を説明します。すでに接続先を案内されている利用者は、[MCP 利用ガイド](usage.md)から始めてください。
 
-操作の引数・戻り値は[ツール一覧](tools.md)、認証・保存データ・生成・管理の接続先は[経路図](../design/split-mcp-routing.md)を参照してください。
+クライアントはすべて HTTPS `/mcp` と OAuth を使います。操作の引数・戻り値は[ツールリファレンス](tools.md)、認証・保存データ・生成・管理の接続先は[経路図](../design/split-mcp-routing.md)を参照してください。
 
 ## HTTPS の接続先を用意する
 
@@ -73,6 +73,32 @@ GLB・SVGなど未対応の形式、入力・一時プレビュー・画像変�
 切り戻す場合は `SPLIT_MEDIA_ORIGIN` を削除する。旧経路に戻り、取得時に ComfyUI CPU を使う。
 配信アプリを停止しても Volume は削除しない。設定済みの配信先に障害があるときは、暗黙には旧経路へ戻さない。
 
+## カスタムノードとモデルを管理する
+
+### カスタムノードの追加・更新
+
+インストール済みのクラスは `list_nodes`、追加するパックの検索は `search_custom_nodes` で確認します。変更は検証用の候補環境で行います。インストール時はパックのコードが共有 Volume を持つコンテナで動くので、管理者が信頼できるパックを選んでください。
+
+1. `get_split_status` で稼働中の版（`active`）を取得し、`prepare_environment(active, request_id)` で検証用コピー（`candidate`）を作ります。候補がある間、通常の生成は受け付けません。
+2. `change_node(candidate, action: "install" または "update", node, request_id)` にレジストリのパック ID を渡します。`get_admin_operation(request_id)` で処理結果を確認します。`running` はインストール完了ではありません。
+3. `apply_environment(candidate, request_id)` は候補を CPU と GPU で検証し、成功時だけ稼働版を切り替えます。適用しない場合は `discard_environment` で候補を破棄できます。
+
+### モデルの追加・退避・復元
+
+`list_models` でカテゴリを確認し、`add_model(repo, file, category, request_id)` で Hugging Face の safetensors・GGUF・ONNX ファイルを追加します。専用の CPU で取得するので GPU は使いません。必要なら `revision` と `sha256` を指定してください。`get_admin_operation` は完了後に取得したコミットと SHA-256 を返します。
+
+削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。版はファイル全体の SHA-256 です。大きなファイルでは照会・退避の応答に `request_id` が返るので、`get_admin_operation` で完了を確認してください。そのファイルだけを退避します。元に戻すには `restore_model` の `removal_id` に**削除時の** `request_id`、`request_id` には**新しい復元操作用の ID**を指定します。削除時の ID を両方に使うと競合します。追加・復元は既存ファイルを上書きしません。
+
+管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。各ツールの引数と影響は[ツールリファレンス](tools.md)を参照してください。
+
+### モデルの取得元と上流版の更新
+
+公開モデルの取得に追加設定は不要です。非公開・アクセス制限付きモデルを使う場合だけ、読み取り用の `HF_TOKEN` を Modal Secret に登録し、デプロイ時に `SPLIT_MODEL_HF_SECRET` でその Secret 名を指定します。ダウンロード専用の CPU 関数だけに渡されます。
+
+上流を更新する場合は `mcp/package.json` とロックファイルを更新し、`mcp/surface.json` で増減したアクションの扱いを決めます。`node mcp/surface-doc.mjs` で[上流との対応表](upstream.md)を更新し、`npm --prefix mcp test` で実パッケージの登録スキーマと照合してください。
+
+HTTPS 側のツールや実行先を変更した場合は、[ツールリファレンス](tools.md)と[経路図](../design/split-mcp-routing.md)も更新します。この2ページは開発・運用向けに手動で編集する文書で、上流対応表の生成では上書きしません。`tools/list` と照合し、プレイヤー専用の内部ツールをエージェント向けの件数に含めないでください。
+
 ## ローカル stdio からの移行
 
 HTTPS の登録と OAuth 接続を確認してから、旧 `comfyui-split` の stdio 登録だけをクライアント設定から外す。
@@ -84,11 +110,3 @@ split CPU 内の `artokun/comfyui-mcp` はワークフロー編集・ノード�
 `SPLIT_MCP_ACCESS` を外す。他用途のトークンやブラウザ用 Allow は削除しない。
 Worker更新後は、旧専用トークンによる通常のAPI要求を410で拒否する。自動生成したキーで再投入する互換経路は残さない。
 専用の `.env.comfy-mcp` は旧登録を外した後に削除できる。共有の `.env` は変更しない。
-
-### モデルの取得元と上流版の更新
-
-公開モデルの取得に追加設定は不要です。非公開・アクセス制限付きモデルを使う場合だけ、読み取り用の `HF_TOKEN` を Modal Secret に登録し、デプロイ時に `SPLIT_MODEL_HF_SECRET` でその Secret 名を指定します。ダウンロード専用の CPU 関数だけに渡されます。
-
-上流を更新する場合は `mcp/package.json` とロックファイルを更新し、`mcp/surface.json` で増減したアクションの扱いを決めます。`node mcp/surface-doc.mjs` で[上流との対応表](upstream.md)を更新し、`npm --prefix mcp test` で実パッケージの登録スキーマと照合してください。
-
-HTTPS側のツールや実行先を変更した場合は、[ツール一覧](tools.md)と[経路図](../design/split-mcp-routing.md)も更新します。この2ページは利用者向けに編集する文書で、上流対応表の生成では上書きしません。`tools/list` と照合し、プレイヤー専用の内部ツールをエージェント向けの件数に含めないでください。
