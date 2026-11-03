@@ -14,13 +14,12 @@ from aiohttp import web
 from PIL import Image
 
 from comfy_split import input_media as media
+from comfy_split.media_server import FORMATS, output_rows as outputs
 from comfy_split.storage import MOUNTS
 
-KINDS = {
-    **dict.fromkeys(("png", "jpeg", "jpg", "webp"), "image"),
-    **dict.fromkeys(("wav", "flac", "ogg", "opus", "mp3", "m4a"), "audio"),
-    **dict.fromkeys(("mp4", "mov", "mkv", "webm"), "video"),
-}
+# list_outputs is served by the media CPU. Share its rows so an output index
+# names the same file in reuse_output and inspect_media.
+KINDS = {ext: kind for ext, (kind, _) in FORMATS.items()}
 
 
 def require(ok, reason):
@@ -71,39 +70,6 @@ def page(rows, args):
         "total": len(rows),
         "next_offset": offset + limit if offset + limit < len(rows) else None,
     }
-
-
-def outputs(job):
-    rows = []
-    for node_id, node in (job.get("history") or {}).get("outputs", {}).items():
-        if not isinstance(node, dict):
-            continue
-        for entries in node.values():
-            if not isinstance(entries, list):
-                continue
-            for entry in entries:
-                if not isinstance(entry, dict) or entry.get("type") != "output":
-                    continue
-                filename, sub = entry.get("filename"), entry.get("subfolder") or ""
-                if not isinstance(filename, str) or "/" in filename or not isinstance(sub, str):
-                    continue
-                name = (sub + "/" if sub else "") + filename
-                try:
-                    parts(name)
-                except web.HTTPBadRequest:
-                    continue
-                kind = KINDS.get(Path(filename).suffix.lower()[1:])
-                if kind:
-                    rows.append(
-                        {
-                            "index": len(rows),
-                            "node_id": node_id,
-                            "filename": filename,
-                            "subfolder": sub,
-                            "kind": kind,
-                        }
-                    )
-    return rows
 
 
 def inspect(file, name):
