@@ -75,6 +75,9 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         path = receipt["approval_path"].replace(approvals.PUBLIC, approvals.INTERNAL)
         self.assertNotIn("csrf", receipt)
         page = await self.client.get(path, headers=self.review_headers)
+        # Keep the browser form compatible with the Worker's exact Origin check
+        # while withholding the review URL from cross-origin destinations.
+        self.assertEqual(page.headers["Referrer-Policy"], "same-origin")
         html = await page.text()
         token = re.search("name=csrf value='([^']+)'", html)[1]
         self.assertNotIn(token, str(receipt))
