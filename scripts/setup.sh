@@ -81,8 +81,6 @@ require_node() {
   fi
 }
 
-trap 'printf "error: 処理を中断しました。docs/guides/agent-setup.md で準備・ログイン・設定を確認してください。\n" >&2' ERR
-
 if [ "$action" = "prepare" ]; then
   require_command uv
   require_node
@@ -106,8 +104,18 @@ elif [ "$target" = "worker" ]; then
 else
   require_command uv
   if [ "$target" = "standard" ]; then
+    uv run --locked python - <<'PY'
+import os
+import sys
+from dotenv import dotenv_values
+
+name = "COMFYUI_REQUIRES_PROXY_AUTH"
+if (dotenv_values(".env", interpolate=False).get(name) or "").strip().lower() != "on":
+    sys.exit("error: .env に COMFYUI_REQUIRES_PROXY_AUTH=on を保存してから再実行してください。")
+if os.environ.get(name, "on").strip().lower() != "on":
+    sys.exit("error: 環境変数 COMFYUI_REQUIRES_PROXY_AUTH の上書きを解除してください。")
+PY
     app="comfyapp.py"
-    export COMFYUI_REQUIRES_PROXY_AUTH=on
   else
     app="splitapp.py"
   fi

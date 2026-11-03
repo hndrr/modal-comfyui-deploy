@@ -40,7 +40,7 @@
 
 調査で確定できない選択だけを、デプロイ前に確認します。通常構成でMCPが必要と指定された場合は、Splitへの変更が必要なことを説明して構成を確定してください。
 
-既存の `.env` とSecretは維持します。新規Splitは `.env.example` のとおり追加拡張なしで始めます。モデル保存、任意拡張、外部API、メディア配信専用CPUなどの追加設定は、依頼に必要な場合に各ガイドへ進みます。
+既存の設定とSecretを再利用し、必要な項目だけ変更します。新規Splitは `.env.example` のとおり追加拡張なしで始めます。モデル保存、任意拡張、外部API、メディア配信専用CPUなどの追加設定は、依頼に必要な場合に各ガイドへ進みます。
 
 ## 2. 環境準備とログイン
 
@@ -54,7 +54,7 @@ macOSまたはLinuxのBashで実行します。先にGit、uv、`.node-version` 
 ./scripts/setup.sh prepare
 ```
 
-このコマンドは `uv sync --locked --extra split-test`、未作成の場合だけ `.env.example` から `.env` のコピー、`worker/` の `npm ci` を行います。既存の `.env` を保持するため、再実行できます。Node.jsが指定版と異なる場合は依存導入前に終了します。
+このコマンドは `uv sync --locked --extra split-test`、未作成の場合だけ `.env.example` から `.env` のコピー、`worker/` の `npm ci` を行います。既存の `.env` を保持するため、再実行できます。Node.jsはCIと同じ版にそろえるため、指定版と異なる場合は依存導入前に終了します。
 
 ### Modalの接続先を確認する
 
@@ -103,6 +103,12 @@ uv run modal setup
 - 既存の通常構成を直URLから認証付き公開へ無停止で切り替える場合は、[Cloudflare Accessの手順](../operations/cloudflare-access.md)に従い、Cloudflare側を先に整えてからModalをデプロイします。
 - 既存MCPの画像取得経路を更新する場合は、[画像ビューアの導入・更新順序](../mcp/setup.md#画像ビューアの導入更新順序)に従い、Workerを先、Splitを後に反映します。
 
+通常構成では、デプロイ前に `.env` の該当行を次の値に変更して保存します。他の設定はそのまま残してください。
+
+```dotenv
+COMFYUI_REQUIRES_PROXY_AUTH=on
+```
+
 選択した構成だけをデプロイします。
 
 ```bash
@@ -119,7 +125,7 @@ uv run modal setup
 ./scripts/setup.sh deploy split --profile "<MODAL_PROFILE>"
 ```
 
-通常構成では、スクリプトが `COMFYUI_REQUIRES_PROXY_AUTH=on` を渡し、最初のデプロイからModalの直URLを保護します。`.env` 自体は書き換えません。以後もこのコマンドを使うか、既存のModalコマンドを直接使う際は同じ設定を指定してください。SplitのProxy Authは常に必須です。
+通常構成では、スクリプトが `.env` に `COMFYUI_REQUIRES_PROXY_AUTH=on` が保存されていることを確認します。シェルの環境変数で無効に上書きされている場合も、デプロイ前に終了して解除を案内します。設定を `.env` に残すことで、後からREADMEの `./scripts/modal.sh deploy comfyapp.py` を使っても直URLの保護が維持されます。SplitのProxy Authは常に必須です。
 
 デプロイ出力にある `ui` のWeb URLを控えます。通常構成では `<COMFYUI_MODAL_ORIGIN>`、Splitでは `<SPLIT_MODAL_ORIGIN>` として扱い、URLの形式から推測して組み立てません。Workerへ設定するオリジンは `https://` を含み、パスと末尾の `/` を含めません。
 
