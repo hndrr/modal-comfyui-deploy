@@ -95,7 +95,8 @@ test('only the signed UI owner may view/decide one review; service POSTs cannot 
   for(const token of [oauth,other,service,""]){assert.equal((await call(path,token)).status,403);}
   for(const p of [path,internal,"/api"+internal,"/api/split/mode","/api/prompt/","/api/%70rompt","/prompt?alternate=1"])
     assert.ok([403,410].includes((await call(p,service,"POST")).status));
-  for(const headers of [{},{"Origin":"https://other.example","Content-Type":"application/x-www-form-urlencoded"},
+  for(const headers of [{},{"Origin":"null","Content-Type":"application/x-www-form-urlencoded"},
+    {"Origin":"https://other.example","Content-Type":"application/x-www-form-urlencoded"},
     {"Origin":"https://"+host,"Content-Type":"application/json"}])assert.equal((await call(path,owner,"POST",headers)).status,403);
   assert.equal(hits.length,0);
   assert.equal((await call(path,owner)).status,200);

@@ -241,7 +241,9 @@ def page(row, message=""):
         headers={
             "Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-            "Referrer-Policy": "no-referrer",
+            # HTML form POSTs need their same-origin Origin for the Worker CSRF
+            # check. no-referrer makes browsers send Origin: null instead.
+            "Referrer-Policy": "same-origin",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
         },
