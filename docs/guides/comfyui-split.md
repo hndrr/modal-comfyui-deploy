@@ -15,6 +15,8 @@ ComfyUI標準のワークフロー作成・編集・保存・読み込みに、�
 接続先はデプロイ出力の `ui` URLです。Modal Proxy Authが必須で、`COMFYUI_REQUIRES_PROXY_AUTH`による無効化はできません。
 ブラウザで使う場合は、[Cloudflare Accessの設定手順](../operations/cloudflare-access.md)に従い、Workerの転送先設定、Custom Domain、Accessアプリの宛先と許可ポリシーを設定します。`MODAL_ORIGINS`にURLを追加するだけでは公開・認証の設定は完了しません。
 
+ChatGPT Web・Claude Code・Codex から使う場合は、この構成専用の[MCP 利用ガイド](../mcp/usage.md)を参照してください。MCP の接続先を用意する管理者向けの手順は[MCP の設定・運用](../mcp/setup.md)にあります。
+
 ## 起動と停止
 
 CPUサーバー・GPUワーカーとも最小0台・最大1台、停止待ちは30秒。
