@@ -31,6 +31,8 @@ test("an MCP tool result displays image bytes locally and opens its protected li
   assert.equal(prevented,true);
   assert.equal(messages.at(-1).method,"ui/open-link");
   assert.equal(messages.at(-1).params.url,result.structuredContent.url);
+  elements.a.onclick({preventDefault(){}});
+  assert.deepEqual(messages.filter(m=>m.method==="ui/open-link").map(m=>m.id),[2,3]);
   receive({method:"ui/notifications/tool-result",params:{isError:true}},"https://other.example");
   receive({method:"ui/notifications/tool-result",params:{isError:true}},"https://chatgpt.example",{});
   assert.equal(elements.img.hidden,false);
@@ -67,4 +69,35 @@ test("structured-only ChatGPT globals show the link without replacing a full MCP
   handlers["openai:set_globals"]({detail:{globals}});
   assert.equal(elements.img.hidden,false);
   assert.equal(elements.img.src,"data:image/png;base64,cG5n");
+});
+
+test("invalid or disallowed links do not prevent inline images from rendering",()=>{
+  const {elements,receive}=viewer();
+  for(const url of ["",undefined,"/view?filename=image.png","not a URL","http://split.example.com/view",
+    "javascript:alert(1)","https://split.example.com/other"]){
+    receive({method:"ui/notifications/tool-result",params:result});
+    receive({method:"ui/notifications/tool-result",params:{...result,structuredContent:{...result.structuredContent,url}}});
+    assert.equal(elements.img.hidden,false);
+    assert.equal(elements.img.src,"data:image/png;base64,cG5n");
+    assert.equal(elements.span.textContent,result.structuredContent.filename);
+    assert.equal(elements.a.hidden,true);
+    assert.equal(elements.a.href,undefined);
+    elements.img.onerror();
+    assert.equal(elements.span.textContent,"画像を表示できません。");
+    receive({method:"ui/notifications/tool-result",params:{structuredContent:{...result.structuredContent,url},content:[]}});
+    assert.equal(elements.img.hidden,true);
+    assert.equal(elements.span.textContent,result.structuredContent.filename+"：画像を表示できません。");
+  }
+});
+
+test("missing image information replaces the loading state and clears a previous result",()=>{
+  const {elements,receive}=viewer();
+  for(const structuredContent of [undefined,{},null]){
+    receive({method:"ui/notifications/tool-result",params:{structuredContent}});
+    assert.equal(elements.span.textContent,"画像情報を読み込めませんでした。");
+    assert.equal(elements.img.hidden,true);
+    assert.equal(elements.a.hidden,true);
+    receive({method:"ui/notifications/tool-result",params:result});
+    assert.equal(elements.img.hidden,false);
+  }
 });
