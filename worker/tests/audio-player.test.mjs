@@ -23,7 +23,7 @@ test("ChatGPT globals can mount a cold player and read private audio without sta
     createBufferSource(){return {connect(){},disconnect(){},start(_,at){started=at;},stop(){}};}
     async close(){closed=true;}
   }
-  const script=audioPlayerHtml.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const script=audioPlayerHtml.split("<script>")[1].split("</script>")[0];
   runInNewContext(script,{window:win,parent,document:{querySelector:k=>elements[k],body:{scrollHeight:100}},
     URL,Blob,AudioContext,atob,Uint8Array,setTimeout,clearTimeout,setInterval,clearInterval,addEventListener:(n,f)=>{handlers[n]=f;},
     ResizeObserver:class{observe(){}}});
