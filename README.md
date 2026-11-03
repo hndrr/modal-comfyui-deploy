@@ -168,34 +168,90 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 
 ## ライセンス
 
-**本リポジトリ自身のライセンスは未指定です。** 以下は依存ソフトウェアの確認結果で、本リポジトリの独自コードにライセンスを付与するものではありません。
+本リポジトリで利用する主な依存ソフトウェアと、そのライセンス・出典を以下にまとめています。
 
 <details>
 <summary>主な依存ソフトウェアのライセンス</summary>
 
+版や導入条件は、通常構成・Split app のイメージ定義と各パッケージのロックファイルに基づきます。版を固定していない依存先は、実際に導入する版のライセンスも確認してください。
+
 | 依存先 | 確認した版 | ライセンス・出典 |
 | --- | --- | --- |
-| ComfyUI | v0.43.0（Split app の固定コミット） | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI/blob/426f5eea52a7ece1dd599fff4cb6cd1f352ddd24/LICENSE) |
-| ComfyUI frontend | 1.57.4 | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI_frontend/blob/v1.57.4/LICENSE) |
-| ComfyUI-Manager | 4.2.2 | [GPL-3.0-only](https://pypi.org/project/comfyui-manager/4.2.2/) |
-| comfy-cli | 1.7.3 | [GPL-3.0-only](https://pypi.org/project/comfy-cli/1.7.3/) |
-| comfyui-mcp | 0.52.206 | [MIT](https://github.com/artokun/comfyui-mcp/blob/c64a8ec76f3345446f0f472152afcd95af846a37/LICENSE) |
-| Modal SDK | 1.1.4 | [Apache-2.0](https://pypi.org/project/modal/1.1.4/) |
-| Gradio | 5.47.2 | [Apache-2.0](https://pypi.org/project/gradio/5.47.2/) |
-| Pillow | 11.3.0 | [MIT-CMU](https://pypi.org/project/pillow/11.3.0/) |
-| python-dotenv | 1.2.2 | [BSD-3-Clause](https://pypi.org/project/python-dotenv/1.2.2/) |
-| aiohttp | 3.12.15 | [Apache-2.0 AND MIT](https://pypi.org/project/aiohttp/3.12.15/) |
+| [ComfyUI](https://github.com/Comfy-Org/ComfyUI) | v0.43.0（Split app の固定コミット） | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI/blob/426f5eea52a7ece1dd599fff4cb6cd1f352ddd24/LICENSE) |
+| [ComfyUI frontend](https://github.com/Comfy-Org/ComfyUI_frontend) | 1.57.4 | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI_frontend/blob/v1.57.4/LICENSE) |
+| [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) | 4.2.2 | [GPL-3.0-only](https://pypi.org/project/comfyui-manager/4.2.2/) |
+| [comfy-cli](https://github.com/Comfy-Org/comfy-cli) | 1.7.3 | [GPL-3.0-only](https://pypi.org/project/comfy-cli/1.7.3/) |
+| [comfyui-mcp](https://github.com/artokun/comfyui-mcp) | 0.52.206 | [MIT](https://github.com/artokun/comfyui-mcp/blob/c64a8ec76f3345446f0f472152afcd95af846a37/LICENSE) |
+| [Modal SDK](https://github.com/modal-labs/modal-client) | 1.1.4 | [Apache-2.0](https://pypi.org/project/modal/1.1.4/) |
+| [Gradio](https://github.com/gradio-app/gradio) | 5.47.2 | [Apache-2.0](https://pypi.org/project/gradio/5.47.2/) |
+| [Pillow](https://github.com/python-pillow/Pillow) | 11.3.0 | [MIT-CMU](https://pypi.org/project/pillow/11.3.0/) |
+| [python-dotenv](https://github.com/theskumar/python-dotenv) | 1.2.2 | [BSD-3-Clause](https://pypi.org/project/python-dotenv/1.2.2/) |
+| [aiohttp](https://github.com/aio-libs/aiohttp) | 3.12.15 | [Apache-2.0 AND MIT](https://pypi.org/project/aiohttp/3.12.15/) |
+| [Hugging Face Hub](https://github.com/huggingface/huggingface_hub) | Split app は 0.35.1、モデル保存用イメージは版固定なし | [Apache-2.0](https://github.com/huggingface/huggingface_hub/blob/v0.35.1/LICENSE) |
+| [hf_transfer](https://github.com/huggingface/hf_transfer) | モデル保存用イメージで導入（版固定なし） | [Apache-2.0](https://github.com/huggingface/hf_transfer/blob/v0.1.9/LICENSE) |
 
-#### Split app に導入するカスタムノード
+#### GPU・推論ライブラリ
 
-| ノードパック | ライセンス・出典 |
-| --- | --- |
-| ComfyUI-Crystools | [MIT](https://github.com/crystian/ComfyUI-Crystools/blob/2f18256c5b5063937106f29a8e0a7db3ae3869b7/LICENSE) |
-| ComfyUI_Local_Media_Manager | [GNU GPL v3](https://github.com/Firetheft/ComfyUI_Local_Media_Manager/blob/5e74ce0cc708798ed25a77097d6059b6c796da87/LICENSE) |
-| ComfyUI-Image-Browsing | [GNU GPL v3](https://github.com/hayden-cn/ComfyUI-Image-Browsing/blob/3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7/LICENSE) |
-| rgthree-comfy | [MIT](https://github.com/rgthree/rgthree-comfy/blob/2c5342a8cb0eaecaabf61435a5f37dd594c510ba/LICENSE) |
-| ComfyUI-MiniMax-H3-MotionCache-FastVAE | [MIT（ノードのコード）](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE/blob/b719329e0ecf35f0ae08d241c363ed1e56adbb95/LICENSE) |
+| 依存先 | 版・導入指定 | ライセンス・出典 |
+| --- | --- | --- |
+| [PyTorch](https://github.com/pytorch/pytorch) | 2.10.0+cu130 | [BSD-3-Clause](https://github.com/pytorch/pytorch/blob/v2.10.0/LICENSE) |
+| [TorchVision](https://github.com/pytorch/vision) | 0.25.0+cu130 | [BSD-3-Clause](https://github.com/pytorch/vision/blob/v0.25.0/LICENSE) |
+| [TorchAudio](https://github.com/pytorch/audio) | 2.10.0+cu130 | [BSD-2-Clause](https://github.com/pytorch/audio/blob/v2.10.0/LICENSE) |
+| [xFormers](https://github.com/facebookresearch/xformers) | 0.0.34 | [BSD-3-Clause ほか（同梱コードの条件を含む）](https://github.com/facebookresearch/xformers/blob/v0.0.34/LICENSE) |
+| [FlashAttention](https://github.com/Dao-AILab/flash-attention)（[wheel 配布元](https://github.com/mjun0812/flash-attention-prebuild-wheels)） | 2.8.3（wheel 配布元の v0.9.0 リリース） | [BSD-3-Clause（本体）](https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/LICENSE)、[BSD-3-Clause（wheel ビルド）](https://github.com/mjun0812/flash-attention-prebuild-wheels/blob/v0.9.0/LICENSE) |
+| [SageAttention](https://github.com/woct0rdho/SageAttention)（ビルド元 fork） | `abi3_stable` ブランチ | [Apache-2.0](https://github.com/woct0rdho/SageAttention/blob/abi3_stable/LICENSE) |
+| [comfy-kitchen](https://github.com/Comfy-Org/comfy-kitchen) | 0.2.40（Split app の ComfyUI 固定版の依存） | [Apache-2.0](https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.40/LICENSE) |
+| [comfy-aimdo](https://github.com/Comfy-Org/comfy-aimdo) | 0.6.0（Split app の ComfyUI 固定版の依存） | [GNU GPL v3](https://github.com/Comfy-Org/comfy-aimdo/blob/v0.6.0/LICENSE) |
+
+#### 通常構成で追加する Python ライブラリ
+
+| 依存先 | 版・導入指定 | ライセンス・出典 |
+| --- | --- | --- |
+| [Diffusers](https://github.com/huggingface/diffusers) | 0.32.0 | [Apache-2.0](https://github.com/huggingface/diffusers/blob/v0.32.0/LICENSE) |
+| [MoviePy](https://github.com/Zulko/moviepy) | 1.0.3 | [MIT](https://github.com/Zulko/moviepy/blob/v1.0.3/LICENCE.txt) |
+| [librosa](https://github.com/librosa/librosa) | 0.10.2.post1 | [ISC](https://github.com/librosa/librosa/blob/0.10.2.post1/LICENSE.md) |
+| [SoundFile](https://github.com/bastibe/python-soundfile) | 0.12.1 | [BSD-3-Clause](https://github.com/bastibe/python-soundfile/blob/0.12.1/LICENSE) |
+| [ftfy](https://github.com/rspeer/python-ftfy) | 6.2.3 | [Apache-2.0](https://github.com/rspeer/python-ftfy/blob/v6.2.3/LICENSE.txt) |
+| [Matplotlib](https://github.com/matplotlib/matplotlib) | 版固定なし | [Matplotlib License](https://github.com/matplotlib/matplotlib/blob/main/LICENSE/LICENSE) |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime)（`onnxruntime-gpu`） | 版固定なし | [MIT](https://github.com/microsoft/onnxruntime/blob/main/LICENSE) |
+| [scikit-image](https://github.com/scikit-image/scikit-image) | 版固定なし | [BSD-3-Clause ほか（ファイル別の条件を含む）](https://github.com/scikit-image/scikit-image/blob/main/LICENSE.txt) |
+| [Accelerate](https://github.com/huggingface/accelerate) | 1.1.0 | [Apache-2.0](https://github.com/huggingface/accelerate/blob/v1.1.0/LICENSE) |
+| [GGUF Python](https://github.com/ggml-org/llama.cpp/tree/master/gguf-py) | 版固定なし | [MIT](https://github.com/ggml-org/llama.cpp/blob/master/LICENSE) |
+| [Taichi](https://github.com/taichi-dev/taichi) | `>=1.6,<1.8` | [Apache-2.0](https://github.com/taichi-dev/taichi/blob/v1.7.4/LICENSE) |
+
+#### Web・MCP の実行時ライブラリ
+
+| 依存先 | 確認した版 | ライセンス・出典 |
+| --- | --- | --- |
+| [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) | Worker は 1.32.1、MCP は 1.32.2 | [MIT](https://github.com/modelcontextprotocol/typescript-sdk/blob/3b73021a0a2272c0c04c3917bcdb03398b3ec63f/LICENSE) |
+| [jose](https://github.com/panva/jose) | 6.2.8 | [MIT](https://github.com/panva/jose/blob/v6.2.8/LICENSE.md) |
+| [Zod](https://github.com/colinhacks/zod) | 4.6.7 | [MIT](https://github.com/colinhacks/zod/blob/v4.6.7/LICENSE) |
+| [Hono](https://github.com/honojs/hono) | 4.12.34 | [MIT](https://github.com/honojs/hono/blob/v4.12.34/LICENSE) |
+| [Hono Node Server](https://github.com/honojs/node-server) | 1.19.17 | [MIT](https://github.com/honojs/node-server/blob/v1.19.17/LICENSE) |
+| [Busboy](https://github.com/mscdex/busboy) | 1.6.0 | [MIT](https://github.com/mscdex/busboy/blob/v1.6.0/LICENSE) |
+| [React / React DOM](https://github.com/facebook/react) | 19.2.8 | [MIT](https://github.com/facebook/react/blob/v19.2.8/LICENSE) |
+| [React Aria Components](https://github.com/adobe/react-spectrum/tree/main/packages/react-aria-components) | 1.20.0 | [Apache-2.0](https://github.com/adobe/react-spectrum/blob/react-aria-components%401.20.0/LICENSE) |
+
+#### 実行環境
+
+| 依存先 | 版・導入指定 | ライセンス・出典 |
+| --- | --- | --- |
+| [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) | 13.0 系 | [NVIDIA CUDA EULA・同梱コンポーネントの条件](https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html) |
+| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | apt で導入（版固定なし） | [LGPL / GPL など（ビルド構成による）](https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md) |
+| [Node.js](https://github.com/nodejs/node) | Split app の MCP 実行環境は 24.22.2 | [MIT・同梱コンポーネントのライセンス](https://github.com/nodejs/node/blob/v24.22.2/LICENSE) |
+
+#### 導入するカスタムノード
+
+ライセンスの参照先は Split app で固定している版です。通常構成では、導入時に取得した版の条件も確認してください。
+
+| ノードパック | 導入構成 | ライセンス・出典 |
+| --- | --- | --- |
+| [ComfyUI-Crystools](https://github.com/crystian/ComfyUI-Crystools) | 通常構成・Split app | [MIT](https://github.com/crystian/ComfyUI-Crystools/blob/2f18256c5b5063937106f29a8e0a7db3ae3869b7/LICENSE) |
+| [ComfyUI_Local_Media_Manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager) | 通常構成・Split app | [GNU GPL v3](https://github.com/Firetheft/ComfyUI_Local_Media_Manager/blob/5e74ce0cc708798ed25a77097d6059b6c796da87/LICENSE) |
+| ComfyUI-Image-Browsing（[通常構成の取得先](https://github.com/hayden-fr/ComfyUI-Image-Browsing)・[Split app の取得先](https://github.com/hayden-cn/ComfyUI-Image-Browsing)） | 通常構成・Split app | [GNU GPL v3](https://github.com/hayden-cn/ComfyUI-Image-Browsing/blob/3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7/LICENSE) |
+| [rgthree-comfy](https://github.com/rgthree/rgthree-comfy) | 通常構成・Split app | [MIT](https://github.com/rgthree/rgthree-comfy/blob/2c5342a8cb0eaecaabf61435a5f37dd594c510ba/LICENSE) |
+| [ComfyUI-MiniMax-H3-MotionCache-FastVAE](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE) | Split app | [MIT（ノードのコード）](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE/blob/b719329e0ecf35f0ae08d241c363ed1e56adbb95/LICENSE) |
 
 </details>
 
-この一覧は主な依存先をまとめたもので、推移的依存を含むすべての配布物を網羅していません。追加する任意拡張・ノード・モデル、実行イメージに含まれる CUDA・FFmpeg などには、それぞれのライセンス・利用条件が適用されます。導入するコードやモデル、イメージを再配布する場合は、対象の版の条件と必要な著作権表示・ライセンス文書を確認してください。
+この一覧は主な依存先をまとめたもので、推移的依存やビルドツールを含むすべての配布物を網羅していません。追加する任意拡張・ノード・モデルには、それぞれのライセンス・利用条件が適用されます。導入するコードやモデル、イメージを再配布する場合は、対象の版の条件と必要な著作権表示・ライセンス文書を確認してください。
