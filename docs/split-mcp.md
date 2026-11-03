@@ -77,7 +77,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 ## 生成中・生成後にできること
 
-保存済み画像・音声・動画と `list_outputs` は専用の配信用 CPU が Volume を読みます。ComfyUI CPU・GPU は起動しません。取得中は配信用 CPU の料金が発生し、利用が終わると0台に戻ります。原本は Modal に残り、取得で削除しません。`get_image` は8 MiBまでインラインで返し、大きい画像は認証付きリンクを返します。
+保存済み画像・音声・動画と `list_outputs` は専用の配信用 CPU が Volume を読みます。ComfyUI CPU・GPU は起動しません。取得中は配信用 CPU の料金が発生し、利用が終わると0台に戻ります。原本は Modal に残り、取得で削除しません。`get_image` は8 MiBまで画像データを返し、ChatGPTでは画像ビューアに表示します。サイズにかかわらず認証付き閲覧リンクも返し、8 MiB超はリンクのみです。画像が表示されない場合も、リンクをブラウザで開いてログインすると閲覧・保存できます。
 
 ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も配信用 CPU だけで応答します。画面で保存したJSONを「どのノードに何という名前で値を渡すか」という生成依頼用の形式に直すときだけ、ComfyUI CPUで現在の入力仕様を確認します。すでに生成依頼用の形式で保存されていれば、その変換は不要です。[取得時の分岐図](design/split-mcp-routing.md#ワークフロー取得でcomfyuiを起こす場合)で確認できます。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
 

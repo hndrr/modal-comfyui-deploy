@@ -6,6 +6,8 @@ import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, videoS
 type Send = (path:string, init:RequestInit) => Promise<Response>;
 const failure=(text:string):CallToolResult=>({isError:true,content:[{type:"text",text}]});
 export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","list_outputs"]);
+export const imageOutput={filename:z.string(),mimeType:z.enum(["image/png","image/jpeg","image/webp"]),
+  url:z.url(),delivery:z.enum(["inline","link"])};
 
 // Credentials and the fixed origin are deployment configuration, never tool arguments.
 export function mediaSender(raw:string, hostname:string, credentials:Headers):Send {
@@ -50,13 +52,16 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
   if (response.status!==200) {await response.body?.cancel();return failure("Cannot read saved image (HTTP "+response.status+").");}
   const bytes=await readAtMost(response,8*1024*1024);
   const url=new URL(path,origin).href;
-  if (!bytes) return {content:[{type:"text",text:"Open the saved image after signing in: "+url},
-    {type:"resource_link",uri:url,name:filename,mimeType:mime}]};
+  const result:CallToolResult={structuredContent:{filename,mimeType:mime,url,delivery:bytes?"inline":"link"},
+    content:[{type:"text",text:"Open or save the image after signing in: "+url},
+      {type:"resource_link",uri:url,name:filename,mimeType:mime}]};
+  if (!bytes) return result;
   const tag=(at:number,s:string)=>s.split("").every((c,i)=>bytes[at+i]===c.charCodeAt(0));
   if (!(ext==="png" ? bytes[0]===137 && tag(1,"PNG\r\n\x1a\n") :
         ext==="webp" ? tag(0,"RIFF") && tag(8,"WEBP") : bytes[0]===255 && bytes[1]===216 && bytes[2]===255))
     return failure("Saved image content does not match its format.");
-  return {content:[{type:"image",mimeType:mime,data:base64(bytes)}]};
+  result.content.unshift({type:"image",mimeType:mime,data:base64(bytes)});
+  return result;
 }
 
 export async function callSavedMedia(send:Send,name:string,args:Record<string,unknown>,origin:string):Promise<CallToolResult> {
