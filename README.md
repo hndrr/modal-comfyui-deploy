@@ -17,6 +17,8 @@ Modal 上で ComfyUI を動かしつつ、Hugging Face のモデルを Modal Vol
 
 ChatGPT Web、Claude Code、Codex から split に接続するには、[ComfyUI MCP の使い方](docs/split-mcp.md)を参照してください。
 
+MCPの[ツール一覧](docs/split-mcp-tools.md)には引数・戻り値・実行先、[経路図](docs/design/split-mcp-routing.md)には保存データの参照とComfyUI CPU・GPUを起動する条件をまとめています。
+
 補助スクリプトとして `rename_volume.py` と `move_volume_file.py` も含まれています。
 
 ## セットアップ
