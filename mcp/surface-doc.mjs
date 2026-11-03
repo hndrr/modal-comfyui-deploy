@@ -5,7 +5,7 @@ const labels={direct:'上流を使用',split:'split で代替',deferred:'未提�
 export const guide=[
   '# 上流と split のツール対応表','',
   'artokun/comfyui-mcp '+pkg.dependencies['comfyui-mcp']+' の全ツール（'+Object.keys(policy).length+'件）とそのアクションを示します。使い方は[チャットから ComfyUI を使う](split-mcp.md)を参照してください。','',
-  '「上流を使用」は split の CPU で元の npm パッケージを呼びます。「split で代替」は右欄に記載した範囲の機能を提供します。「未提供」はこの HTTPS 接続では呼べません。ローカル stdio の機能は変わりません。','',
+  '「上流を使用」は split の CPU で元の npm パッケージを呼びます。「split で代替」は右欄に記載した範囲の機能を提供します。「未提供」はこの HTTPS 接続では呼べません。クライアントは HTTPS 接続に統一しています。CPU 内で呼ぶ上流パッケージは残します。','',
   '| 上流ツール | アクション | HTTPS での扱い | 使い方・理由 |',
   '|---|---|---|---|',
   ...Object.entries(policy).flatMap(([name,rows])=>rows.map(({actions,mode,note})=>

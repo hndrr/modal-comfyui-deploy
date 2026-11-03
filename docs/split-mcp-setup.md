@@ -1,14 +1,14 @@
-# ComfyUI MCP の管理とローカル stdio の設定
+# ComfyUI MCP の管理
 
-すでに HTTPS の接続先がある場合は、[利用ガイド](split-mcp.md)から始めてください。このページは、split の管理者やローカルで stdio サーバーを起動したい人向けの手順です。
+すでに HTTPS の接続先がある場合は、[利用ガイド](split-mcp.md)から始めてください。このページは split の管理者向けの手順です。クライアントはすべて HTTPS `/mcp` と OAuth を使います。
 
 ## HTTPS の接続先を用意する
 
 1. split の CPU イメージに固定版 Node.js と MCP をデプロイする（`scripts/modal.sh deploy splitapp.py`）。GPU に Node/MCP は不要。既存 Worker をテスト後にデプロイする。一般の中継ルートでは内部呼び出し用ヘッダーを必ず取り除く。
-2. split ホスト全体を従来のブラウザ・stdio 用 Access アプリに登録する。同じホストの `/mcp` に、より具体的なパスを持つ別の self-hosted Access アプリを設定し、Include が本人のメール1件のみの Allow を関連付ける。ブラウザ用共有アプリとは別の AUD を使う。Managed OAuth を有効にし、CLI のループバックと、ChatGPT が表示する**正確なコールバック URI**を許可する。トークンや本人メールは Git に記録しない。
+2. split ホスト全体を従来のブラウザ用 Access アプリに登録する。同じホストの `/mcp` に、より具体的なパスを持つ別の self-hosted Access アプリを設定し、Include が本人のメール1件のみの Allow を関連付ける。ブラウザ用共有アプリとは別の AUD を使う。Managed OAuth を有効にし、CLI のループバックと、ChatGPT が表示する**正確なコールバック URI**を許可する。トークンや本人メールは Git に記録しない。
 
    ChatGPT の登録フォームで動的クライアント登録（DCR）を選ぶと、コールバック URL が見えない場合がある。「OAuthの詳細設定 → 登録方法」で一度「ユーザー定義の OAuth クライアント」を選ぶと、このフォーム用の URL が表示される。それを Cloudflare の「許可されたリダイレクト URI」に追加して保存し、**同じフォームで DCR に戻して**プラグインを作成する。クライアント ID やシークレットの手入力、ワイルドカードの許可は不要。「接続」で Cloudflare に移ったら本人のログインを完了する。
-3. Worker の secret `SPLIT_REMOTE_MCP` に次の JSON を対話入力する。既存の split ホストが解決する転送先と `origin` が一致しない限り中継されない。ホスト変更時は、既存の暗号化済みマップを置き換えずに `SPLIT_UI_ORIGIN` に `{"split.example.com":"https://example.modal.run"}` を設定できる。stdio の `SPLIT_MCP_ACCESS` とローカルの `COMFYUI_URL` も新ホストに合わせ、Worker の Custom Domain として登録する。
+3. Worker の secret `SPLIT_REMOTE_MCP` に次の JSON を対話入力する。既存の split ホストが解決する転送先と `origin` が一致しない限り中継されない。ホスト変更時は、既存の暗号化済みマップを置き換えずに `SPLIT_UI_ORIGIN` に `{"split.example.com":"https://example.modal.run"}` を設定できる。Worker の Custom Domain として登録する。
 
    ```json
    {"hostname":"split.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"<専用アプリのAUD>","owner_email":"owner@example.com"}
@@ -22,74 +22,48 @@ ChatGPT 添付が Azure Blob から配信される場合は、ChatGPT の添付�
 
 非対話環境で CLI の添付ヘルパーを使う場合は、この MCP 用に発行済みのアクセストークンを環境変数 `SPLIT_MCP_OAUTH_TOKEN` で渡せる。
 
-HTTPS 接続を閉じるには、Worker の `SPLIT_REMOTE_MCP` を削除してから、専用の Access アプリを無効にする。ブラウザ用 Access アプリと stdio のトークンはそのまま使える。
+HTTPS 接続を閉じるには、Worker の `SPLIT_REMOTE_MCP` を削除してから、専用の Access アプリを無効にする。ブラウザ用 Access アプリは維持する。
 
 ## 外部サービスの課金先を設定する
 
-確認ページの `/mcp-approvals/*` には **通常のブラウザ用 Access アプリ**を適用する。MCP の OAuth アプリは `/mcp` のままにする。Worker は署名済みブラウザ JWT のメールが `SPLIT_REMOTE_MCP.owner_email` と一致する場合だけページを返す。MCP のアクセストークンと stdio のサービス資格情報では閲覧・承認できない。
+確認ページの `/mcp-approvals/*` には **通常のブラウザ用 Access アプリ**を適用する。MCP の OAuth アプリは `/mcp` のままにする。Worker は署名済みブラウザ JWT のメールが `SPLIT_REMOTE_MCP.owner_email` と一致する場合だけページを返す。MCP のアクセストークンでは閲覧・承認できない。
 
 Comfy の Partner Node でクレジットを使う場合は、`COMFY_API_KEY` を持つ Modal Secret を作り、その**名前**をデプロイ時の `SPLIT_COMFY_BILLING_SECRET` に指定する。確認画面に表示する課金アカウントの説明は `SPLIT_COMFY_BILLING_LABEL` に指定できる（空なら Secret 名）。キー自体は GPU の実行時だけ使い、履歴・承認ページ・MCP の応答には含めない。未設定なら課金先の確認はできるが実行ボタンは無効になる。直接接続ノードでは、[対応するパックとプロバイダーの Secret](split-integrations.md) を設定する。
 
 更新時は Worker と split の両方を更新する。MCP は専用の生成受付ルートにのみ送信するため、未対応の旧バックエンドには生成を投入できない。標準の ComfyUI ブラウザからの手動生成は従来どおり。これは MCP から投入する生成グラフの制御であり、任意の Python パックをサンドボックス化する機能ではない。インストール・更新するカスタムノードのコードは管理者が信頼できるものに限定する。
 
-## ローカル stdio：このマシンで一度だけ準備する
+## 保存済みメディアの配信用 CPU
 
-リポジトリのルートで実行する。Node **24.22.2**、MCP **0.52.206**、ComfyUI **v0.43.0**（frontend **1.57.4**）で固定している。初めて split を構築する場合は、先に [Access と Worker](#access-と-worker) を設定する。
-
-```bash
-mise install node@24.22.2
-mise exec node@24.22.2 -- npm --prefix mcp ci --ignore-scripts
-test -e .env.comfy-mcp || cp .env.comfy-mcp.example .env.comfy-mcp
-# エディタで .env.comfy-mcp の URL・Client ID・Client Secret を記入する。
-```
-
-`COMFYUI_URL` は split の **Access 公開ホストの HTTPS オリジン**。Modal の直 URL や `/api` を付けた URL は使わない。すべてのクライアントが同じランチャーを起動し、ランチャーだけが専用ファイルから Access の認証情報を読み込む。クライアントを増やしてもトークンの再発行や再デプロイは不要。
-
-## 好きなクライアントに登録する
-
-**汎用の設定**: リポジトリのルートで以下を実行すると、このマシン用の `mcpServers` JSON が表示される。クライアントがこの形式に対応していれば、出力の `comfyui-split` エントリを既存の設定に追加する。設定画面を使う場合は、通信方式に **stdio**、名前に `comfyui-split`、コマンドと引数に出力の `command` と `args` を指定する。環境変数の入力は不要。パスは絶対パスなので、チェックアウトを動かしたときは再登録する。
-
-```bash
-mise exec node@24.22.2 -- node mcp/client-config.mjs
-```
-
-この stdio 構成はローカルプロセスを起動できるクライアント向け。リモートの MCP URL を使うクライアントには、ブラウザ用のルート URL ではなく同じホストの `/mcp` を登録する。
-
-**Claude Code**: リポジトリのルートで一度だけ次を実行する。[`--scope local`](https://code.claude.com/docs/en/mcp#local-scope) はこのユーザーのこのプロジェクトだけに適用される。
-
-```bash
-claude mcp add --transport stdio --scope local comfyui-split -- \
-  "$(mise exec node@24.22.2 -- node -p 'process.execPath')" "$PWD/mcp/start.mjs"
-claude mcp get comfyui-split
-```
-
-`Connected` を確認したら、このディレクトリで `claude` を起動する。セッション内では `/mcp` で接続状態を確認できる。
-
-**Codex**: 以下のコマンドでこのチェックアウトの設定に同じランチャーを登録し、新しいセッションを開く。
-
-```bash
-mise exec node@24.22.2 -- node mcp/register.mjs
-codex mcp get comfyui-split
-```
-
-## Access と Worker
-
-1. Zero Trust → Access controls → Applications で、既存アプリの公開ホストとポリシーを確認する。共有 AUD の全ホストがこの Worker の Custom Domains に対応すること、対象ホストの転送先が **既存の split CPU** であることを照合する。別の経路やワイルドカードを含むアプリに、このポリシーをそのまま追加しない。ブラウザ用 Allow は残す。
-2. Node の版をリポジトリ直下の `.node-version` に合わせる。Worker で `npm ci`、`npm test`、`npm run typecheck` を実行する。本番のルート・バインディングを控え、[既存 Worker](cloudflare-access.md) に `npm run deploy` で転送制限を先に適用する。MCP 設定が空の間はサービスリクエストを拒否する。
-3. Service credentials で有効期限を指定して専用トークンを発行する。この時点ではまだアプリに許可しない。Client ID（`.access` で終わる値。トークンの UUID とは異なる）と Client Secret は次節の専用ファイルへ保存する。
-4. `worker/` で `npx --no-install wrangler secret put SPLIT_MCP_ACCESS`。対話入力する JSON の形式は次の通り。既存の origin マップを維持し、実際の値は Git に入れない。Worker に Client Secret は登録しない。
+1. 既存の split と同じ Modal プロファイル・環境で `scripts/modal.sh deploy mediaapp.py` を実行する。
+   既存の output / data Volume を使う。ComfyUI の再デプロイは不要。
+2. Worker のテスト・型検査後、新しいコードをデプロイする。
+3. Worker の secret `SPLIT_MEDIA_ORIGIN` に以下を登録する。実値は Git に残さない。認証情報は既存 split の Proxy Auth を再利用し、追加登録しない。
 
    ```json
-   {"client_id":"<client-id>.access","hostname":"split.example.com","origin":"https://<workspace>--comfyui-split-ui.modal.run"}
+   {"hostname":"split.example.com","origin":"https://example-media.modal.run"}
    ```
 
-5. **Service Auth** ポリシーを作り、Include → **Service Token** でこのトークンだけを選び、既存アプリに追加する。Any Access Service Token、Bypass は使わない。Worker は署名・issuer・audience・期限を検証した JWT の `common_name` を Client ID と照合し、ホストとその Modal オリジンが両方一致するときだけ中継する。HTTP と WebSocket とも、Modal へ送る前に Access の ID・Secret・JWT・認証 Cookie を除き、`X-Modal-Execution-Mode: split` を付ける。常時起動モードなら生成せず 409 になる。
+4. Modal の直接URLが未認証で拒否されることを確認する。管理APIから split CPU / GPU が0台であることを確認し、
+   MCP の出力一覧・画像・音声・動画を取得する。この間起動してよいのは配信用 CPU だけ。
+   通常・途中・末尾の Range を検証し、取得停止後は配信用 CPU も0台へ戻ることを確認する。
 
-## 切り戻し
+既存の `/view` と `/api/view` の元の output ファイルも同じ配信用 CPU を使う。
+入力・一時プレビュー・画像変換は従来の ComfyUI 経路。詳細と未実装の R2 案は
+[メディア配信の設計](design/split-media-delivery.md)を参照。
 
-特定のクライアントだけを外す場合は、そのクライアントの登録だけを削除する。Claude Code はこのプロジェクトで `claude mcp remove --scope local comfyui-split`、Codex はこのチェックアウトの `.codex/config.toml` から `[mcp_servers.comfyui-split]` を削除する。ほかのクライアントで使う間は、専用トークンと `.env.comfy-mcp` を残す。
+切り戻す場合は `SPLIT_MEDIA_ORIGIN` を削除する。旧経路に戻り、取得時に ComfyUI CPU を使う。
+配信アプリを停止しても Volume は削除しない。設定済みの配信先に障害があるときは、暗黙には旧経路へ戻さない。
 
-すべてのクライアントの接続を終了するときは、Access で専用トークンを失効し、その Service Auth ポリシーだけをアプリから外す。Worker の `SPLIT_MCP_ACCESS` を削除して専用 JWT の転送も閉じる。既存のブラウザ用 Allow と Modal の Proxy Auth は維持する。元の Worker に戻す必要があれば、この順序で機械用の許可を外してから以前の Worker バージョンに戻す。ローカルの登録と専用の認証ファイルも削除する。ComfyUI 自体を戻すときは、`scripts/modal.sh app history comfyui-split` で更新前のバージョンを確認し、`scripts/modal.sh app rollback comfyui-split <バージョン>` で戻す。既存の Volume を削除する必要はない。
+## ローカル stdio からの移行
+
+HTTPS の登録と OAuth 接続を確認してから、旧 `comfyui-split` の stdio 登録だけをクライアント設定から外す。
+`comfyui-remote` の HTTPS 登録と、CLI の素材転送ヘルパー `mcp/upload.mjs` は残す。
+手元で artokun MCP サーバーを起動するランチャーは提供しない。
+split CPU 内の `artokun/comfyui-mcp` はワークフロー編集・ノード照会などに引き続き使う。
+
+旧接続専用の Access サービストークンは失効し、対応する Service Auth ポリシーと Worker の
+`SPLIT_MCP_ACCESS` を外す。他用途のトークンやブラウザ用 Allow は削除しない。
+専用の `.env.comfy-mcp` は旧登録を外した後に削除できる。共有の `.env` は変更しない。
 
 ### モデルの取得元と上流版の更新
 

@@ -139,7 +139,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
-      - name: Test the split MCP server over stdio
+      - name: Test the server-side MCP package and remote upload client
         working-directory: mcp
         run: |
           npm ci --ignore-scripts

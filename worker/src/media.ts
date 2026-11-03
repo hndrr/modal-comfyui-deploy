@@ -78,7 +78,7 @@ function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
   return result;
 }
 
-function base64(bytes: Uint8Array): string {
+export function base64(bytes: Uint8Array): string {
   const parts = [];
   // A multiple of three keeps padding confined to the very last block.
   for (let i=0; i<bytes.length; i+=24576)
