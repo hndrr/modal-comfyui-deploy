@@ -1,27 +1,41 @@
-# CIの実行条件
+# CI（GitHub Actions）の実行条件
 
-`Tests`はPRと`main`へのpushで動く。PR用ブランチへのpushでは重複実行しない。
-PRのない作業ブランチで確認したい場合は、Actionsから`workflow_dispatch`で手動実行できる。
+リポジトリの GitHub Actions（`Tests` ワークフロー）は、PR の作成・更新時および `main` ブランチへの push 時に自動実行されます。PR のない作業ブランチへの push では重複実行されませんが、必要に応じて GitHub Actions 画面から `workflow_dispatch` による手動実行が可能です。
 
-Pythonジョブは `scripts/test_standalone.py` で通常版・split・アセット管理・モデル保存の各スイートを一度ずつ実行する。任意拡張のimportは禁止する。ローカルでの部分実行は[テストの説明](../../tests/README.md)を参照。
+---
 
-最初に変更ファイルを判定し、対象のジョブだけを起動する。
+## 差分判定と実行ジョブ
 
-| 変更箇所 | 実行するテスト |
-| --- | --- |
-| Pythonファイル、`tests/`、Splitのモデルパス設定、ComfyUI拡張のWebファイル、`scripts/modal.sh` | Python |
-| `web/` | Asset manager |
-| `worker/`、`mcp/` | Access proxy（Worker と MCP パッケージのテスト、Worker の型検査） |
-| `asset_manager.py`、`asset_rpc.py`、`preserve_model.py`、`pyproject.toml`、`uv.lock`、`.python-version` | Python＋Asset manager（Pythonバックエンドを利用するため） |
-| `.github/workflows/tests.yml` | 全種類 |
-| `README.md`、`docs/`だけ | テストなし |
+CI は変更されたファイルを自動判定し、影響のあるテストジョブのみを選択して実行します。対象外のジョブはスキップされ、全体の実行時間を短縮します。
 
-PRでは直近コミットだけでなく、PR全体の差分を判定する。前のコミットで変更した部分も検証対象に残る。
-このため、CI設定の変更を含むPRでは全種類を実行する。
-`main`へのpushでは直前のpushとの差分を使う。
+| 変更対象ファイル | 実行されるテスト | 理由・備考 |
+| :--- | :--- | :--- |
+| Python ファイル、`tests/`、Split モデルパス設定、ComfyUI 拡張 Web ファイル、`scripts/modal.sh` | **Python** | Python バックエンドおよび ComfyUI 関連の回帰テスト |
+| `web/` | **Asset manager** | Web フロントエンドのテスト |
+| `worker/`、`mcp/` | **Access proxy** | Worker と MCP パッケージのテスト、Worker の型検査（`typecheck`） |
+| `asset_manager.py`、`asset_rpc.py`、`preserve_model.py`、`pyproject.toml`、`uv.lock`、`.python-version` | **Python** + **Asset manager** | Python バックエンドと Web アセット管理の両方に依存するため |
+| `.github/workflows/tests.yml` | **全テスト** | CI 定義自体の変更のためすべてのジョブを実行 |
+| `README.md`、`docs/` のみ | **テストなし**（全スキップ） | ドキュメントのみの変更時はテストを省略 |
 
-手動実行では変更箇所にかかわらず全種類を実行する。変更判定に失敗した場合も全種類を実行し、
-判定失敗によって必要なテストが省略されないようにする。
+※Python ジョブでは `scripts/test_standalone.py` を使用し、通常版・split・アセット管理・モデル保存の各スイートを一度ずつ実行します（任意拡張の直接 import は禁止されています）。
 
-ワークフロー全体をパス条件で止めず、対象外のジョブをskipする。既存のチェック名は維持し、
-必須チェックを未実行のまま待たせない。
+---
+
+## 判定ロジックと動作仕様
+
+### PR と push での差分取得の違い
+- **Pull Request**: 直近のコミット差分だけでなく、**PR 全体の差分**を判定します。途中のコミットで変更されたファイルも漏れなく検証対象に含まれます。
+- **`main` への push**: 直前の push との差分を判定して実行します。
+
+### 手動実行とフォールバック
+- **手動実行（`workflow_dispatch`）**: 変更箇所に関わらず、**全種類のテストを実行**します。
+- **判定失敗時の安全動作**: 差分判定スクリプトが失敗した場合は、必要なテストのスキップを防ぐため安全側に倒して**全種類のテストを実行**します。
+
+### ジョブのステータス管理
+- 対象外となったジョブはエラーで失敗させるのではなく、正常に **skip** されます。
+- ワークフロー全体を途中で止めず、GitHub の必須チェック（Status Checks）が未実行のまま待たされることがないよう設計されています。
+
+---
+
+## 関連リンク
+- ローカルでの各テストスイートの実行方法: [テストの説明](../../tests/README.md)
