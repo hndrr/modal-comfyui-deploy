@@ -21,6 +21,7 @@ from comfy_split.extensions import load_extensions, check_requirements, reserved
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
+from comfy_split import job_progress
 from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class Controller:
         self.sockets = {}
         self.task = None
         self.apply_task = None
+        self.model_hash_task = None
         self.client = None
         self.candidate_relays = {}
         self.gpu_stats_lock = asyncio.Lock()
@@ -71,6 +73,8 @@ class Controller:
         if stats.num_total_runners or stats.backlog:
             return
         data = self.journal.data
+        from comfy_split.mcp_approvals import prune
+        prune(data.get("mcp_reviews", {}))
         environment_volume = self.volumes["environment"]
         environments = [Path(entry.path).name async for entry in
                         environment_volume.iterdir.aio("/", recursive=False)]
@@ -119,7 +123,7 @@ class Controller:
 
     def background_work(self):
         data = self.journal.data
-        return bool(data["session"] or any(
+        return bool(self.model_hash_task or data["session"] or any(
             job["status"] in {"queued", "dispatching", "running"}
             for job in data["jobs"].values()) or
             (data["candidate"] and data["candidate"]["status"] in {"creating", "validating"}))
@@ -149,6 +153,8 @@ class Controller:
                     state = await response.json()
                 needed = bool(state["is_processing"] or state.get("pending_count", 0))
                 if not needed and self.cpu_pinned:
+                    from comfy_split.split_admin import refresh_nodes
+                    await refresh_nodes(self, state)
                     await self.volumes["environment"].commit.aio()
         await self.pin_cpu(needed)
 
@@ -197,6 +203,9 @@ class Controller:
         await self.volumes["environment"].commit.aio()
         await self.volumes["data"].commit.aio()
         self.journal.recover()
+        for operation in self.journal.data.get("admin_operations", {}).values():
+            if operation.get("_hash") and operation["status"] == "running":
+                operation.update(status="unknown", error="CPU restarted during file verification.")
         candidate = self.journal.data["candidate"]
         session = self.journal.data["session"]
         if candidate and candidate["status"] in {"creating", "validating"}:
@@ -334,7 +343,7 @@ class Controller:
                 hook = getattr(extension, "before_dispatch", None)
                 if hook:
                     values = hook(record)
-                    if set(values) & {"id", "operation", "environment", "body", "token"}:
+                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard"}:
                         raise ValueError("Extension attempted to replace core worker fields")
                     extra.update(values)
         except ValueError as error:
@@ -346,7 +355,7 @@ class Controller:
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
                 "environment": record["environment"]}
-        for key in ("body", "token"):
+        for key in ("body", "token", "mcp_guard"):
             if key in record:
                 spec[key] = record[key]
         spec.update(extra)
@@ -396,6 +405,8 @@ class Controller:
         elif event["type"] in {"event", "preview"}:
             data = event.get("event", event.get("data"))
             kind = data.get("type") if isinstance(data, dict) else None
+            if kind:
+                job_progress.observe(record, kind, data.get("data"))
             # Terminal notifications are reconstructed from durable history
             # in finish(), after output reload and journal persistence.
             if kind in {"execution_success", "execution_error", "execution_interrupted"}:
@@ -564,6 +575,7 @@ class Controller:
             if job["status"] == "queued":
                 job["status"] = "cancelled"
                 job["finished_at"] = time.time()
+                job["history"] = job_history(job)
             elif job["status"] in {"dispatching", "running"}:
                 await self.command(job_id, "interrupt")
         await self.persist()
@@ -699,6 +711,8 @@ class Controller:
             await self.volumes["environment"].commit.aio()
             await self.cpu.start(version, cpu=True)
             async with self.lock:
+                from comfy_split.split_admin import settle_apply
+                settle_apply(self, version, True)
                 self.journal.data.update(environment=version, candidate=None, session=None)
                 await self.persist()
                 self.cleanup_due = 0
@@ -706,6 +720,8 @@ class Controller:
         except Exception as error:
             log.exception("Environment validation failed")
             async with self.lock:
+                from comfy_split.split_admin import settle_apply
+                settle_apply(self, candidate["version"], False)
                 candidate["status"] = "failed"
                 candidate["error"] = str(error)
                 # Clear session to allow discard to proceed. Send interrupt command
@@ -761,9 +777,37 @@ class Controller:
                 origin = self.cpu.url
             return await proxy(request, self.client, origin, body=body)
 
+    @staticmethod
+    def receipt(job):
+        return {"prompt_id": job["id"], "number": job["number"], "node_errors": {}}
+
+    def prepare_prompt(self, body):
+        for extension in self.plugins:
+            body = extension.prepare(body)
+        check_requirements(body)
+        return body
+
+    def admit_prompt(self, body, request_id):
+        existing = request_id and any(
+            j.get("request_id") == request_id
+            for j in (*self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values())
+        )
+        admissions = [(ext, ext.admit(body, existing)) for ext in self.plugins if hasattr(ext, "admit")]
+        job = self.journal.enqueue(body, request_id)
+        for ext, admission in admissions:
+            ext.accepted(job, admission)
+        return job
+
+    async def commit_prompt(self):
+        await self.volumes["input"].commit.aio()
+        await self.persist()
+
     async def handle(self, request):
         path = api_path(request.path)
         try:
+            if path.startswith("/_remote_mcp/review/"):
+                from comfy_split.mcp_approvals import review
+                return await review(self, request, path)
             if path.startswith("/_split/"):
                 raise web.HTTPNotFound()
             if reserved_route(path):
@@ -810,9 +854,51 @@ class Controller:
                 async with self.lock:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
+            if path == "/_remote_mcp/submit":
+                from comfy_split.remote_mcp import authorize
+                from comfy_split.mcp_approvals import MAX_BODY, submit
+                authorize(request, self.journal.data["mode"])
+                key = request.headers.get("Idempotency-Key")
+                if not key or len(key) > 160:
+                    raise ValueError("MCP submission requires a bounded idempotency key.")
+                body = await request.clone(client_max_size=MAX_BODY + 1).json()
+                async with self.lock:
+                    authorize(request, self.journal.data["mode"])
+                    return await submit(self, body, key)
+            if path == "/_remote_mcp/operations":
+                from comfy_split.remote_mcp import operations
+                return await operations(self, request)
             if path == "/_remote_mcp/call":
                 from comfy_split.remote_mcp import call
                 return await call(request, mode=self.journal.data["mode"])
+            if path in {"/_remote_mcp/media", "/_remote_mcp/cancel", "/_remote_mcp/progress"}:
+                from comfy_split.remote_mcp import authorize
+                authorize(request, self.journal.data["mode"])
+                if path.endswith("/media"):
+                    from comfy_split.input_media import handle
+                    return await handle(request, self.volumes["input"])
+                body = await request.json()
+                if not isinstance(body, dict) or not isinstance(body.get("prompt_id"), str):
+                    raise web.HTTPBadRequest(text="Expected a prompt_id")
+                job_id = str(uuid.UUID(body["prompt_id"]))
+                if path.endswith("/progress"):
+                    job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
+                    if job is None:
+                        return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
+                    return web.json_response(job_progress.snapshot(job))
+                async with self.lock:
+                    job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
+                    if job is None:
+                        return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
+                    if job["status"] == "queued":
+                        await self.cancel([job_id])
+                    elif job["status"] in {"dispatching", "running"}:
+                        if not job.get("cancel_requested"):
+                            await self.command(job_id, "interrupt")
+                            job["cancel_requested"] = True
+                            await self.persist()
+                        return web.json_response({"prompt_id": job_id, "status": "cancel_requested"})
+                    return web.json_response({"prompt_id": job_id, "status": job["status"]})
             if self.journal.data["mode"] == "legacy":
                 if request.headers.get("X-Modal-Execution-Mode") == "split":
                     return web.json_response({"error": "This client requires split mode."}, status=409)
@@ -844,20 +930,21 @@ class Controller:
                     if self.journal.data["mode"] != "split":
                         raise ValueError("This client requires split mode.")
                     request_id = request.headers.get("Idempotency-Key")
-                    existing = request_id and any(j.get("request_id") == request_id for j in (
-                        *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
-                    for extension in self.plugins:
-                        body = extension.prepare(body)
-                    check_requirements(body)
-                    admissions = [(extension, extension.admit(body, existing))
-                                  for extension in self.plugins if hasattr(extension, "admit")]
-                    job = self.journal.enqueue(body, request_id)
-                    for extension, admission in admissions:
-                        extension.accepted(job, admission)
-                    await self.volumes["input"].commit.aio()
-                    await self.persist()
+                    # Older MCP Workers must fail closed during an independent rollout.
+                    if request.headers.get("X-Modal-Execution-Mode") == "split" and (
+                        (request_id or "").startswith("remote-mcp:")
+                        or (
+                            isinstance(body, dict)
+                            and body.get("client_id") in {"comfyui-mcp", "remote-mcp"}
+                        )
+                    ):
+                        raise ValueError(
+                            "Update the Worker to submit through the MCP approval endpoint."
+                        )
+                    job = self.admit_prompt(self.prepare_prompt(body), request_id)
+                    await self.commit_prompt()
                 await self.status()
-                return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
+                return web.json_response(self.receipt(job))
             for extension in self.plugins:
                 response = await extension.handle(request, path)
                 if response is not None:
@@ -993,9 +1080,10 @@ class Controller:
 
 def application(controller):
     from comfy_split.startup import StartupGate
+    from comfy_split.gateway_access import boundary, ENV
 
     startup = StartupGate(controller)
-    app = web.Application(client_max_size=1024 ** 3)
+    app = web.Application(client_max_size=1024 ** 3, middlewares=[boundary(os.getenv(ENV, ""))])
     app.router.add_route("*", "/{path:.*}", startup.handle)
     app.on_startup.append(startup.start)
     app.on_cleanup.append(startup.close)

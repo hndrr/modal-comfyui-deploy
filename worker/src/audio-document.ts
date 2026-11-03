@@ -1,0 +1,24 @@
+// Top-level links need an HTML document. ComfyUI media elements and API clients
+// keep /view's original byte and Range semantics.
+export function audioDocument(request:Request):Response|null {
+  const url=new URL(request.url), q=url.searchParams;
+  if (url.pathname!=="/view" || request.method!=="GET" || request.headers.has("Range") ||
+      request.headers.get("Sec-Fetch-Dest")!=="document" || request.headers.get("Sec-Fetch-Mode")!=="navigate" ||
+      q.get("type")!=="output" || q.has("preview") || q.has("channel")) return null;
+  const file=q.get("filename") || "", folder=q.get("subfolder") || "";
+  const safe=(v:string)=> v && v.length<=255 && v!=="." && v!==".." && !/[/\\:\x00-\x1f\x7f]/.test(v);
+  if (!safe(file) || !/\.(?:mp3|wav|flac|ogg|opus)$/i.test(file) || folder.length>1024 ||
+      (folder && !folder.split("/").every(safe))) return null;
+  const esc=(s:string)=>s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;").replaceAll("'","&#39;");
+  // /api/view is the same ComfyUI byte endpoint. A download remains a file even
+  // on browsers that navigate to the download before saving it.
+  const src=esc("/api/view?"+new URLSearchParams({type:"output",filename:file,subfolder:folder}));
+  return new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(file)}</title><style>:root{color-scheme:light dark;font:16px system-ui}body{max-width:42rem;margin:10vh auto;padding:1.5rem}h1{font-size:1.2rem;overflow-wrap:anywhere}audio{width:100%;margin:1rem 0}</style>
+<main><h1>${esc(file)}</h1><audio controls preload="metadata" src="${src}"></audio><p><a href="${src}" download="${esc(file)}">元の音声を保存</a></p></main></html>`,{headers:{
+    "Content-Type":"text/html; charset=utf-8","Cache-Control":"private, no-store","Vary":"Sec-Fetch-Dest, Sec-Fetch-Mode, Range",
+    "Content-Security-Policy":"default-src 'none'; media-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer",
+  }});
+}

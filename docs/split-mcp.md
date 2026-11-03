@@ -1,144 +1,131 @@
-# MCP クライアントから Modal の ComfyUI split を使う
+# チャットから ComfyUI を使う
 
-既存のローカル接続では、手元の MCP クライアントが [stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio) で [artokun/comfyui-mcp](https://github.com/artokun/comfyui-mcp) を起動し、Cloudflare Access → Worker → split の CPU 入口に接続する。ノードの入力を調べる、ワークフローを編集・検証する、投入する、同じジョブを追跡する、画像を取得する操作が使える。生成を投入したときだけ split の GPU が必要になる。ブラウザ、Agent Panel、トンネルは不要。
+ChatGPT Web、Claude Code、Codex から、Modal 上の ComfyUI に同じ HTTPS URL で接続できます。チャットで保存済みのワークフローを選び、画像・音源・動画を渡して生成し、結果を受け取れます。以下の `split.example.com` は、管理者から案内されたホスト名に置き換えてください。
 
-[Comfy-Org/comfy-mcp](https://github.com/Comfy-Org/comfy-mcp) は Comfy 公式の別の MCP サーバー。ここでは既存の HTTPS 入口に Access のサービス認証を付けられる artokun 版を使う。リモート接続では同じ版を Modal の split CPU 上で起動する。
+このページは操作の流れを説明します。個々の引数・戻り値は[32ツールの一覧](split-mcp-tools.md)、どのCPU・GPUを使うかは[経路図](design/split-mcp-routing.md)、サーバー側の設定は[管理手順](split-mcp-setup.md)を参照してください。
 
-## リモート URL で使う
+## 接続する
 
-ChatGPT Web から画像・動画の生成を投入するには、書き込み操作を使える Business または Enterprise/Edu ワークスペースが必要です。Business で接続を作成できるのは管理者・オーナー、Enterprise/Edu では権限を付与されたメンバーも作成できます。`enqueue_workflow` の実行はワークスペースの操作権限にも従います。Pro のカスタム MCP 接続は読み取り・取得のみです。これは ChatGPT Web の条件で、Claude Code や Codex の接続条件とは別です。[OpenAI の接続条件](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
+**ChatGPT Web**：設定からカスタム MCP 接続を追加し、URL に `https://split.example.com/mcp`、認証方式に OAuth を指定します。ブラウザで Access にログインし、チャットでこの接続を選んでください。生成や添付には書き込み操作を使えるワークスペース権限が必要です。[ChatGPT の接続条件](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
 
-以下の例では split ホストを `split.example.com` とする。本人用の接続 URL は `https://split.example.com/mcp`。ChatGPT Web は「プラグイン → 追加 → カスタム MCP サーバーを追加」で URL と OAuth を選び、本人の Access ログインで接続する。生成の書き込み操作が許可されていることを確認する。Claude Code と Codex も同じ URL を使える。ローカル stdio と併用する場合は別名で登録する。
+**Claude Code**：使いたいプロジェクトのディレクトリで登録します。
 
 ```bash
 claude mcp add --transport http --scope local comfyui-remote https://split.example.com/mcp
 claude mcp login comfyui-remote
+```
+
+**Codex**：次のコマンドで登録してログインし、新しいセッションを開きます。
+
+```bash
 codex mcp add comfyui-remote --url https://split.example.com/mcp
 codex mcp login comfyui-remote
 ```
 
-ツール一覧・接続維持は Worker 内で処理する。ノード照会・履歴・画像取得で初めて CPU が起動し、生成の受付後に GPU が起動する。結果の画像は MCP の画像コンテンツで受け取る。サーバーの保存パスを指定する必要はない。
+最初は「保存済みのワークフローを一覧にして。まだ生成しないで」と頼んでみてください。接続やツール一覧の取得だけでは Modal は起動しません。保存ファイル・モデル一覧・履歴の照会では小さな参照用 CPU だけを使います。変換・解析・素材保存には ComfyUI CPU を使い、生成を投入すると GPU が起動します。
 
-「EmptyImage と SaveImage の必須入力を調べて。生成はしないで」で照会を確認できる。生成時は `enqueue_workflow` に API 形式の `workflow` と新しい `request_id` を渡す。受付が不明なら**同じキーと同じワークフローでのみ再試行**する。キーを変えれば新しい生成になる。受付成功時の応答で返った `prompt_id` で `queue`・`get_history` を照会し、履歴のファイル名を `get_image` に渡す。チャットを閉じても受付済みの生成は続く。起動中は少し待って再試行する。初期化失敗や常時起動モードの競合は自動再試行しない。
+## 操作ごとの実行先
 
-### 動画を取り出す
+「配信用CPU」と「参照用CPU」は同じものです。保存された出力・ワークフロー・履歴・モデル情報を読みます。ComfyUIを動かすCPUとは別なので、曲を取り直すためにComfyUIを起こす必要はありません。
 
-生成の受付後に返った `prompt_id` を渡して `get_video` を呼ぶと、完了したジョブの MP4 を取得できる。例：「さっきの prompt_id の動画を get_video で返して」。再生成や Modal SDK は不要。1件のジョブに複数の MP4 があれば、`index`（0 始まり）で選ぶ。
+```mermaid
+flowchart TD
+  Client["ChatGPT Web・Claude Code・Codex"] --> Edge["同じHTTPS /mcp：Access認証 → Worker"]
+  Edge -->|"接続・ツール一覧・プレイヤーHTML"| Static["Workerだけで応答"]
+  Edge -->|"保存済みファイル・履歴・一覧"| Read["配信用CPU → Modal Volumeを読む"]
+  Edge -->|"ノード照会・変換・編集・素材保存・状態確認"| CPU["ComfyUI CPUで処理"]
+  CPU -->|"生成・候補環境の検証を実行するとき"| GPU["GPUで処理 → 結果をVolumeに保存"]
+```
 
-4 MiB 以下は MCP の埋め込みリソース（`video/mp4`）としてバイト列を返す。MCP Apps 対応クライアント向けには再生画面も返す。埋め込みに対応しないクライアントでは、結果の URL をブラウザで開く（既存の split の Access ログインが必要）。4 MiB を超える動画はリンクで返す。MCP だけでファイルを保存する場合は `byte_offset: 0` で呼び、各応答の `resource.blob` を Base64 デコードして順番に連結する。`next_offset` が null になれば完了。`chunk_bytes` で小さめの応答も指定できる。ファイルパスや任意の URL を入力する機能はない。
+配信用CPUは読み取りが終わるとアイドル停止します。ComfyUI CPUとGPUも、通常のsplitモードでほかに利用がなければ0台に戻ります。上流のartokun MCPは必要な操作でサーバー内から使い、クライアント側で起動する必要はありません。管理操作を含む[詳しい経路図](design/split-mcp-routing.md)も用意しています。
 
-### 音声を取り出す
+## 添付を使って1件生成する
 
-「この `prompt_id` の音声を返して」で、エージェントが `get_audio` を呼ぶ。対象は完了したジョブが音声ファイルとして保存した FLAC・MP3・WAV・Ogg・Opus。複数あれば `index`（0 始まり）で選ぶ。4 MiB 以下は MCP の音声（`type: audio`）、それを超えるものは認証付きリンクで返す。分割取得は動画と同じく `byte_offset` と `next_offset` を使う。動画の中にしか音声がない場合は `get_video` で動画を取得するか、生成時に音声保存ノードも接続する。
+たとえば、画像を入力にするワークフローがある場合は、次のように依頼できます。`動画/短いクリップ.json` は例なので、一覧に出た名前に置き換えてください。
 
-### HTTPS MCP の各ツールはどこで動くか
+1. **ワークフローを選ぶ**：「保存済みの `動画/短いクリップ.json` を開いて、どの入力ノードに画像を渡すか教えて」。`get_workflow` は既定で実行用のグラフを返します。ComfyUI のエディタで開く JSON が欲しい場合は `format: "ui"` を指定します。
+2. **素材を渡す**：ChatGPT なら画像をチャットに添付して「この画像を `upload_media` で保存して、返ったファイル名を LoadImage に設定して」と頼みます。音源なら LoadAudio、動画なら LoadVideo に渡します。CLI から送る方法は次節にあります。
+3. **生成する**：「そのワークフローを1回だけ実行して、ジョブ ID を返して」。`enqueue_workflow` が受け付けると `prompt_id` が返ります。チャットを閉じてもジョブは続くので、この ID を控えてください。
+4. **結果を受け取る**：「そのジョブの進捗を教えて。終わったら動画を返して」。画像は `list_outputs` で出力名を確認して `get_image` で取得します。動画と音声は `get_video`・`get_audio` にジョブ ID を渡せます。
 
-| 操作 | 実装 |
+生成の受付で通信が切れたときは、**同じ `request_id` と同じワークフロー**で再試行します。`request_id` は二重投入を防ぐためのキー、`prompt_id` は受け付けたジョブを追跡する ID です。
+
+## 外部サービスを使うときの承認
+
+「MiniMax Music 3 で曲を作って」と頼んだ場合、split 内でモデルを読み込んで生成するワークフローなら、そのままジョブ ID が返ります。Modal の通常の実行料金はかかります。**同じモデル名でも**、`ComfyCloudMiniMaxMusic3TextToAudioNode` を使うと Comfy Cloud に歌詞やプロンプトを送るので、先に本人の承認が必要です。
+
+1. MCP が `approval_required` と確認用リンクを返します。この時点ではジョブも GPU 呼び出しもありません。リンクの有効期限は15分です。
+2. 自分のブラウザでリンクを開いてログインします。ノードごとに、送信先、課金先、プロンプト・歌詞・モデルなどの入力を確認してください。画像・音声・動画を渡す場合は、送信に使う元の素材もその場で確認できます。最終料金は事前には確定しません。
+3. **「この1件を承認して実行」**を押すと、その内容で1件だけキューに入り、ページに `prompt_id` が出ます。「送信しない」を押すか期限が切れれば実行しません。HTTPS MCP は元の `request_id` とグラフを再送すれば同じ結果を取得できます。
+
+例：Comfy の Partner Node 経由で Gemini・OpenAI・OpenRouter を呼ぶ場合、引き落とし先は **Comfy のクレジット**です。対応する直接接続ノードで Gemini や OpenRouter を使う場合は、それぞれの API アカウントに課金されます。MCP の OAuth ログインでは外部送信を承認したことになりません。
+
+送信先や送信内容を判断できないノードは、実行前に理由を返します。たとえば、先行ノードで作った画像をそのまま外部に送ろうとした場合は、まずローカル生成を終え、`reuse_output` で入力素材にしてから外部ノードに渡してください。承認は1つのグラフと素材にだけ有効です。内容を変更したら、新しい `request_id` で依頼します。
+
+## 手元のファイルを送る
+
+Claude Code や Codex では、このリポジトリのルートで次のヘルパーを使います。プロジェクト指定の Node.js で依存パッケージを準備し、送りたいファイルだけを引数に渡してください。
+
+```bash
+npm ci --prefix mcp --ignore-scripts
+node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
+```
+
+端末に表示された URL でログインすると、ファイルごとに ComfyUI のローダーで使える名前が返ります。チャットに Base64 を貼る必要はありません。中断した場合は同じファイルでコマンドを再実行してください。途中まで送った素材はローダーの候補に現れません。
+
+1ファイルの上限は **256 MiB** です。画像は PNG・JPEG・WebP、音源は WAV・FLAC・MP3・M4A・Ogg/Opus、動画は MP4・MOV・WebM・MKV を入力に使えます。
+
+## 生成中・生成後にできること
+
+保存済み画像・音声・動画と `list_outputs` は専用の配信用 CPU が Volume を読みます。ComfyUI CPU・GPU は起動しません。取得中は配信用 CPU の料金が発生し、利用が終わると0台に戻ります。原本は Modal に残り、取得で削除しません。`get_image` は8 MiBまでインラインで返し、大きい画像は認証付きリンクを返します。
+
+ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も配信用 CPU だけで応答します。画面で保存したJSONを「どのノードに何という名前で値を渡すか」という生成依頼用の形式に直すときだけ、ComfyUI CPUで現在の入力仕様を確認します。すでに生成依頼用の形式で保存されていれば、その変換は不要です。[取得時の分岐図](design/split-mcp-routing.md#ワークフロー取得でcomfyuiを起こす場合)で確認できます。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
+
+`list_models` は既定で保存ファイルの一覧・サイズ・更新日時を返します。保存されていることと、ComfyUI が利用できることは別です。「ローダーで実際に選べるモデルを確認して」と頼む場合は `source: "runtime"` を指定し、ComfyUI CPU で認識一覧を取得します。
+
+| 聞きたいこと | 使うツールと答え |
 | --- | --- |
-| 初期化・ツール一覧 | Worker のみ。Modal は起動しない |
-| `create_workflow`・`queue`・`get_history`・`get_image` | Worker → split CPU → 固定版 artokun の stdio サーバー。CPU は呼び出しごとにプロセスを起動する |
-| `enqueue_workflow` | Worker → split の `/prompt`。受付を重複させないために `request_id` を使う。生成は GPU が実行する |
-| `get_video`・`get_audio` | Worker → split CPU の `/history/<prompt_id>` と `/view`。既存の出力を読むだけで GPU は不要 |
+| いまどのノード？ 何ステップ目？ | `get_job_progress(prompt_id)`。実行中のノードと、そのノードが通知した `value/max` を返します。全体の完了率ではありません。 |
+| 何秒かかった？ | 同じツールの `execution_seconds` は ComfyUI の実行時間、`elapsed_seconds` は待機を含む受付からの経過時間、`worker_seconds` は準備・出力保存を含む GPU ワーカーの処理時間です。記録のない値は `null` です。 |
+| なぜ失敗した？ | `get_job_progress` で失敗ノードと例外の要約、`get_history(action: "diagnose", prompt_id: …)` で履歴の詳細を取得します。 |
+| この1件だけ止めたい | `cancel_job(prompt_id)`。待機中は `cancelled`、実行中は `cancel_requested` が返ります。後者は受付なので、同じ ID でもう一度状態を確認してください。完了済みの出力は残ります。 |
+| 保存されているモデルは？ | `list_models()` でカテゴリ、`category: "checkpoints"` などで保存ファイル名・サイズを取得します。`query` は部分一致検索、次ページは返された `next_offset` を `offset` に指定します。 |
+| ComfyUIのモデル選択欄に何が出る？ | `list_models(source: "runtime", category: "checkpoints")`。ComfyUI CPUに問い合わせます。重みをロードして生成できるかを試す操作ではなく、GPUは起こしません。 |
+| ノードの入力を調べたい、グラフを編集したい | `create_workflow` の `node_info`・`modify`・`validate`。編集や検証だけで生成は始まりません。 |
+| 待機中のジョブを一覧にしたい | `queue(action: "list")`。別のチャットやクライアントからも、同じ `prompt_id` で個々のジョブを追跡できます。 |
 
-`get_video` と `get_audio` はこのリポジトリの `worker/src/media.ts` にあり、artokun のコード、npm パッケージ、ローカル stdio サーバーは変更しない。artokun のバージョンを更新する際に動画・音声取得のパッチを移植する必要はない。
+曲を聴くには「このジョブの曲を `get_audio` で再生して」と頼みます。MP3・WAV・FLAC・Ogg・Opus を元の形式のまま取得します。ChatGPT では、曲名が表示されたら「再生」を押します。一時停止と再生位置の変更もできます。4 MiB を超える曲は、先に「音声を読み込む」を押してください。チャット内再生の上限は元ファイル64 MiB・10分・展開後の音声128 MiBです。圧縮ファイルでも展開量を再生前に確認します。上限を超える曲、展開量を確認できない形式、元ファイルを保存したい場合は、返った再生リンクを使います。
 
-### リモート入口をデプロイする
+「アプリを表示できませんでした」と出たら、曲を生成し直す必要はありません。再生リンクが見えないときは「同じ `prompt_id` の `list_outputs` から曲のブラウザ用リンクを出して」と頼んでください。リンクは split の `/view?type=output&filename=…&subfolder=…` で、`filename` と `subfolder` はそれぞれ URL エンコードします。split にログインして開くと、曲を再生・保存できます。ブラウザが再生に対応しない形式でも保存できます。
 
-1. split の CPU イメージに固定版 Node.js と MCP をデプロイする（`scripts/modal.sh deploy splitapp.py`）。GPU に Node/MCP は不要。既存 Worker をテスト後にデプロイする。一般の中継ルートでは内部呼び出し用ヘッダーを必ず取り除く。
-2. split ホスト全体を従来のブラウザ・stdio 用 Access アプリに登録する。同じホストの `/mcp` に、より具体的なパスを持つ別の self-hosted Access アプリを設定し、Include が本人のメール1件のみの Allow を関連付ける。ブラウザ用共有アプリとは別の AUD を使う。Managed OAuth を有効にし、CLI のループバックと、ChatGPT が表示する**正確なコールバック URI**を許可する。トークンや本人メールは Git に記録しない。
+音声も MP4 動画も、複数出力があれば `index`（0始まり）で選べます。通常の `get_audio` は再生用の情報を返します。音声そのものを CLI で受け取るには、小さい曲でも `byte_offset: 0` を指定し、`next_offset` が `null` になるまで取得してください。動画から音声だけを抽出する機能はありません。
 
-   ChatGPT の登録フォームで動的クライアント登録（DCR）を選ぶと、コールバック URL が見えない場合がある。「OAuthの詳細設定 → 登録方法」で一度「ユーザー定義の OAuth クライアント」を選ぶと、このフォーム用の URL が表示される。それを Cloudflare の「許可されたリダイレクト URI」に追加して保存し、**同じフォームで DCR に戻して**プラグインを作成する。クライアント ID やシークレットの手入力、ワイルドカードの許可は不要。「接続」で Cloudflare に移ったら本人のログインを完了する。
-3. Worker の secret `SPLIT_REMOTE_MCP` に次の JSON を対話入力する。既存の split ホストが解決する転送先と `origin` が一致しない限り中継されない。ホスト変更時は、既存の暗号化済みマップを置き換えずに `SPLIT_UI_ORIGIN` に `{"split.example.com":"https://example.modal.run"}` を設定できる。stdio の `SPLIT_MCP_ACCESS` とローカルの `COMFYUI_URL` も新ホストに合わせ、Worker の Custom Domain として登録する。
+## 保存したグラフを調べて、もう一度使う
 
-   ```json
-   {"hostname":"split.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"<専用アプリのAUD>","owner_email":"owner@example.com"}
-   ```
+「このワークフローで動画の長さを決めているノードを探して」と頼むと、`get_workflow(action: "analyze")` で構成を読み、`query` でタイトル・クラス・接続を絞れます。`strip` は編集用 JSON を実行グラフに整理し、`slice` は指定グループを取り出します。`visualize_workflow` は渡したグラフの図や DSL を返します。変更を残すなら `save_workflow` に新しい保存名を渡してください。
 
-4. 認証なしでは OAuth のチャレンジとなること、別アプリの JWT では拒否されることを確認する。本人の OAuth で接続後、管理側から CPU/GPU の台数を読む。アプリの状態 API を定期照会すると CPU を起こすため、停止判定には使わない。
-5. CPU/GPU がともに0台の状態から、ツール一覧で0/0、実ノード照会で1/0を確認する。再び0/0になるのを待って、下記の検証ワークフローを1回投入。同じキーの再送でジョブは1件だけ、64×64 PNG の回収と停止を確認する。停止後の再取得は CPU だけを起こす。停止待ち設定30秒は実際の停止時刻の保証ではない。
-6. MCP だけを切り戻す場合は `SPLIT_REMOTE_MCP` を外し、`/mcp` が Worker で拒否されることを確認してからパス専用の Access アプリを無効化する。共有ホストの Custom Domain と `SPLIT_UI_ORIGIN` は残す。既存のブラウザ用 Allow、stdio 用の Service Auth、Modal の Proxy Auth は維持する。
+過去の生成をやり直すには `get_job_workflow(prompt_id)` で実際に投入したグラフを取得し、変更してから **新しい** `request_id` で投入します。元の出力を次の生成に渡したい場合は、`list_outputs(prompt_id)` の `index` を `reuse_output` に指定します。返ったファイル名はそのままローダーに渡せます。`list_inputs` は入力素材の検索、`inspect_media` は寸法・再生時間・音声情報の確認用です。
 
-**CPU 側の実測（2026-11-02）**: Modal の管理 API で CPU/GPU が 0/0 であることを確認後、デプロイした内部ツール経路から両ノードを照会した。準備完了まで63秒、照会後は1/0、アイドル後は0/0だった。もう一度0台から既存の64×64 PNGを取得し、起動中の応答を経てインライン画像が返った。これは本人用 OAuth を通す前の計測であり、ChatGPT からの生成結果とは区別する。
+## カスタムノードとモデルを管理する
 
-**同じホストの HTTPS MCP での実測（2026-11-02）**: ChatGPT Web で OAuth 接続後、CPU/GPU が0/0の状態でツールを更新し、ノード照会で1/0、アイドル後に0/0へ戻った。そこから ChatGPT で `EmptyImage → SaveImage` を投入すると1/1になり、ジョブ台帳に完了1件・出力1枚を記録した。受付済みの内容とキーを再送すると同じ `prompt_id` が返り、GPU の呼び出し ID と出力は同じだった。0/0に戻った後、Claude Code で PNG を再取得した。初回は起動中、再試行でインライン画像を取得し、保存された64×64 PNGとバイト単位で一致した。再取得時の台数は0/0 → 1/0 → 0/0。ChatGPT の画面では最終回答を表示できなかったため、ジョブ完了と画像は台帳と取得したファイルで確認した。
+**カスタムノード**：「このクラスはインストール済み？」なら `list_nodes`、追加するパックを探すなら `search_custom_nodes` です。追加・更新は次の順番です。候補は稼働中の環境を維持する仕組みです。インストール時はパックのコードが共有 Volume を持つコンテナで動くので、使うパックを選んでください。
 
-## ローカル stdio：このマシンで一度だけ準備する
+1. `get_split_status` で稼働中の版（`active`）を取得し、`prepare_environment(active, request_id)` で検証用コピー（`candidate`）を作ります。候補がある間、通常の生成は受け付けません。
+2. `change_node(candidate, action: "install" または "update", node, request_id)` にレジストリのパック ID を渡します。`get_admin_operation(request_id)` で処理結果を確認します。`running` はインストール完了ではありません。
+3. `apply_environment(candidate, request_id)` は候補を CPU と GPU で検証し、成功時だけ稼働版を切り替えます。適用しない場合は `discard_environment` で候補を破棄できます。
 
-リポジトリのルートで実行する。Node **24.22.2**、MCP **0.52.206**、ComfyUI **v0.43.0**（frontend **1.57.4**）で固定している。初めて split を構築する場合は、先に [Access と Worker](#access-と-worker) を設定する。
+**モデル**：`list_models` でカテゴリを確認し、`add_model(repo, file, category, request_id)` で Hugging Face の safetensors・GGUF・ONNX ファイルを追加します。専用の CPU で取得するので GPU は使いません。必要なら `revision` と `sha256` を指定してください。`get_admin_operation` は完了後に取得したコミットと SHA-256 を返します。
 
-```bash
-mise install node@24.22.2
-mise exec node@24.22.2 -- npm --prefix mcp ci --ignore-scripts
-test -e .env.comfy-mcp || install -m 600 .env.comfy-mcp.example .env.comfy-mcp
-# エディタで .env.comfy-mcp の URL・Client ID・Client Secret を記入する。
-```
+削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。版はファイル全体の SHA-256 です。大きなファイルでは照会・退避の応答に `request_id` が返るので、`get_admin_operation` で完了を確認してください。そのファイルだけを退避します。元に戻すには `restore_model` の `removal_id` に**削除時の** `request_id`、`request_id` には**新しい復元操作用のID**を指定します。削除時のIDを両方に使うと競合します。追加・復元は既存ファイルを上書きしません。
 
-`COMFYUI_URL` は split の **Access 公開ホストの HTTPS オリジン**。Modal の直 URL や `/api` を付けた URL は使わない。すべてのクライアントが同じランチャーを起動し、ランチャーだけが専用ファイルから Access の認証情報を読み込む。クライアントを増やしてもトークンの再発行や再デプロイは不要。
+管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。
 
-## 好きなクライアントに登録する
+各ツールの主な引数と影響は[ツール一覧](split-mcp-tools.md)にまとめています。上流にある機能が見つからない場合は、[上流との対応表](split-mcp-upstream.md)で、split での呼び方と未提供の理由を確認できます。
 
-**汎用の設定**: リポジトリのルートで以下を実行すると、このマシン用の `mcpServers` JSON が表示される。クライアントがこの形式に対応していれば、出力の `comfyui-split` エントリを既存の設定に追加する。設定画面を使う場合は、通信方式に **stdio**、名前に `comfyui-split`、コマンドと引数に出力の `command` と `args` を指定する。環境変数の入力は不要。パスは絶対パスなので、チェックアウトを動かしたときは再登録する。
+## 困ったとき
 
-```bash
-mise exec node@24.22.2 -- node mcp/client-config.mjs
-```
+- **CPU が起動中**：少し待って同じ操作を再試行してください。「初期化失敗」や実行モードの競合なら、再投入せず管理者に設定を確認してください。
+- **ツールが見当たらない**：ChatGPT の接続設定で「ツールを更新」、CLI では新しいセッションでツール一覧を取得してください。
+- **Web 添付が保存できない**：応答にローダー用のファイル名があるか確認してください。配信元が拒否された場合は、管理者が該当する配信ホストを確認します。署名付き URL をチャットやログに貼る必要はありません。
 
-この stdio 構成はローカルプロセスを起動できるクライアント向け。リモートの MCP URL を使うクライアントには、ブラウザ用のルート URL ではなく同じホストの `/mcp` を登録する。
-
-**Claude Code**: リポジトリのルートで一度だけ次を実行する。[`--scope local`](https://code.claude.com/docs/en/mcp#local-scope) はこのユーザーのこのプロジェクトだけに適用される。
-
-```bash
-claude mcp add --transport stdio --scope local comfyui-split -- \
-  "$(mise exec node@24.22.2 -- node -p 'process.execPath')" "$PWD/mcp/start.mjs"
-claude mcp get comfyui-split
-```
-
-`Connected` を確認したら、このディレクトリで `claude` を起動する。セッション内では `/mcp` で接続状態を確認できる。
-
-**Codex**: 以下のコマンドでこのチェックアウトの設定に同じランチャーを登録し、新しいセッションを開く。
-
-```bash
-mise exec node@24.22.2 -- node mcp/register.mjs
-codex mcp get comfyui-split
-```
-
-**最初の依頼例**（どのクライアントでも同じ）:
-
-> comfyui-split で EmptyImage と SaveImage の必須入力を調べて。生成はしないで。
-
-ツール呼び出しの承認が出たら、内容を確認して進める。生成したいときは「64×64 の青い画像を1枚だけ生成して、同じジョブの完了を待ち、PNG を手元に保存して」と依頼できる。複数のクライアントで同じジョブを見る場合は、受付後に返った `prompt_id` を渡す。
-
-## 1回だけ生成して確認する
-
-- **照会と GPU**: 他のジョブがない状態で、Modal の `gpu_worker` のコンテナ数を確認する。MCP クライアントから `create_workflow` の `action: node_info` に `node_type: EmptyImage`、次に `SaveImage` を指定する。照会後も GPU が0台であることを確認する。CPU のコールドスタートはあり得る。Worker のテストでは別ホストと誤った転送先を HTTP / WebSocket 両方で拒否する。
-- **投入**: [検証ワークフロー](../mcp/smoke-workflow.json) を `enqueue_workflow` の `action: enqueue` に **1回だけ**渡し、返った `prompt_id` を控える。タイムアウトや再接続を理由に再投入しない。受付結果が不明なら元のキュー・履歴を調べる。
-- **回収**: `queue` の `action: status` と `get_history` の `action: list` に同じ ID を渡す。成功時の履歴から SaveImage のファイル名とサブフォルダを取り、`get_image` の `action: get` に渡す。`save_dir` にこの checkout の `docs/validation/` の絶対パスを指定し、ローカルで PNG が開き、64×64であることを確認する。
-- **終了**: ジョブの監視を終了し、他の生成・常時起動セッションがない状態で `gpu_worker` が0台に戻ることを確認する。Modal ダッシュボードまたは以下のメタデータ照会は GPU を起動しない。アプリの総タスク数には CPU も含まれるので区別する。
-
-```bash
-MODAL_PROFILE=<このcheckoutのプロファイル> uv run python -c \
-  'import modal; print(modal.Function.from_name("comfyui-split","gpu_worker").get_current_stats().num_total_runners)'
-```
-
-2026年11月2日の実機検証では、Codex から両ノードを照会した前後の GPU は0台だった。上記ワークフローを1回投入し、返された同じ ID の成功履歴から 64×64 の PNG を取得してローカルで開いた。Modal の GPU 台数は0台 → 1台 → 0台。専用トークンを使った HTTP は split が200、共有アプリの他2ホストは403。WebSocket も split が101、別ホストが403だった。
-
-汎用 MCP クライアントでも、上記の JSON から起動して両ノードの実際の入力定義を取得できた。Claude Code はローカル登録と `Connected` を確認した。
-
-## Access と Worker
-
-1. Zero Trust → Access controls → Applications で、既存アプリの公開ホストとポリシーを確認する。共有 AUD の全ホストがこの Worker の Custom Domains に対応すること、対象ホストの転送先が **既存の split CPU** であることを照合する。別の経路やワイルドカードを含むアプリに、このポリシーをそのまま追加しない。ブラウザ用 Allow は残す。
-2. Node の版をリポジトリ直下の `.node-version` に合わせる。Worker で `npm ci`、`npm test`、`npm run typecheck` を実行する。本番のルート・バインディングを控え、[既存 Worker](cloudflare-access.md) に `npm run deploy` で転送制限を先に適用する。MCP 設定が空の間はサービスリクエストを拒否する。
-3. Service credentials で有効期限を指定して専用トークンを発行する。この時点ではまだアプリに許可しない。Client ID（`.access` で終わる値。トークンの UUID とは異なる）と Client Secret は次節の専用ファイルへ保存する。
-4. `worker/` で `npx --no-install wrangler secret put SPLIT_MCP_ACCESS`。対話入力する JSON の形式は次の通り。既存の origin マップを維持し、実際の値は Git に入れない。Worker に Client Secret は登録しない。
-
-   ```json
-   {"client_id":"<client-id>.access","hostname":"split.example.com","origin":"https://<workspace>--comfyui-split-ui.modal.run"}
-   ```
-
-5. **Service Auth** ポリシーを作り、Include → **Service Token** でこのトークンだけを選び、既存アプリに追加する。Any Access Service Token、Bypass は使わない。Worker は署名・issuer・audience・期限を検証した JWT の `common_name` を Client ID と照合し、ホストとその Modal オリジンが両方一致するときだけ中継する。HTTP と WebSocket とも、Modal へ送る前に Access の ID・Secret・JWT・認証 Cookie を除き、`X-Modal-Execution-Mode: split` を付ける。常時起動モードなら生成せず 409 になる。
-
-## 切り戻し
-
-特定のクライアントだけを外す場合は、そのクライアントの登録だけを削除する。Claude Code はこのプロジェクトで `claude mcp remove --scope local comfyui-split`、Codex はこのチェックアウトの `.codex/config.toml` から `[mcp_servers.comfyui-split]` を削除する。ほかのクライアントで使う間は、専用トークンと `.env.comfy-mcp` を残す。
-
-すべてのクライアントの接続を終了するときは、Access で専用トークンを失効し、その Service Auth ポリシーだけをアプリから外す。Worker の `SPLIT_MCP_ACCESS` を削除して専用 JWT の転送も閉じる。既存のブラウザ用 Allow と Modal の Proxy Auth は維持する。元の Worker に戻す必要があれば、この順序で機械用の許可を外してから以前の Worker バージョンに戻す。ローカルの登録と専用の認証ファイルも削除する。ComfyUI 自体を戻すときは、`scripts/modal.sh app history comfyui-split` で更新前のバージョンを確認し、`scripts/modal.sh app rollback comfyui-split <バージョン>` で戻す。既存の Volume を削除する必要はない。
+サーバーの準備・配信用 CPU の設定・旧 stdio 接続の廃止は、[管理の手順](split-mcp-setup.md)を参照してください。

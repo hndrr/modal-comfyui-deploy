@@ -29,8 +29,22 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();
-  for (const name of ["get_image", "get_video", "get_audio"])
+  for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models","calculate","get_split_status","save_workflow","visualize_workflow","list_nodes","search_custom_nodes","get_job_workflow","reuse_output","list_inputs","list_outputs","inspect_media","prepare_environment","change_node","apply_environment","discard_environment","add_model","inspect_model","remove_model","restore_model","get_admin_operation"])
     assert.ok(list.result.tools.some(t => t.name === name));
+  const upload=list.result.tools.find(t=>t.name==='upload_media');
+  const audio=list.result.tools.find(t=>t.name==="get_audio"),
+    part=list.result.tools.find(t=>t.name==="read_audio_part");
+  assert.deepEqual(part._meta.ui.visibility,["app"]);
+  assert.ok(audio.outputSchema.properties.delivery && part.outputSchema.properties.size);
+  const resource=await (await request(jwt,"resources/read",{uri:audio._meta.ui.resourceUri})).json();
+  assert.match(resource.result.contents[0].mimeType,/profile=mcp-app/);
+  assert.match(resource.result.contents[0].text,/aria-label="再生位置"/);
+  for (const v of [1,2]) {
+    const old=await (await request(jwt,"resources/read",{uri:"ui://split/audio-player-v"+v+".html"})).json();
+    assert.equal(old.result.contents[0].text,resource.result.contents[0].text);
+  }
+  assert.deepEqual(upload._meta['openai/fileParams'],['file']);
+  assert.deepEqual(upload.inputSchema.properties.file.required.sort(),['download_url','file_id']);
   assert.ok((await (await request(jwt,'ping')).json()).result);
   assert.equal(hits.length,0);
   const r=await (await request(jwt,'tools/call',{name:'create_workflow',arguments:{action:'node_info',node_type:'EmptyImage'}})).json();
@@ -62,8 +76,17 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const discovery=await worker.fetch(new Request('https://'+host+'/mcp',{method:'POST',
     headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream','CF-Access-Jwt-Assertion':jwt},
     body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list'})}),shared);
-  assert.equal((await discovery.json()).result.tools.length,7);
+  assert.deepEqual((await discovery.json()).result.tools.map(t=>t.name).sort(),
+    list.result.tools.map(t=>t.name).sort());
   assert.equal(hits.length,1);
+
+  const document=token=>worker.fetch(new Request("https://"+host+"/view?type=output&filename=test.wav",{
+    headers:{"CF-Access-Jwt-Assertion":token,"Sec-Fetch-Dest":"document","Sec-Fetch-Mode":"navigate","Sec-Fetch-Site":"cross-site"},
+  }),shared);
+  assert.equal((await document("")).status,403);
+  assert.equal((await document(jwt)).status,403);
+  assert.match(await (await document(browser)).text(),/<audio controls/);
+  assert.equal(hits.length,1); // Rendering the signed-in page never touches Modal.
 
   // Other ComfyUI hosts may already have custom-node routes below /mcp.
   const other = "ordinary.example.com", upstream = "https://ordinary.modal.run";
@@ -82,7 +105,7 @@ test('a lost receipt uses exactly the same queue request on retry',async()=>{
   const receipts=new Map();let commits=0,calls=0;
   const send=async(path,init)=>{
     if(path==='/split/startup')return Response.json({ready:true});
-    assert.equal(path,'/prompt'); const key=init.headers['Idempotency-Key'];
+    assert.equal(path,'/_remote_mcp/submit');assert.equal(init.headers['X-Split-Remote-Tool'],'1'); const key=init.headers['Idempotency-Key'];
     assert.equal(key,'remote-mcp:job-1');calls++;
     if(!receipts.has(key)){commits++;receipts.set(key,init.body);throw new Error('connection lost after commit');}
     return receipts.get(key)===init.body?Response.json({prompt_id:'original',number:1}):new Response(null,{status:409});
@@ -120,4 +143,51 @@ test('initializing, timed-out and failed CPU never receive a prompt',async t=>{
   assert.equal(attempts,2);assert.match(pending.content[0].text,/starting/);
   const failed=await callSplit(async path=>{assert.equal(path,'/split/startup');return Response.json({ready:false,failed:true});},'enqueue_workflow',{});
   assert.match(failed.content[0].text,/initialization failed/);
+});
+
+test('model inventory scopes reads to one category, filters and paginates filenames',async()=>{
+  const paths=[];
+  const send=async p=>{paths.push(p);return Response.json(p==='/split/startup'?{ready:true}:
+    p==='/models'?['loras','checkpoints']:['sub/B.safetensors','a.safetensors','skip.pt']);};
+  const call=async args=>JSON.parse((await callSplit(send,'list_models',args)).content[0].text);
+  assert.deepEqual((await call({})).categories,['checkpoints','loras']);
+  const first=await call({category:'loras',query:'.SAFE',limit:1});
+  assert.deepEqual(first.models,['a.safetensors']);assert.equal(first.next_offset,1);
+  assert.deepEqual((await call({category:'loras',query:'.SAFE',offset:1})).models,['sub/B.safetensors']);
+  const bad=await callSplit(send,'list_models',{category:'../queue'});
+  assert.ok(bad.isError);
+  assert.ok(paths.every(p=>['/split/startup','/models','/models/loras'].includes(p)));
+});
+
+test('management and production perform only the named operation after readiness',async()=>{
+  const hits=[];
+  const send=async(path,opts)=>{
+    hits.push(path);
+    if(path==='/split/startup')return Response.json({ready:true});
+    assert.equal(opts.headers['X-Split-Remote-Tool'],'1');
+    assert.equal(JSON.parse(opts.body).name,'change_node');
+    return Response.json({status:'failed',error:'Candidate version changed.'});
+  };
+  const result=await callSplit(send,'change_node',{candidate:'old',request_id:'test',action:'install',node:'example'});
+  assert.deepEqual(hits,['/split/startup','/_remote_mcp/operations']);
+  assert.equal(result.isError,true);
+  assert.match(result.content[0].text,/version changed/);
+});
+
+test('an external submission advertises only its trusted browser link, never a prompt id',async()=>{
+  const args={request_id:'music',workflow:{'1':{}}};
+  const path='/mcp-approvals/'+Array(4).fill('a'.repeat(8)).join('.');
+  for(const approval_path of [path,'//different.example/steal',path+'/media/0']){
+    const send=async p=>{
+      if(p==='/split/startup')return Response.json({ready:true});
+      assert.equal(p,'/_remote_mcp/submit');
+      return Response.json({status:'approval_required',approval_path,expires_at:1500},{status:202});
+    };
+    const r=await callSplit(send,'enqueue_workflow',args,'https://split.example.com');
+    if(approval_path===path){
+      const info=JSON.parse(r.content[0].text);
+      assert.equal(info.approval_url,'https://split.example.com'+path);
+      assert.equal(info.prompt_id,undefined);
+    }else assert.ok(r.isError);
+  }
 });

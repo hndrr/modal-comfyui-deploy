@@ -13,6 +13,7 @@ import modal
 
 from comfy_split import node_packs
 from comfy_split.config import Settings, DEPLOYMENT_ENV
+from comfy_split.model_import import import_model as import_model_file
 from comfy_split.extension_sources import enabled_sources
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
@@ -177,24 +178,45 @@ def remote_mcp_image(base):
     for filename in ("package.json", "package-lock.json", ".npmrc"):
         cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
     cpu = cpu.run_commands("cd /opt/split-mcp && npm ci --ignore-scripts --no-audit")
-    for filename in ("remote-call.mjs", "remote-env.mjs"):
+    for filename in ("remote-call.mjs", "remote-env.mjs", "library.mjs", "surface.json"):
         cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
     return cpu
 
 
 # Apply the same deployment identity after all reusable CPU and GPU layers.
-cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID})
-image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
+billing_secret = os.environ.get("SPLIT_COMFY_BILLING_SECRET", "").strip()
+billing_label = os.environ.get("SPLIT_COMFY_BILLING_LABEL","").strip() or billing_secret
+billing_config = {"SPLIT_COMFY_BILLING_SECRET": billing_secret, "SPLIT_COMFY_BILLING_LABEL": billing_label,
+    "SPLIT_GEMINI_BILLING_LABEL": os.environ.get("SPLIT_GEMINI_BILLING_LABEL", "").strip() or secret_names.get("GEMINI_SECRET_NAME", ""),
+    "SPLIT_OPENROUTER_BILLING_LABEL": os.environ.get("SPLIT_OPENROUTER_BILLING_LABEL", "").strip() or secret_names.get("OPENROUTER_SECRET_NAME", "")}
+
+cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID,
+    **billing_config,
+    "SPLIT_COMFY_BILLING_ENABLED": "1" if billing_secret else "0",
+    "SPLIT_IMAGE_NODE_NAMES": ",".join(repo.split("/")[-1] for repo in NODE_REVISIONS)})
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID, **billing_config})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 
     prepare()
 
 
+# Model downloads have no GPU, web endpoint or access to the node environment.
+model_image = (modal.Image.debian_slim(python_version="3.12").pip_install("huggingface_hub==0.35.1")
+               .add_local_python_source("comfy_split"))
+model_secret = os.environ.get("SPLIT_MODEL_HF_SECRET")
+
+import_model = app.function(image=model_image, min_containers=0, max_containers=1, scaledown_window=30,
+    timeout=14400, retries=0, volumes={MOUNTS["models"]: volumes["models"]},
+    secrets=[modal.Secret.from_name(model_secret, required_keys=["HF_TOKEN"])] if model_secret else []
+)(import_model_file)
+
+
 @app.function(
     image=image,
     gpu=str(GPU_PROFILE["modal_gpu"]),
-    secrets=provider_secrets,
+    secrets=provider_secrets + ([modal.Secret.from_name(billing_secret, required_keys=["COMFY_API_KEY"])]
+                               if billing_secret else []),
     min_containers=0,
     max_containers=1,
     scaledown_window=30,
@@ -224,11 +246,15 @@ async def gpu_worker(spec):
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app(requires_proxy_auth=True)
 def ui():
+    import secrets
     from modal._runtime.asgi import wait_for_web_server
 
     from comfy_split.cpu_snapshot import resume
     from comfy_split.modal_proxy import web_server_proxy
+    from comfy_split.gateway_access import ENV
 
+    gateway_token = secrets.token_urlsafe(32)
+    os.environ[ENV] = gateway_token
     gateway = resume()
 
     def monitor():
@@ -245,4 +271,4 @@ def ui():
 
     threading.Thread(target=monitor, daemon=True).start()
     wait_for_web_server("127.0.0.1", 8000, timeout=600)
-    return web_server_proxy("127.0.0.1", 8000)
+    return web_server_proxy("127.0.0.1", 8000, gateway_token=gateway_token)
