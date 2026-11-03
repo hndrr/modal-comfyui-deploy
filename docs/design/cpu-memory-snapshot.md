@@ -15,10 +15,10 @@
 
 Managerで環境を変更した後も正しい環境で実行するが、古いSnapshotしかない実行先では通常起動になる。新しい環境の起動時間も短縮するには`splitapp.py`を再デプロイし、Snapshotを更新する。環境Volumeの変更だけでModalのSnapshotを作り直すことはできない。古い環境の保護は、そのデプロイへのロールバックも不要になり、対応するSnapshotを復元しないことを確認してから解除する。
 
-読み取り専用の実機確認は次のコマンドで行う。`<profile>`は検証対象のModalプロファイル名に置き換える。起動間にはCPUが0台になるまで待ち、生成を投入せずにAPI・WebSocket・ノード定義・内部ルートの遮断を確認する。
+読み取り専用の実機確認は次のコマンドで行う。`<MODAL_PROFILE>` は `scripts/modal.sh --list` に表示される検証対象のプロファイル名に置き換える。起動間にはCPUが0台になるまで待ち、生成を投入せずにAPI・WebSocket・ノード定義・内部ルートの遮断を確認する。
 
 ```sh
-MODAL_PROFILE="<profile>" .venv/bin/python scripts/verify_cpu_snapshot.py \
+MODAL_PROFILE="<MODAL_PROFILE>" .venv/bin/python scripts/verify_cpu_snapshot.py \
   --output /private/tmp/cpu-snapshot-boots.json --boots 2
 ```
 
@@ -81,13 +81,16 @@ Modalは実行先のワーカーの種類ごとにSnapshotを作成するため�
 検証対象の split と同じ Modal プロファイルで、次の値を確認する。イメージ ID は Modal ダッシュボードの対象 CPU 関数で使うイメージ、環境 ID は MCP の `get_split_status` が返す稼働版 `active` を使う。両者が同じ ComfyUI・拡張の構成を参照していることを確認する。実値は Git 管理外の設定で扱い、以下のプレースホルダーを置き換える。
 
 ```sh
+export MODAL_PROFILE='<MODAL_PROFILE>'
 export CPU_SNAPSHOT_PROBE_IMAGE_ID='<PROBE_IMAGE_ID>'
 export CPU_SNAPSHOT_PROBE_ENVIRONMENT='<PROBE_ENVIRONMENT_ID>'
 scripts/modal.sh deploy scripts/probe_cpu_snapshot.py
-MODAL_PROFILE="<profile>" .venv/bin/python scripts/probe_cpu_snapshot.py \
+.venv/bin/python scripts/probe_cpu_snapshot.py \
   --output /private/tmp/comfy-cpu-snapshot-results
 scripts/modal.sh app stop comfyui-cpu-snapshot-probe
 ```
+
+deploy・比較・停止は、上で `export` した同じ Modal プロファイルで実行する。比較コマンドでもモジュールの読み込みに2つの検証用環境変数が必要なので、同じシェルで続けて実行する。
 
 Snapshotはデプロイしたアプリで作成されるため、`modal run`による一時アプリで代用しない。指定した環境 ID とイメージ ID は検証コンテナにも渡す。対象を変更した場合は再デプロイする。試験途中で失敗・中断した場合も、最後の専用アプリ停止を行う。
 

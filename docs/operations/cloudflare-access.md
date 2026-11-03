@@ -152,7 +152,7 @@ uv run modal app list          # comfyui が deployed であること
 
 ### 3.（任意）Google を Identity provider として追加する
 
-**この手順は省略できる。** One-time PIN は Cloudflare 標準機能で既定から使えるため、個人利用ならこれだけで足りる。
+**この手順は省略できる。** Google を使わない場合は、手順 4 で One-time PIN を登録すればよい。
 
 Google ログインも使いたくなった場合は、後から追加しても Access アプリを作り直す必要はない（IdP を登録し、アプリの Login methods に足すだけ）。
 
@@ -160,17 +160,19 @@ Google Cloud Console で OAuth 2.0 クライアント ID を作成する。
 
 - 承認済みのリダイレクト URI: `<ACCESS_TEAM_ORIGIN>/cdn-cgi/access/callback`
 
-Cloudflare Zero Trust → Settings → Authentication → Login methods → Add new → Google に、発行された Client ID と Client secret を登録する。Test を実行して成功することを確認する。
+Cloudflare Zero Trust → Integrations → Identity providers → Add new identity provider → Google に、発行された Client ID と Client secret を登録する。Test を実行して成功することを確認する。
 
 IdP が 1 つだけの場合は、Access アプリ側で `auto_redirect_to_identity` を有効にすると IdP 選択画面を飛ばせる。複数登録するとこの設定は使えない。
 
 ### 4. Access アプリケーションを作成する
 
+先に Zero Trust → Integrations → Identity providers を開き、One-time PIN が未登録なら Add new identity provider → One-time PIN で追加する。新しい組織には自動で追加されないため、アプリの作成前に確認する（[Cloudflare の One-time PIN 設定手順](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/)）。
+
 Zero Trust → Access controls → Applications → Create new application → **Self-hosted and private** → **Add public hostname**。
 
 - Public hostname: `<COMFYUI_PUBLIC_HOST>`（Cloudflare で管理しているゾーンのサブドメイン）
 - Session Duration: 毎回ログインし直さずに済む長さにする（例: 24 時間、1 週間）
-- Login methods: One-time PIN と Google を有効にする
+- Login methods: One-time PIN を有効にする。Google は手順 3 で登録した場合のみ追加する
 - Policy:
   - Action: `Allow`
   - Include: `Emails` → 自分のメールアドレス（複数可）

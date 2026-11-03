@@ -1,6 +1,6 @@
 # Split Storageの整理
 
-> ストレージを集約した際の設計と移行手順です。現在の構成・運用は[splitの説明](../guides/comfyui-split.md)と[任意拡張](../guides/split-integrations.md)を参照してください。
+> 2026-09-15〜16時点のストレージ設計メモです。以下の移行方針は当時の旧構成を一度だけ集約するためのもので、通常運用の手順ではありません。現在の構成・運用は[splitの説明](../guides/comfyui-split.md)と[任意拡張](../guides/split-integrations.md)を参照してください。
 
 ## 構成
 
@@ -30,9 +30,9 @@ ComfyUI本体はイメージから読み込み、環境Volumeにはcustom nodes�
 - 通常の画像・動画・入力・保存済みワークフローは自動削除しない。
 - 停止中は清掃のために起動せず、次回利用時に整理する。
 
-## 移行手順
+## 当時の一度限りの移行方針
 
-対象プロファイルを `.modal-profile` で確認し、ローカル処理で移行する。
+常設の移行CUIやバックアップ機能は追加しない方針とした。対象プロファイルを `.modal-profile` で確認し、一度限りのローカル処理で移行する想定だった。以下には旧 Volume の削除を含むため、現在の環境へそのまま適用しない。
 
 1. キュー・環境更新がなくCPU/GPUとも停止していることを確認し、旧Split Appを停止する。
 2. 旧`comfy-split-user-data`、`comfy-split-state`、`comfy-split-results`を、それぞれ新Volumeの`user/`、`state/`、`jobs/`へコピーする。

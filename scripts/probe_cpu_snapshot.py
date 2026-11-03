@@ -1,13 +1,15 @@
 """Isolated ComfyUI CPU Memory Snapshot experiment; never deploys the gateway.
 
 Deploy with: scripts/modal.sh deploy scripts/probe_cpu_snapshot.py
-Compare with: MODAL_PROFILE="<profile>" .venv/bin/python scripts/probe_cpu_snapshot.py
+Compare with: .venv/bin/python scripts/probe_cpu_snapshot.py
 Stop with: scripts/modal.sh app stop comfyui-cpu-snapshot-probe
 
-Uses the deployed image and an immutable environment mounted read-only. All
+Derives a probe image from the deployed image, adding the two target identifiers
+as environment variables, and mounts an immutable environment read-only. All
 user files and outputs stay in the disposable container. No GPU, provider
 secrets, generation requests, or public HTTP endpoint are configured.
-Set CPU_SNAPSHOT_PROBE_IMAGE_ID and CPU_SNAPSHOT_PROBE_ENVIRONMENT before use.
+Export MODAL_PROFILE, CPU_SNAPSHOT_PROBE_IMAGE_ID and
+CPU_SNAPSHOT_PROBE_ENVIRONMENT before all three commands.
 """
 
 import asyncio
