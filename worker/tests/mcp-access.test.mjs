@@ -49,17 +49,15 @@ test("signed Access identity controls both transports before contacting an origi
       [split]: "https://different.modal.run",
     }) })).status, 403);
     assert.equal(forwarded.length, before);
-    assert.equal((await call(split, machine, ws)).status, ws ? 101 : 200);
-    const up = forwarded.at(-1);
-    assert.equal(new URL(up.url).hostname, "split.modal.run");
-    for (const name of ["CF-Access-Jwt-Assertion", "CF-Access-Client-Id", "CF-Access-Client-Secret", "CF-Access-Token"]) {
-      assert.equal(up.headers.get(name), null);
-    }
-    assert.equal(up.headers.get("Cookie"), "other=ok");
-    assert.equal(up.headers.get("Modal-Secret"), env.MODAL_SECRET);
-    assert.equal(up.headers.get("X-Modal-Execution-Mode"), "split");
-    assert.equal((await call(other, browser, ws)).status, ws ? 101 : 200);
-    assert.equal(forwarded.at(-1).headers.get("X-Modal-Execution-Mode"), null);
+    assert.equal((await call(split, machine, ws)).status,410);
+    assert.equal(forwarded.length,before);
+    assert.equal((await call(other,browser,ws)).status,ws?101:200);
+    const up=forwarded.at(-1);
+    for(const name of ["CF-Access-Jwt-Assertion","CF-Access-Client-Id","CF-Access-Client-Secret","CF-Access-Token"])
+      assert.equal(up.headers.get(name),null);
+    assert.equal(up.headers.get("Cookie"),"other=ok");
+    assert.equal(up.headers.get("Modal-Secret"),env.MODAL_SECRET);
+    assert.equal(up.headers.get("X-Modal-Execution-Mode"),null);
   }
   const forged = await sign({ sub: "", common_name: clientId }, (await generateKeyPair("RS256")).privateKey);
   const before = forwarded.length;
@@ -67,4 +65,51 @@ test("signed Access identity controls both transports before contacting an origi
     assert.equal((await call(split, token)).status, 403);
   }
   assert.equal(forwarded.length, before);
+});
+
+test('only the signed UI owner may view/decide one review; service POSTs cannot bypass admission', async t=>{
+  const team="https://review-test.cloudflareaccess.com", host="split.example.com", origin="https://split.modal.run";
+  const env={TEAM_DOMAIN:team,POLICY_AUD:"browser",MODAL_KEY:"key",MODAL_SECRET:"secret",
+    MODAL_ORIGINS:JSON.stringify({[host]:origin}),
+    SPLIT_MCP_ACCESS:JSON.stringify({client_id:"client.access",hostname:host,origin}),
+    SPLIT_REMOTE_MCP:JSON.stringify({hostname:host,split_hostname:host,origin,audience:"oauth",owner_email:"owner@example.com"})};
+  const {privateKey,publicKey}=await generateKeyPair("RS256");
+  const jwk={...await exportJWK(publicKey),kid:"review"};
+  const sign=(claims,aud)=>new SignJWT({type:"app",...claims}).setProtectedHeader({alg:"RS256",kid:jwk.kid})
+    .setIssuer(team).setAudience(aud).setExpirationTime("5m").sign(privateKey);
+  const owner=await sign({sub:"user",email:"owner@example.com"},"browser"),
+    oauth=await sign({sub:"user",email:"owner@example.com"},"oauth"),other=await sign({sub:"user",email:"another@example.com"},"browser"),
+    service=await sign({sub:"",common_name:"client.access"},"browser");
+  const path="/mcp-approvals/"+["a".repeat(8),"b".repeat(8),"c".repeat(8),"d".repeat(8)].join("."), internal=path.replace("/mcp-approvals/","/_remote_mcp/review/");
+  const hits=[];
+  t.mock.method(globalThis,"fetch",async r=>{
+    if(r===team+"/cdn-cgi/access/certs")return Response.json({keys:[jwk]});
+    hits.push(r);
+    if(r.url.endsWith("/_remote_mcp/submit"))return Response.json({status:"approval_required",approval_path:path},{status:202});
+    return new Response("ok");
+  });
+  const call=(p,token,method="GET",extra={})=>worker.fetch(new Request("https://"+host+p,{method,headers:{
+    "CF-Access-Jwt-Assertion":token,"X-Split-Browser-Review":"1","X-Split-Remote-Tool":"1",
+    Cookie:"CF_Authorization=private; extra=private",Authorization:"Bearer secret",...extra},
+    ...(method==="POST"?{body:"x=1"}:{})}),env);
+  for(const token of [oauth,other,service,""]){assert.equal((await call(path,token)).status,403);}
+  for(const p of [path,internal,"/api"+internal,"/api/split/mode","/api/prompt/","/api/%70rompt","/prompt?alternate=1"])
+    assert.ok([403,410].includes((await call(p,service,"POST")).status));
+  for(const headers of [{},{"Origin":"null","Content-Type":"application/x-www-form-urlencoded"},
+    {"Origin":"https://other.example","Content-Type":"application/x-www-form-urlencoded"},
+    {"Origin":"https://"+host,"Content-Type":"application/json"}])assert.equal((await call(path,owner,"POST",headers)).status,403);
+  assert.equal(hits.length,0);
+  assert.equal((await call(path,owner)).status,200);
+  assert.equal((await call(path,owner,"POST",{Origin:"https://"+host,"Content-Type":"application/x-www-form-urlencoded"})).status,200);
+  for(const r of hits){
+    assert.equal(r.url,origin+internal);assert.equal(r.headers.get("X-Split-Browser-Review"),"1");
+    for(const k of ["Cookie","CF-Access-Jwt-Assertion","Authorization","X-Split-Remote-Tool"])assert.equal(r.headers.get(k),null);
+  }
+  assert.equal((await call(internal,owner)).status,200); // Origin must still refuse requests without the marker.
+  assert.equal(hits.at(-1).headers.get("X-Split-Browser-Review"),null);
+  const beforeRetired=hits.length;
+  for(let retry=0;retry<2;retry++)assert.equal((await call("/api/prompt",service,"POST")).status,410);
+  assert.equal(hits.length,beforeRetired); // No random keys, new reviews or duplicate jobs.
+  assert.equal((await call("/split/mode",owner,"POST")).status,200);
+  assert.equal(hits.at(-1).headers.get("X-Split-Browser-Review"),null);
 });

@@ -1,5 +1,8 @@
+import {browserReview} from "./job-review.ts";
 import { splitGui } from "./split-guis.ts";
+import { audioDocument } from "./audio-document.ts";
 import { remoteMcp } from "./remote-mcp.ts";
+import {mediaSender, savedOutputRequest} from "./saved-media.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
 /**
@@ -41,6 +44,10 @@ export interface Env {
   SPLIT_MCP_ACCESS?: string;
   /** Remote public hostname, dedicated audience, owner email, and existing split hostname. */
   SPLIT_REMOTE_MCP?: string;
+  /** Fixed saved-output endpoint: {hostname, origin}. Uses the split's existing Proxy Auth. */
+  SPLIT_MEDIA_ORIGIN?: string;
+  /** Exact verified Azure storage hosts used by ChatGPT attachments, comma separated. */
+  SPLIT_ATTACHMENT_BLOB_HOSTS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
   TEAM_DOMAIN: string;
   /** Access アプリの Application Audience (AUD) Tag */
@@ -350,6 +357,7 @@ export function buildUpstreamHeaders(request: Request, env: Env, upstreamOrigin:
   const headers = new Headers(request.headers);
   headers.delete("Host");
   headers.delete("X-Split-Remote-Tool");
+  headers.delete("X-Split-Browser-Review");
   for (const name of [...headers.keys()]) {
     if (name.toLowerCase().startsWith("cf-access-")) headers.delete(name);
   }
@@ -537,15 +545,19 @@ export default {
           if (payload.type !== "app" || !payload.sub || payload.common_name !== undefined ||
               typeof payload.email !== "string" || payload.email.toLowerCase() !== cfg.owner_email.toLowerCase()) throw new Error();
         } catch { return textResponse("MCP Access authentication required.",403); }
+        let media;
+        try { if (env.SPLIT_MEDIA_ORIGIN) media=mediaSender(env.SPLIT_MEDIA_ORIGIN,cfg.split_hostname,
+          buildUpstreamHeaders(new Request(url),env,splitOrigin)); }
+        catch {return textResponse("Invalid saved-media binding.",500);}
         return remoteMcp(request, (path, init) => {
           // Build from zero: never forward a user JWT, cookie, or arbitrary header.
           const headers = buildUpstreamHeaders(new Request(url), env, splitOrigin, true);
           new Headers(init.headers).forEach((v,k)=>headers.set(k,v));
-          headers.set("Content-Type","application/json");
+          if (!headers.has("Content-Type")) headers.set("Content-Type","application/json");
           // workerd supports manual/follow. callSplit rejects non-2xx responses;
           // never follow a Location with Modal credentials.
           return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"manual"}));
-        }, "https://" + cfg.split_hostname);
+        }, "https://" + cfg.split_hostname, env.SPLIT_ATTACHMENT_BLOB_HOSTS,media);
       }
     }
     if (mcpPath && splitUiHost) return textResponse("Not found.", 404);
@@ -563,6 +575,36 @@ export default {
       return textResponse("Proxy is not configured for this hostname.", 500);
     }
 
+    if (/^\/mcp-approvals(?:\/|$)/.test(requestUrl.pathname)) {
+      let cfg;
+      try { cfg=JSON.parse(env.SPLIT_REMOTE_MCP || "{}"); } catch { return textResponse("Invalid MCP binding.",500); }
+      const owner=identity.kind==="browser" && !!identity.email && typeof cfg.owner_email==="string" &&
+        identity.email.toLowerCase()===cfg.owner_email.toLowerCase() && requestUrl.hostname===cfg.split_hostname &&
+        cfg.origin===modalOrigin && !!cfg.audience && cfg.audience!==env.POLICY_AUD.trim();
+      return browserReview(request,owner,modalOrigin,buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin));
+    }
+    if (identity.kind==="split-mcp")
+      return textResponse("Local MCP service access was retired. Use HTTPS /mcp with OAuth.",410);
+
+    let mediaHost=false;
+    if(env.SPLIT_MEDIA_ORIGIN){
+      try { mediaHost=JSON.parse(env.SPLIT_MEDIA_ORIGIN).hostname===requestUrl.hostname; }
+      catch { return textResponse("Invalid saved-media binding.",500); }
+    }
+
+    if ((splitUiHost || mediaHost) && identity.kind === "browser") {
+      const page = audioDocument(request);
+      if (page) return page;
+      if (env.SPLIT_MEDIA_ORIGIN && savedOutputRequest(request)) {
+        try {
+          const send=mediaSender(env.SPLIT_MEDIA_ORIGIN,requestUrl.hostname,
+            buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin));
+          return await send(requestUrl.pathname+requestUrl.search,{method:request.method,
+            headers:request.headers,signal:request.signal});
+        } catch {return textResponse("Saved-media delivery is unavailable. Retry the read.",503);}
+      }
+    }
+
     if (env.SPLIT_ADMIN_GUIS && env.SPLIT_UI_ORIGIN) {
       const gui = await splitGui(request, env.SPLIT_ADMIN_GUIS,
         parseOrigins(env.SPLIT_UI_ORIGIN).get(requestUrl.hostname) === modalOrigin, identity.email);
@@ -572,14 +614,15 @@ export default {
     const upstreamUrl = upstreamUrlFor(requestUrl, modalOrigin);
 
     if (isWebSocketUpgrade(request)) {
-      return proxyWebSocket(request, env, upstreamUrl, identity.kind === "split-mcp");
+      return proxyWebSocket(request, env, upstreamUrl, false);
     }
 
     const upstream = await fetch(
       new Request(upstreamUrl, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity.kind === "split-mcp"),
+        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, false),
         body: request.body,
+        ...(request.body ? {duplex:"half"} : {}),
         redirect: "manual",
       })
     );
