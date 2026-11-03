@@ -22,7 +22,7 @@ test('CPU runs the pinned package against its loopback split gateway',async t=>{
   assert.ok(!result.isError,JSON.stringify(result.content));
   assert.match(result.content[0].text,/width/);
   assert.ok(requests.some(([url,mode])=>url.startsWith('/object_info') && mode==='split'));
-  await assert.rejects(invoke({name:'get_image',arguments:{action:'get',save_dir:'/tmp'}},dir));
+  await assert.rejects(invoke({name:'get_image',arguments:{action:'get',filename:'output.png'}},dir),/Unsupported action/);
 });
 
 test('saved workflows use the pinned library with encoded names and no path access',async t=>{

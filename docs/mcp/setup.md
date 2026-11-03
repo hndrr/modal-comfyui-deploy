@@ -35,6 +35,14 @@ ChatGPT 添付が Azure Blob から配信される場合は、ChatGPT の添付�
 
 HTTPS 接続を閉じるには、Worker の `SPLIT_REMOTE_MCP` を削除してから、専用の Access アプリを無効にする。ブラウザ用 Access アプリは維持する。
 
+## 画像ビューアを導入する更新の順序
+
+既存環境の `get_image` を Worker の画像取得経路へ切り替える場合は、Worker を先に反映します。配信用 CPU を設定していない構成で Modal を先に更新すると、旧 Worker が呼ぶ上流の `get_image` が削除済みのため失敗します。
+
+1. Worker のテスト・型検査後、`worker/` で `npm run deploy` を実行する。
+2. リポジトリのルートで `scripts/modal.sh deploy splitapp.py` を実行する。`mcp/remote-call.mjs` と `mcp/surface.json` は CPU イメージに組み込まれるため、Worker の反映だけでは更新されない。
+3. ChatGPT の接続設定でツールを更新し、生成済みファイルを `get_image` で取得する。画像ビューアと、ログイン後に開ける閲覧リンクを確認する。
+
 ## 外部サービスの課金先を設定する
 
 確認ページの `/mcp-approvals/*` には **通常のブラウザ用 Access アプリ**を適用する。MCP の OAuth アプリは `/mcp` のままにする。Worker は署名済みブラウザ JWT のメールが `SPLIT_REMOTE_MCP.owner_email` と一致する場合だけページを返す。MCP のアクセストークンでは閲覧・承認できない。
