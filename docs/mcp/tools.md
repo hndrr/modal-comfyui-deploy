@@ -1,8 +1,8 @@
 # リモート MCP のツール一覧
 
-ChatGPT Web・Claude Code・Codex が同じ HTTPS `/mcp` で使う **32ツール**と、音声プレイヤー専用の内部ツール1件をまとめています。接続方法と依頼例は[利用ガイド](split-mcp.md)、通信先と起動の分岐は[経路図](design/split-mcp-routing.md)、artokun 版の全機能との比較は[上流との対応表](split-mcp-upstream.md)を参照してください。
+ChatGPT Web・Claude Code・Codex が同じ HTTPS `/mcp` で使う **32ツール**と、音声プレイヤー専用の内部ツール1件をまとめています。接続方法と依頼例は[利用ガイド](usage.md)、通信先と起動の分岐は[経路図](../design/split-mcp-routing.md)、artokun 版の全機能との比較は[上流との対応表](upstream.md)を参照してください。
 
-この一覧はリポジトリの実装を説明します。接続先で実際に使える名前・入力項目は MCP の `tools/list` が返すスキーマで確認してください。外部送信の承認は、Worker と split の対応版・設定を両方適用して使う機能です。OAuth 接続が成功しただけでは有効化を確認できません。[管理手順](split-mcp-setup.md)に適用条件があります。
+この一覧はリポジトリの実装を説明します。接続先で実際に使える名前・入力項目は MCP の `tools/list` が返すスキーマで確認してください。外部送信の承認は、Worker と split の対応版・設定を両方適用して使う機能です。OAuth 接続が成功しただけでは有効化を確認できません。[管理手順](setup.md)に適用条件があります。
 
 ## 実行先の読み方
 
@@ -67,9 +67,9 @@ ChatGPT Web・Claude Code・Codex が同じ HTTPS `/mcp` で使う **32ツール
 | `inspect_media` | 入力は `filename`、出力は `prompt_id` と `index` | 画像の寸法、音声・動画の再生時間やストリーム情報 | ComfyUI CPU。出力の検査は完了済みジョブが対象 |
 | `reuse_output` | `prompt_id`、`index` | 完了済みの出力1件を入力へコピーし、ローダー用 `filename` を返す。最大256 MiB | ComfyUI CPU。再生成・クライアントへのダウンロードは不要 |
 
-ChatGPT 添付はクライアントが `file` を渡します。CLI では[ファイル転送ヘルパー](split-mcp.md#手元のファイルを送る)を使います。会話に大きな Base64 やローカルパスを貼る必要はありません。
+ChatGPT 添付はクライアントが `file` を渡します。CLI では[ファイル転送ヘルパー](usage.md#手元のファイルを送る)を使います。会話に大きな Base64 やローカルパスを貼る必要はありません。
 
-CLI の転送は、`upload_id + filename` で開始・再開位置を確認し、`upload_id + offset + data` で1 MiB以内の部分を送り、`upload_id + total_bytes` で確定します。同じ転送の再試行では `upload_id` を維持します。対応する入力形式は[利用ガイド](split-mcp.md#手元のファイルを送る)を参照してください。
+CLI の転送は、`upload_id + filename` で開始・再開位置を確認し、`upload_id + offset + data` で1 MiB以内の部分を送り、`upload_id + total_bytes` で確定します。同じ転送の再試行では `upload_id` を維持します。対応する入力形式は[利用ガイド](usage.md#手元のファイルを送る)を参照してください。
 
 ## 生成する・状況を見る・止める（5ツール）
 
@@ -128,7 +128,7 @@ ComfyUIのLoRA選択肢を確認する例：
 {"source":"runtime","category":"loras","query":"portrait","limit":20}
 ```
 
-モデルを追加するカテゴリは `list_models` の結果から選び、追加形式や認証の条件は[管理手順](split-mcp-setup.md#モデルの取得元と上流版の更新)を参照してください。
+モデルを追加するカテゴリは `list_models` の結果から選び、追加形式や認証の条件は[管理手順](setup.md#モデルの取得元と上流版の更新)を参照してください。
 
 ## ノード・実行環境を管理する（8ツール）
 

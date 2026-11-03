@@ -96,7 +96,7 @@ modal: using profile 'personal' (--profile)
 | `./scripts/modal.sh <modal のコマンド>` | 使う |
 | `cd web && npm start`（資産管理画面） | 使う |
 | `uv run preserve_model_gui.py`（モデル保存 GUI） | 使う |
-| `uv run python rename_volume.py ...` / `move_volume_file.py ...` | 使う |
+| `uv run python scripts/rename_volume.py ...` / `scripts/move_volume_file.py ...` | 使う |
 | `uv run modal ...` を素で打つ | **使わない**（Modal CLI の既定） |
 
 `uv run python ...` で起動するスクリプトは、`import modal` の前に固定先を `MODAL_PROFILE` へ反映しています。素の `uv run modal` だけは Modal CLI が先にプロファイルを確定してしまうため、後から差し込めません。
@@ -110,11 +110,11 @@ uv run modal run preserve_model.py::preserve_model ...
 uv run modal volume ls comfy-model /            → ./scripts/modal.sh volume ls comfy-model /
 ```
 
-GUI やサーバーは置き換え不要です。その起動だけ別アカウントにしたいときだけ、環境変数で上書きします。
+GUI やサーバーは置き換え不要です。その起動だけ別アカウントにしたいときだけ、環境変数で上書きします。`<MODAL_PROFILE>` は `./scripts/modal.sh --list` の `Profile` 列に表示される名前に置き換えてください。
 
 ```bash
-MODAL_PROFILE=<profile> uv run preserve_model_gui.py
-MODAL_PROFILE=<profile> npm start
+MODAL_PROFILE="<MODAL_PROFILE>" uv run preserve_model_gui.py
+MODAL_PROFILE="<MODAL_PROFILE>" npm start
 ```
 
 ## 資産管理画面（`web/`）の場合
@@ -124,7 +124,7 @@ MODAL_PROFILE=<profile> npm start
 ```bash
 cd web
 npm start                              # 固定先（無ければ Modal CLI の既定）
-MODAL_PROFILE=<profile> npm start      # この起動だけ別アカウント
+MODAL_PROFILE="<MODAL_PROFILE>" npm start      # この起動だけ別アカウント
 ```
 
 **固定先を変えたらサーバーを再起動してください。** Modal SDK を抱えたワーカーが常駐しているため、起動したまま `.modal-profile` を書き換えても切り替わりません。
@@ -157,12 +157,21 @@ Volume はアカウントごとに別物なので、切り替えると一覧の�
 | `MODAL_KEY` / `MODAL_SECRET` | 特定の 1 ワークスペースの既定ペアです。接続先別の指定がない URL に使われます。更新すると、それらすべての接続先に影響します |
 | `MODAL_PROXY_CREDENTIALS` | 別ワークスペースの接続先には、その Modal オリジンをキーとして、そのワークスペースの `key` / `secret` を指定します。既定ペアより優先されます |
 
-例えば既定ペアをワークスペース A 用のままにして、B を追加する場合、転送先一覧は次の形になります。ドメインとワークスペース名はすべてプレースホルダーです。
+例えば既定ペアをワークスペース A 用のままにして、B を追加する場合、転送先一覧は次の形になります。山括弧付きの値は、次の取得元で確認した値に置き換えます。
+
+| 表記 | 設定する値・取得元 |
+| --- | --- |
+| `<COMFYUI_PUBLIC_HOST>` / `<SPLIT_PUBLIC_HOST>` | 各アプリ用に Worker の Custom Domain へ登録する公開ホスト名。`https://` やパスは含めない |
+| `<COMFYUI_MODAL_ORIGIN_A>` | A で `comfyapp.py` をデプロイした出力にある `ui` の Web URL |
+| `<SPLIT_MODAL_ORIGIN_B>` | B で `splitapp.py` をデプロイした出力にある `ui` の Web URL |
+| `<WORKSPACE_B_PROXY_KEY>` / `<WORKSPACE_B_PROXY_SECRET>` | B の Settings → Proxy Auth Tokens で発行する Token ID / Secret |
+
+Modal の URL は `https://` を含め、パスと末尾の `/` を除いてコピーします。
 
 ```json
 {
-  "comfy.example.com": "https://<workspace-a>--comfyui-ui.modal.run",
-  "comfy-test.example.com": "https://<workspace-b>--comfyui-split-ui.modal.run"
+  "<COMFYUI_PUBLIC_HOST>": "<COMFYUI_MODAL_ORIGIN_A>",
+  "<SPLIT_PUBLIC_HOST>": "<SPLIT_MODAL_ORIGIN_B>"
 }
 ```
 
@@ -170,9 +179,9 @@ Volume はアカウントごとに別物なので、切り替えると一覧の�
 
 ```json
 {
-  "https://<workspace-b>--comfyui-split-ui.modal.run": {
-    "key": "wk-WORKSPACE_B_EXAMPLE",
-    "secret": "ws-WORKSPACE_B_EXAMPLE"
+  "<SPLIT_MODAL_ORIGIN_B>": {
+    "key": "<WORKSPACE_B_PROXY_KEY>",
+    "secret": "<WORKSPACE_B_PROXY_SECRET>"
   }
 }
 ```
@@ -206,7 +215,7 @@ A への接続には既定の `MODAL_KEY` / `MODAL_SECRET`、B への接続に�
 - Modal の Proxy Auth トークン
 - Dict（`preserve-model-progress`。モデル保存 GUI の進捗表示用、初回に自動作成されます）
 
-また、デプロイ URL に**ワークスペース名が入ります**（`https://<workspace>--<app>.modal.run`）。アカウントを変えてデプロイし直したら、Cloudflare Access を使っている場合は Worker の `MODAL_ORIGINS` / `MODAL_KEY` / `MODAL_SECRET` も入れ直してください（[cloudflare-access.md](cloudflare-access.md)）。
+アカウントを変えてデプロイし直したら、出力に表示された Web URL をコピーしてください。Cloudflare Access を使っている場合は Worker の転送先一覧と、そのワークスペースの認証キーも更新します（[Cloudflare Access](cloudflare-access.md)）。URL の形式を推測して組み立てる必要はありません。
 
 ## 補足
 

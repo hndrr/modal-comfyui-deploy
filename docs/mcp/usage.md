@@ -1,24 +1,24 @@
 # チャットから ComfyUI を使う
 
-ChatGPT Web、Claude Code、Codex から、Modal 上の ComfyUI に同じ HTTPS URL で接続できます。チャットで保存済みのワークフローを選び、画像・音源・動画を渡して生成し、結果を受け取れます。以下の `split.example.com` は、管理者から案内されたホスト名に置き換えてください。
+ChatGPT Web、Claude Code、Codex から、Modal 上の ComfyUI に同じ HTTPS URL で接続できます。チャットで保存済みのワークフローを選び、画像・音源・動画を渡して生成し、結果を受け取れます。以下の `<SPLIT_PUBLIC_HOST>` は、管理者から案内された split の公開ホスト名に置き換えてください。ホスト名には `https://` や `/mcp` を含めません。
 
-このページは操作の流れを説明します。個々の引数・戻り値は[32ツールの一覧](split-mcp-tools.md)、どのCPU・GPUを使うかは[経路図](design/split-mcp-routing.md)、サーバー側の設定は[管理手順](split-mcp-setup.md)を参照してください。
+このページは操作の流れを説明します。個々の引数・戻り値は[32ツールの一覧](tools.md)、どのCPU・GPUを使うかは[経路図](../design/split-mcp-routing.md)、サーバー側の設定は[管理手順](setup.md)を参照してください。
 
 ## 接続する
 
-**ChatGPT Web**：設定からカスタム MCP 接続を追加し、URL に `https://split.example.com/mcp`、認証方式に OAuth を指定します。ブラウザで Access にログインし、チャットでこの接続を選んでください。生成や添付には書き込み操作を使えるワークスペース権限が必要です。[ChatGPT の接続条件](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
+**ChatGPT Web**：設定からカスタム MCP 接続を追加し、URL に `https://<SPLIT_PUBLIC_HOST>/mcp`、認証方式に OAuth を指定します。ブラウザで Access にログインし、チャットでこの接続を選んでください。生成や添付には書き込み操作を使えるワークスペース権限が必要です。[ChatGPT の接続条件](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
 
 **Claude Code**：使いたいプロジェクトのディレクトリで登録します。
 
 ```bash
-claude mcp add --transport http --scope local comfyui-remote https://split.example.com/mcp
+claude mcp add --transport http --scope local comfyui-remote "https://<SPLIT_PUBLIC_HOST>/mcp"
 claude mcp login comfyui-remote
 ```
 
 **Codex**：次のコマンドで登録してログインし、新しいセッションを開きます。
 
 ```bash
-codex mcp add comfyui-remote --url https://split.example.com/mcp
+codex mcp add comfyui-remote --url "https://<SPLIT_PUBLIC_HOST>/mcp"
 codex mcp login comfyui-remote
 ```
 
@@ -37,7 +37,7 @@ flowchart TD
   CPU -->|"生成・候補環境の検証を実行するとき"| GPU["GPUで処理 → 結果をVolumeに保存"]
 ```
 
-配信用CPUは読み取りが終わるとアイドル停止します。ComfyUI CPUとGPUも、通常のsplitモードでほかに利用がなければ0台に戻ります。上流のartokun MCPは必要な操作でサーバー内から使い、クライアント側で起動する必要はありません。管理操作を含む[詳しい経路図](design/split-mcp-routing.md)も用意しています。
+配信用CPUは読み取りが終わるとアイドル停止します。ComfyUI CPUとGPUも、通常のsplitモードでほかに利用がなければ0台に戻ります。上流のartokun MCPは必要な操作でサーバー内から使い、クライアント側で起動する必要はありません。管理操作を含む[詳しい経路図](../design/split-mcp-routing.md)も用意しています。
 
 ## 添付を使って1件生成する
 
@@ -68,7 +68,7 @@ Claude Code や Codex では、このリポジトリのルートで次のヘル�
 
 ```bash
 npm ci --prefix mcp --ignore-scripts
-node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
+node mcp/upload.mjs "https://<SPLIT_PUBLIC_HOST>/mcp" photo.png sound.wav clip.mp4
 ```
 
 端末に表示された URL でログインすると、ファイルごとに ComfyUI のローダーで使える名前が返ります。チャットに Base64 を貼る必要はありません。中断した場合は同じファイルでコマンドを再実行してください。途中まで送った素材はローダーの候補に現れません。
@@ -79,7 +79,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 保存済み画像・音声・動画と `list_outputs` は専用の配信用 CPU が Volume を読みます。ComfyUI CPU・GPU は起動しません。取得中は配信用 CPU の料金が発生し、利用が終わると0台に戻ります。原本は Modal に残り、取得で削除しません。`get_image` は8 MiBまでインラインで返し、大きい画像は認証付きリンクを返します。
 
-ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も配信用 CPU だけで応答します。画面で保存したJSONを「どのノードに何という名前で値を渡すか」という生成依頼用の形式に直すときだけ、ComfyUI CPUで現在の入力仕様を確認します。すでに生成依頼用の形式で保存されていれば、その変換は不要です。[取得時の分岐図](design/split-mcp-routing.md#ワークフロー取得でcomfyuiを起こす場合)で確認できます。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
+ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も配信用 CPU だけで応答します。画面で保存したJSONを「どのノードに何という名前で値を渡すか」という生成依頼用の形式に直すときだけ、ComfyUI CPUで現在の入力仕様を確認します。すでに生成依頼用の形式で保存されていれば、その変換は不要です。[取得時の分岐図](../design/split-mcp-routing.md#ワークフロー取得でcomfyuiを起こす場合)で確認できます。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
 
 `list_models` は既定で保存ファイルの一覧・サイズ・更新日時を返します。保存されていることと、ComfyUI が利用できることは別です。「ローダーで実際に選べるモデルを確認して」と頼む場合は `source: "runtime"` を指定し、ComfyUI CPU で認識一覧を取得します。
 
@@ -120,7 +120,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。
 
-各ツールの主な引数と影響は[ツール一覧](split-mcp-tools.md)にまとめています。上流にある機能が見つからない場合は、[上流との対応表](split-mcp-upstream.md)で、split での呼び方と未提供の理由を確認できます。
+各ツールの主な引数と影響は[ツール一覧](tools.md)にまとめています。上流にある機能が見つからない場合は、[上流との対応表](upstream.md)で、split での呼び方と未提供の理由を確認できます。
 
 ## 困ったとき
 
@@ -128,4 +128,4 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 - **ツールが見当たらない**：ChatGPT の接続設定で「ツールを更新」、CLI では新しいセッションでツール一覧を取得してください。
 - **Web 添付が保存できない**：応答にローダー用のファイル名があるか確認してください。配信元が拒否された場合は、管理者が該当する配信ホストを確認します。署名付き URL をチャットやログに貼る必要はありません。
 
-サーバーの準備・配信用 CPU の設定・旧 stdio 接続の廃止は、[管理の手順](split-mcp-setup.md)を参照してください。
+サーバーの準備・配信用 CPU の設定・旧 stdio 接続の廃止は、[管理の手順](setup.md)を参照してください。

@@ -1,6 +1,6 @@
 # Splitの実行環境とStorageの検討
 
-> 2026-09-15〜16の設計・実施記録です。現在の構成・運用は[splitの説明](../comfyui-split.md)と[任意拡張](../split-integrations.md)を参照してください。
+> 2026-09-15〜16の設計・実施記録です。現在の構成・運用は[splitの説明](../guides/comfyui-split.md)と[任意拡張](../guides/split-integrations.md)を参照してください。
 
 確認日: 2026-09-16
 
