@@ -52,9 +52,9 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
   if (response.status!==200) {await response.body?.cancel();return failure("Cannot read saved image (HTTP "+response.status+").");}
   const bytes=await readAtMost(response,8*1024*1024);
   const url=new URL(path,origin).href;
+  // This URL requires browser Access login; an MCP host cannot materialize it as an attachment.
   const result:CallToolResult={structuredContent:{filename,mimeType:mime,url,delivery:bytes?"inline":"link"},
-    content:[{type:"text",text:"Open or save the image after signing in: "+url},
-      {type:"resource_link",uri:url,name:filename,mimeType:mime}]};
+    content:[{type:"text",text:"Open or save the image after signing in: "+url}]};
   if (!bytes) return result;
   const tag=(at:number,s:string)=>s.split("").every((c,i)=>bytes[at+i]===c.charCodeAt(0));
   if (!(ext==="png" ? bytes[0]===137 && tag(1,"PNG\r\n\x1a\n") :
