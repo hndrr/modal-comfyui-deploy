@@ -165,6 +165,31 @@ class MaterializeConcurrencyTests(unittest.TestCase):
                     Path(first["path"]).unlink()
 
 
+class ImageThumbnailTests(unittest.TestCase):
+    def test_rgb_jpeg_thumbnail_avoids_draft_scaling(self) -> None:
+        from PIL import Image, JpegImagePlugin
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.jpg"
+            destination = Path(directory) / "thumbnail.jpg"
+            Image.new("RGB", (1024, 768), "red").save(source)
+
+            with (
+                mock.patch.object(asset_rpc, "THUMB_MAX_EDGE", 64),
+                mock.patch.object(
+                    JpegImagePlugin.JpegImageFile, "draft",
+                    side_effect=AssertionError("JPEG draft scaling must not run"),
+                ),
+            ):
+                asset_rpc._resize_image_to_jpeg(source, destination)
+
+            with Image.open(destination) as thumbnail:
+                thumbnail.load()
+                self.assertEqual(thumbnail.format, "JPEG")
+                self.assertEqual(thumbnail.mode, "RGB")
+                self.assertEqual(thumbnail.size, (64, 48))
+
+
 class VideoPosterExtractionTests(unittest.TestCase):
     def test_extract_tries_multiple_strategies_until_one_succeeds(self) -> None:
         calls: list[list[str]] = []
