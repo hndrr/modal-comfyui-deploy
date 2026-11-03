@@ -40,6 +40,19 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
                 await media.handle(self.c, "inspect_media", {"filename": "test.wav"})
             self.assertNotIn("private", caught.exception.text)
 
+    async def test_output_indexes_match_list_outputs_when_a_gif_precedes(self):
+        job = self.c.journal.enqueue({"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}})
+        Image.new("RGB", (8, 8)).save(self.dirs["output"] / "a.gif")
+        Image.new("RGB", (64, 64)).save(self.dirs["output"] / "b.png")
+        job.update(status="completed", history={"outputs": {"1": {"images": [
+            {"filename": name, "subfolder": "", "type": "output"} for name in ("a.gif", "b.png")]}}})
+        read = lambda name, **a: media.handle(self.c, name, {"prompt_id": job["id"], **a})
+        self.assertEqual([r["filename"] for r in (await read("list_outputs"))["items"]], ["a.gif", "b.png"])
+        self.assertEqual((await read("inspect_media", index=1))["width"], 64)
+        # GIF is not an accepted input format; it must fail, not reuse b.png.
+        with self.assertRaises(web.HTTPBadRequest):
+            await read("reuse_output", index=0)
+
     async def test_job_output_reuse_preserves_bytes_and_graph_and_never_requeues(self):
         job = self.c.journal.enqueue({"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}})
         out = self.dirs["output"] / "sub"
