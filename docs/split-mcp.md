@@ -2,6 +2,8 @@
 
 ChatGPT Web、Claude Code、Codex から、Modal 上の ComfyUI に同じ HTTPS URL で接続できます。チャットで保存済みのワークフローを選び、画像・音源・動画を渡して生成し、結果を受け取れます。以下の `split.example.com` は、管理者から案内されたホスト名に置き換えてください。
 
+このページは操作の流れを説明します。個々の引数・戻り値は[32ツールの一覧](split-mcp-tools.md)、どのCPU・GPUを使うかは[経路図](design/split-mcp-routing.md)、サーバー側の設定は[管理手順](split-mcp-setup.md)を参照してください。
+
 ## 接続する
 
 **ChatGPT Web**：設定からカスタム MCP 接続を追加し、URL に `https://split.example.com/mcp`、認証方式に OAuth を指定します。ブラウザで Access にログインし、チャットでこの接続を選んでください。生成や添付には書き込み操作を使えるワークスペース権限が必要です。[ChatGPT の接続条件](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)
@@ -21,6 +23,21 @@ codex mcp login comfyui-remote
 ```
 
 最初は「保存済みのワークフローを一覧にして。まだ生成しないで」と頼んでみてください。接続やツール一覧の取得だけでは Modal は起動しません。保存ファイル・モデル一覧・履歴の照会では小さな参照用 CPU だけを使います。変換・解析・素材保存には ComfyUI CPU を使い、生成を投入すると GPU が起動します。
+
+## 操作ごとの実行先
+
+「配信用CPU」と「参照用CPU」は同じものです。保存された出力・ワークフロー・履歴・モデル情報を読みます。ComfyUIを動かすCPUとは別なので、曲を取り直すためにComfyUIを起こす必要はありません。
+
+```mermaid
+flowchart TD
+  Client["ChatGPT Web・Claude Code・Codex"] --> Edge["同じHTTPS /mcp：Access認証 → Worker"]
+  Edge -->|"接続・ツール一覧・プレイヤーHTML"| Static["Workerだけで応答"]
+  Edge -->|"保存済みファイル・履歴・一覧"| Read["配信用CPU → Modal Volumeを読む"]
+  Edge -->|"ノード照会・変換・編集・素材保存・状態確認"| CPU["ComfyUI CPUで処理"]
+  CPU -->|"生成・候補環境の検証を実行するとき"| GPU["GPUで処理 → 結果をVolumeに保存"]
+```
+
+配信用CPUは読み取りが終わるとアイドル停止します。ComfyUI CPUとGPUも、通常のsplitモードでほかに利用がなければ0台に戻ります。上流のartokun MCPは必要な操作でサーバー内から使い、クライアント側で起動する必要はありません。管理操作を含む[詳しい経路図](design/split-mcp-routing.md)も用意しています。
 
 ## 添付を使って1件生成する
 
@@ -62,7 +79,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 保存済み画像・音声・動画と `list_outputs` は専用の配信用 CPU が Volume を読みます。ComfyUI CPU・GPU は起動しません。取得中は配信用 CPU の料金が発生し、利用が終わると0台に戻ります。原本は Modal に残り、取得で削除しません。`get_image` は8 MiBまでインラインで返し、大きい画像は認証付きリンクを返します。
 
-ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も参照用 CPU だけで応答します。UI 形式から API 形式へ変換する場合は、現在のノード定義を使うため ComfyUI CPU が起動します。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
+ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も配信用 CPU だけで応答します。画面で保存したJSONを「どのノードに何という名前で値を渡すか」という生成依頼用の形式に直すときだけ、ComfyUI CPUで現在の入力仕様を確認します。すでに生成依頼用の形式で保存されていれば、その変換は不要です。[取得時の分岐図](design/split-mcp-routing.md#ワークフロー取得でcomfyuiを起こす場合)で確認できます。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
 
 `list_models` は既定で保存ファイルの一覧・サイズ・更新日時を返します。保存されていることと、ComfyUI が利用できることは別です。「ローダーで実際に選べるモデルを確認して」と頼む場合は `source: "runtime"` を指定し、ComfyUI CPU で認識一覧を取得します。
 
@@ -72,7 +89,8 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 | 何秒かかった？ | 同じツールの `execution_seconds` は ComfyUI の実行時間、`elapsed_seconds` は待機を含む受付からの経過時間、`worker_seconds` は準備・出力保存を含む GPU ワーカーの処理時間です。記録のない値は `null` です。 |
 | なぜ失敗した？ | `get_job_progress` で失敗ノードと例外の要約、`get_history(action: "diagnose", prompt_id: …)` で履歴の詳細を取得します。 |
 | この1件だけ止めたい | `cancel_job(prompt_id)`。待機中は `cancelled`、実行中は `cancel_requested` が返ります。後者は受付なので、同じ ID でもう一度状態を確認してください。完了済みの出力は残ります。 |
-| 使用できるモデルは？ | `list_models()` でカテゴリを確認し、たとえば `category: "checkpoints"` でファイル名を一覧できます。`query` は部分一致検索、次ページは返された `next_offset` を `offset` に指定します。 |
+| 保存されているモデルは？ | `list_models()` でカテゴリ、`category: "checkpoints"` などで保存ファイル名・サイズを取得します。`query` は部分一致検索、次ページは返された `next_offset` を `offset` に指定します。 |
+| ComfyUIのモデル選択欄に何が出る？ | `list_models(source: "runtime", category: "checkpoints")`。ComfyUI CPUに問い合わせます。重みをロードして生成できるかを試す操作ではなく、GPUは起こしません。 |
 | ノードの入力を調べたい、グラフを編集したい | `create_workflow` の `node_info`・`modify`・`validate`。編集や検証だけで生成は始まりません。 |
 | 待機中のジョブを一覧にしたい | `queue(action: "list")`。別のチャットやクライアントからも、同じ `prompt_id` で個々のジョブを追跡できます。 |
 
@@ -102,7 +120,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。
 
-上流にある機能が見つからない場合は、[全ツールの対応表](split-mcp-tools.md)で、split での呼び方と未提供の理由を確認できます。
+各ツールの主な引数と影響は[ツール一覧](split-mcp-tools.md)にまとめています。上流にある機能が見つからない場合は、[上流との対応表](split-mcp-upstream.md)で、split での呼び方と未提供の理由を確認できます。
 
 ## 困ったとき
 

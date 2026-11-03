@@ -2,6 +2,8 @@
 
 すでに HTTPS の接続先がある場合は、[利用ガイド](split-mcp.md)から始めてください。このページは split の管理者向けの手順です。クライアントはすべて HTTPS `/mcp` と OAuth を使います。
 
+操作の引数・戻り値は[ツール一覧](split-mcp-tools.md)、認証・保存データ・生成・管理の接続先は[経路図](design/split-mcp-routing.md)を参照してください。
+
 ## HTTPS の接続先を用意する
 
 1. split の CPU イメージに固定版 Node.js と MCP をデプロイする（`scripts/modal.sh deploy splitapp.py`）。GPU に Node/MCP は不要。既存 Worker をテスト後にデプロイする。一般の中継ルートでは内部呼び出し用ヘッダーを必ず取り除く。
@@ -69,4 +71,6 @@ split CPU 内の `artokun/comfyui-mcp` はワークフロー編集・ノード�
 
 公開モデルの取得に追加設定は不要です。非公開・アクセス制限付きモデルを使う場合だけ、読み取り用の `HF_TOKEN` を Modal Secret に登録し、デプロイ時に `SPLIT_MODEL_HF_SECRET` でその Secret 名を指定します。ダウンロード専用の CPU 関数だけに渡されます。
 
-上流を更新する場合は `mcp/package.json` とロックファイルを更新し、`mcp/surface.json` で増減したアクションの扱いを決めます。`node mcp/surface-doc.mjs` で[対応表](split-mcp-tools.md)を更新し、`npm --prefix mcp test` で実パッケージの登録スキーマと照合してください。
+上流を更新する場合は `mcp/package.json` とロックファイルを更新し、`mcp/surface.json` で増減したアクションの扱いを決めます。`node mcp/surface-doc.mjs` で[上流との対応表](split-mcp-upstream.md)を更新し、`npm --prefix mcp test` で実パッケージの登録スキーマと照合してください。
+
+HTTPS側のツールや実行先を変更した場合は、[ツール一覧](split-mcp-tools.md)と[経路図](design/split-mcp-routing.md)も更新します。この2ページは利用者向けに編集する文書で、上流対応表の生成では上書きしません。`tools/list` と照合し、プレイヤー専用の内部ツールをエージェント向けの件数に含めないでください。

@@ -1,12 +1,14 @@
-# 保存済みメディアの配信と R2 の将来案
+# 保存データの配信と R2 の将来案
+
+このページはVolumeからの読み取り・配信方式とR2の将来案を説明します。MCP全体の起動分岐は[経路図](split-mcp-routing.md)、利用する操作は[ツール一覧](../split-mcp-tools.md)を参照してください。
 
 ## 現在の構成：原本は Modal Volume、取得は参照用 CPU
 
-生成済みメディア・保存済みワークフロー・履歴・モデルファイルを参照するために ComfyUI を起動しない。
+生成済みメディア・保存済みワークフローの元JSON・履歴・モデルの保存一覧は、ComfyUI を起動せずに参照する。実行用形式への変換やComfyUIのモデル選択肢の確認には、[別の経路](split-mcp-routing.md#ワークフロー取得でcomfyuiを起こす場合)を使う。
 Worker が認証したリクエストを、独立した `mediaapp.py` の配信用 CPU に渡す。
 ここでいう「アプリ」は Modal のデプロイ単位。利用者が別の画面やログイン先を使うという意味ではない。
 既存の HTTPS URL を使い、ファイルも複製せず同じ Volume から読む。
-このアプリは Python 標準ライブラリで出力ファイルと保存済みジョブ記録を読む。
+このアプリは Python 標準ライブラリで出力ファイル・保存グラフ・ジョブ記録・モデルのファイル情報を読む。
 ComfyUI・PyTorch・Node.js・artokun MCP を起動せず、output・data・models Volume だけを接続する。
 モデルの重みはロードせずファイル情報だけを読む。入力・ノード環境の Volume は接続しない。
 
@@ -19,9 +21,7 @@ flowchart TD
   Worker -->|初期化・ツール一覧| Edge[Worker 内で応答]
   Worker -->|保存済みメディア・グラフ・履歴・モデル一覧| Media[参照用 CPU：必要時だけ起動]
   Media --> Output[Modal Volume：出力・グラフ・モデル・ジョブ記録]
-  Worker -->|ノード照会・グラフ編集・素材投入| Split[split CPU：ComfyUI / artokun MCP]
-  Split -->|生成ジョブ| GPU[GPU：ComfyUI]
-  GPU --> Output
+  Worker -->|変換・編集・素材保存・生成| Split[ComfyUI CPU：詳しい経路は別図]
 ```
 
 | 操作 | 起動するもの |
