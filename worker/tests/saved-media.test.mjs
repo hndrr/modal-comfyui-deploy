@@ -25,7 +25,12 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
     ["get_video",{prompt_id:id.toUpperCase()}],["get_image",{filename:"画像.png"}],["list_outputs",{prompt_id:id.toUpperCase()}]]) {
     const r=await callSplit(split,name,args,host,undefined,media);
     assert.ok(!r.isError,JSON.stringify(r));
-    if(name==="get_image")assert.deepEqual(Buffer.from(r.content[0].data,"base64"),png);
+    if(name==="get_image"){
+      assert.deepEqual(Buffer.from(r.content[0].data,"base64"),png);
+      assert.equal(r.structuredContent.delivery,"inline");
+      assert.equal(new URL(r.structuredContent.url).searchParams.get("filename"),"画像.png");
+      assert.equal(r.content.find(c=>c.type==="resource_link").uri,r.structuredContent.url);
+    }
   }
   assert.ok(paths.every(p=>!p.includes("startup")));
   for(const name of ["get_audio","get_video","read_audio_part","get_image","list_outputs"]){
@@ -33,6 +38,37 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
       ()=>{throw new Error("media unavailable");});
     assert.equal(r.isError,true);assert.match(r.content[0].text,/delivery is unavailable/);
   }
+});
+
+test("image links work for small and oversized files, including the legacy ComfyUI route",async()=>{
+  const args={filename:"画像 #1.png",subfolder:"render/テスト"},paths=[];
+  const send=async path=>{
+    paths.push(path);
+    if(path==="/split/startup")return Response.json({ready:true});
+    const url=new URL(path,host);
+    assert.equal(url.pathname,"/view");
+    assert.deepEqual(Object.fromEntries(url.searchParams),{type:"output",...args});
+    return new Response(png);
+  };
+  const small=await callSplit(send,"get_image",args,host);
+  assert.deepEqual(paths.map(p=>new URL(p,host).pathname),["/split/startup","/view"]);
+  assert.equal(small.structuredContent.delivery,"inline");
+  assert.match(small.content.find(c=>c.type==="text").text,/https:\/\/split.example.com\/view\?/);
+  let cancelled=false;
+  const large=await callSplit(()=>{throw Error("ComfyUI must not start");},"get_image",args,host,undefined,
+    async()=>new Response(new ReadableStream({cancel(){cancelled=true;}}),{headers:{"Content-Length":String(8*1024*1024+1)}}));
+  assert.equal(cancelled,true);
+  assert.equal(large.structuredContent.delivery,"link");
+  assert.equal(large.structuredContent.url,small.structuredContent.url);
+  assert.equal(large.content.some(c=>c.type==="image"),false);
+  assert.equal(large.content.find(c=>c.type==="resource_link").uri,small.structuredContent.url);
+  const missing=await callSplit(async path=>{
+    if(path==="/split/startup")return Response.json({ready:true});
+    assert.equal(new URL(path,host).pathname,"/view");
+    return new Response("missing",{status:404});
+  },"get_image",args,host);
+  assert.equal(missing.isError,true);
+  assert.match(missing.content[0].text,/HTTP 404/);
 });
 
 test("only original output requests qualify, never inputs, transforms or other routes",()=>{
@@ -83,7 +119,7 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
     assert.equal(r.headers.get("Cookie"),null);
     if(new URL(r.url).pathname.startsWith("/history/"))return Response.json({[id]:{status:{status_str:"success",completed:true},
       outputs:{"1":{audio:[{filename:"a.mp3",type:"output"}]}}}});
-    return new Response(audio);
+    return new Response(extension==="png"?png:audio);
   });
   const jwt=await sign("mcp"),browser=await sign("browser");
   const rpc=(method,params)=>worker.fetch(new Request(host+"/mcp",{method:"POST",headers:{
@@ -99,6 +135,11 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
   assert.ok(!(await (await rpc("tools/call",{name:"get_audio",arguments:{prompt_id:id}})).json()).result.isError);
   assert.deepEqual(hits.map(r=>new URL(r.url).pathname),["/history/"+id,"/view"]);
   assert.deepEqual(Buffer.from(await (await worker.fetch(audioRequest(browser),cfg)).arrayBuffer()),audio);
+  const image=await (await rpc("tools/call",{name:"get_image",arguments:{filename:"画像.png"}})).json();
+  assert.equal(image.result.isError,undefined);
+  assert.equal(image.result.structuredContent.delivery,"inline");
+  assert.deepEqual(Buffer.from(image.result.content[0].data,"base64"),png);
+  assert.equal(image.result.content.find(c=>c.type==="resource_link").uri,image.result.structuredContent.url);
   for(const ext of ["gif","glb","svg","bmp"]){
     const req=new Request(host+"/view?type=output&filename=out."+ext,{headers:{"CF-Access-Jwt-Assertion":browser}});
     assert.equal((await worker.fetch(req,cfg)).status,200);
