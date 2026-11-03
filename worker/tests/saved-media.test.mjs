@@ -29,7 +29,8 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
       assert.deepEqual(Buffer.from(r.content[0].data,"base64"),png);
       assert.equal(r.structuredContent.delivery,"inline");
       assert.equal(new URL(r.structuredContent.url).searchParams.get("filename"),"画像.png");
-      assert.equal(r.content.find(c=>c.type==="resource_link").uri,r.structuredContent.url);
+      assert.equal(r.content.some(c=>c.type==="resource_link"),false);
+      assert.ok(r.content.find(c=>c.type==="text").text.includes(r.structuredContent.url));
     }
   }
   assert.ok(paths.every(p=>!p.includes("startup")));
@@ -61,7 +62,8 @@ test("image links work for small and oversized files, including the legacy Comfy
   assert.equal(large.structuredContent.delivery,"link");
   assert.equal(large.structuredContent.url,small.structuredContent.url);
   assert.equal(large.content.some(c=>c.type==="image"),false);
-  assert.equal(large.content.find(c=>c.type==="resource_link").uri,small.structuredContent.url);
+  assert.equal(large.content.some(c=>c.type==="resource_link"),false);
+  assert.ok(large.content[0].text.includes(small.structuredContent.url));
   const missing=await callSplit(async path=>{
     if(path==="/split/startup")return Response.json({ready:true});
     assert.equal(new URL(path,host).pathname,"/view");
@@ -139,7 +141,7 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
   assert.equal(image.result.isError,undefined);
   assert.equal(image.result.structuredContent.delivery,"inline");
   assert.deepEqual(Buffer.from(image.result.content[0].data,"base64"),png);
-  assert.equal(image.result.content.find(c=>c.type==="resource_link").uri,image.result.structuredContent.url);
+  assert.ok(image.result.content.find(c=>c.type==="text").text.includes(image.result.structuredContent.url));
   for(const ext of ["gif","glb","svg","bmp"]){
     const req=new Request(host+"/view?type=output&filename=out."+ext,{headers:{"CF-Access-Jwt-Assertion":browser}});
     assert.equal((await worker.fetch(req,cfg)).status,200);
