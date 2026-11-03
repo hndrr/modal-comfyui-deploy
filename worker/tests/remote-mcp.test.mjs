@@ -38,7 +38,11 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.ok(audio.outputSchema.properties.delivery && part.outputSchema.properties.size);
   const resource=await (await request(jwt,"resources/read",{uri:audio._meta.ui.resourceUri})).json();
   assert.match(resource.result.contents[0].mimeType,/profile=mcp-app/);
-  assert.match(resource.result.contents[0].text,/<audio /);
+  assert.match(resource.result.contents[0].text,/aria-label="再生位置"/);
+  for (const v of [1,2]) {
+    const old=await (await request(jwt,"resources/read",{uri:"ui://split/audio-player-v"+v+".html"})).json();
+    assert.equal(old.result.contents[0].text,resource.result.contents[0].text);
+  }
   assert.deepEqual(upload._meta['openai/fileParams'],['file']);
   assert.deepEqual(upload.inputSchema.properties.file.required.sort(),['download_url','file_id']);
   assert.ok((await (await request(jwt,'ping')).json()).result);

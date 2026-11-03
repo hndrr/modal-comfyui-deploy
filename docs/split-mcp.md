@@ -70,7 +70,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 | ノードの入力を調べたい、グラフを編集したい | `create_workflow` の `node_info`・`modify`・`validate`。編集や検証だけで生成は始まりません。 |
 | 待機中のジョブを一覧にしたい | `queue(action: "list")`。別のチャットやクライアントからも、同じ `prompt_id` で個々のジョブを追跡できます。 |
 
-曲を聴くには「このジョブの曲を `get_audio` で再生して」と頼みます。MP3・WAV・FLAC・Ogg・Opus を元の形式のまま取得します。ChatGPT でプレーヤーが表示され、曲が 4 MiB を超える場合は「音声を読み込む」を押してください。64 MiB 超の曲や元ファイルを保存したい場合は、返った再生リンクを使います。
+曲を聴くには「このジョブの曲を `get_audio` で再生して」と頼みます。MP3・WAV・FLAC・Ogg・Opus を元の形式のまま取得します。ChatGPT では、曲名が表示されたら「再生」を押します。一時停止と再生位置の変更もできます。4 MiB を超える曲は、先に「音声を読み込む」を押してください。64 MiB 超の曲や元ファイルを保存したい場合は、返った再生リンクを使います。
 
 「アプリを表示できませんでした」と出たら、曲を生成し直す必要はありません。再生リンクが見えないときは「同じ `prompt_id` の `list_outputs` から曲のブラウザ用リンクを出して」と頼んでください。リンクは split の `/view?type=output&filename=…&subfolder=…` で、`filename` と `subfolder` はそれぞれ URL エンコードします。split にログインして開くと、曲を再生・保存できます。ブラウザが再生に対応しない形式でも保存できます。
 
