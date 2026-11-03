@@ -19,7 +19,7 @@
 
 | ディレクトリ | 主な検証対象 |
 | :--- | :--- |
-| `tests/standard/` | 通常構成（`comfyapp.py`）の設定、ComfyUI Manager 連携、WebSocket 圧縮無効化パッチ、セットアップスクリプトの実行先・設定保持・失敗時の停止 |
+| `tests/standard/` | 通常構成（`comfyapp.py`）の設定、ComfyUI Manager 連携、WebSocket 圧縮無効化パッチ、セットアップスクリプトの認証設定・設定保持・失敗時の停止 |
 | `tests/split/` | CPU/GPU 分離構成（`splitapp.py`）の Journal、Gateway、GPU worker、起動・CPU Snapshot 復元、Volume 整合性、候補環境の検証、拡張機能の配布 |
 | `tests/assets/` | アセット管理および RPC 連携（※Web 側の単体テストは `web/` 配下で実行） |
 | `tests/models/` | モデルの事前準備、保存・コミット処理、公開 API の設定 |
