@@ -2,10 +2,10 @@
 
 split ホストにブラウザでログインし、`/assets` を開くと入力・出力・モデルを管理できます。`/models` は Hugging Face からのモデル保存画面です。どちらも本人の Access ログインが必要です。操作するのは split と同じ環境の Volume です。GUI の閲覧は CPU だけを使い、split の ComfyUI や GPU は起動しません。
 
-**ホストへの設定**：既存の split と同じ Modal プロファイルを使い、以下を実行します。ホスト名は例です。
+**ホストへの設定**：既存の split と同じ Modal プロファイルを使い、以下を実行します。`<SPLIT_PUBLIC_ORIGIN>` は、Cloudflare Worker の Custom Domain に登録した split の公開ホスト名に `https://` を付けた URL です。パスや末尾の `/` は付けません。
 
 ```sh
-SPLIT_GUI_PUBLIC_ORIGIN=https://split.example.com scripts/modal.sh deploy split_guis.py
+SPLIT_GUI_PUBLIC_ORIGIN="<SPLIT_PUBLIC_ORIGIN>" scripts/modal.sh deploy split_guis.py
 ```
 
 両方の Web 関数は Modal Proxy Auth が必須で、アイドル時の最小台数は 0 です。保存ジョブには既存の `huggingface-secret` が必要です。Worker の `SPLIT_ADMIN_GUIS` Secret に JSON で `hostname`（既存の `SPLIT_UI_ORIGIN` のホスト）、`owner_email`（許可する本人）、`models_origin`・`assets_origin`（各 web 関数の HTTPS origin）、`key`・`secret`（この Modal 環境の Proxy Auth）を登録して Worker をデプロイします。実際の値は Git に置きません。
@@ -27,7 +27,7 @@ split の `/assets` でアップロードすると、管理画面に届く前に
 - Modal CLI でログイン済み（`uv run modal` または `modal` が使えること）
 - Node.js 24.22.2（リポジトリの `.node-version` に合わせる）
 
-接続先は Modal CLI の既定アカウントです。画面ヘッダのバッジに接続先ワークスペース名が出るので、Volume が空に見えるときはまずそこを見てください。複数アカウントを使い分けている場合は [modal-profiles.md](modal-profiles.md) を参照してください。
+接続先は Modal CLI の既定アカウントです。画面ヘッダのバッジに接続先ワークスペース名が出るので、Volume が空に見えるときはまずそこを見てください。複数アカウントを使い分けている場合は [modal-profiles.md](../operations/modal-profiles.md) を参照してください。
 
 初回ビルドと起動:
 
@@ -91,6 +91,4 @@ Models へのアップロードと移動は、ComfyUI が認識するモデル�
 > [!WARNING]
 > 削除はゴミ箱を経由しない完全削除です。確認ダイアログで「完全に削除する」を押した場合だけ実行されます。Volume ルート自体は削除できません。
 
-管理画面はローカル利用前提です。更新系操作はサーバー内で直列化されます。
-
-旧 Gradio の `asset_manager_gui.py` は廃止済みです（起動すると移行手順を表示して終了します）。
+ローカル起動時は手元で利用してください。split から公開する場合は、冒頭の本人用 Access 認証を設定します。更新系操作はサーバー内で直列化されます。

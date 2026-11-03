@@ -24,5 +24,5 @@ test('every pinned upstream tool/action has exactly one split decision; the publ
     });
     assert.deepEqual(actions.sort(),(inputSchema.properties?.action?.enum??['(call)']).slice().sort(),name);
   }
-  assert.equal(await readFile(new URL('../docs/split-mcp-upstream.md',import.meta.url),'utf8'),guide);
+  assert.equal(await readFile(new URL('../docs/mcp/upstream.md',import.meta.url),'utf8'),guide);
 });

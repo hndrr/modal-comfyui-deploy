@@ -3,7 +3,7 @@
 `Tests`はPRと`main`へのpushで動く。PR用ブランチへのpushでは重複実行しない。
 PRのない作業ブランチで確認したい場合は、Actionsから`workflow_dispatch`で手動実行できる。
 
-Pythonジョブは `scripts/test_standalone.py` で通常版・split・アセット管理・モデル保存の各スイートを一度ずつ実行する。任意拡張のimportは禁止する。ローカルでの部分実行は[テストの説明](../tests/README.md)を参照。
+Pythonジョブは `scripts/test_standalone.py` で通常版・split・アセット管理・モデル保存の各スイートを一度ずつ実行する。任意拡張のimportは禁止する。ローカルでの部分実行は[テストの説明](../../tests/README.md)を参照。
 
 最初に変更ファイルを判定し、対象のジョブだけを起動する。
 
@@ -11,7 +11,7 @@ Pythonジョブは `scripts/test_standalone.py` で通常版・split・アセッ
 | --- | --- |
 | Pythonファイル、`tests/`、Splitのモデルパス設定、ComfyUI拡張のWebファイル、`scripts/modal.sh` | Python |
 | `web/` | Asset manager |
-| `worker/` | Access proxy |
+| `worker/`、`mcp/` | Access proxy（Worker と MCP パッケージのテスト、Worker の型検査） |
 | `asset_manager.py`、`asset_rpc.py`、`preserve_model.py`、`pyproject.toml`、`uv.lock`、`.python-version` | Python＋Asset manager（Pythonバックエンドを利用するため） |
 | `.github/workflows/tests.yml` | 全種類 |
 | `README.md`、`docs/`だけ | テストなし |
