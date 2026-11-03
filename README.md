@@ -248,7 +248,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 | --- | --- | --- |
 | [ComfyUI-Crystools](https://github.com/crystian/ComfyUI-Crystools) | 通常構成・Split app | [MIT](https://github.com/crystian/ComfyUI-Crystools/blob/2f18256c5b5063937106f29a8e0a7db3ae3869b7/LICENSE) |
 | [ComfyUI_Local_Media_Manager](https://github.com/Firetheft/ComfyUI_Local_Media_Manager) | 通常構成・Split app | [GNU GPL v3](https://github.com/Firetheft/ComfyUI_Local_Media_Manager/blob/5e74ce0cc708798ed25a77097d6059b6c796da87/LICENSE) |
-| ComfyUI-Image-Browsing（[通常構成の取得先](https://github.com/hayden-fr/ComfyUI-Image-Browsing)・[Split app の取得先](https://github.com/hayden-cn/ComfyUI-Image-Browsing)） | 通常構成・Split app | [GNU GPL v3](https://github.com/hayden-cn/ComfyUI-Image-Browsing/blob/3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7/LICENSE) |
+| [ComfyUI-Image-Browsing](https://github.com/hayden-cn/ComfyUI-Image-Browsing) | 通常構成・Split app | [GNU GPL v3](https://github.com/hayden-cn/ComfyUI-Image-Browsing/blob/3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7/LICENSE) |
 | [rgthree-comfy](https://github.com/rgthree/rgthree-comfy) | 通常構成・Split app | [MIT](https://github.com/rgthree/rgthree-comfy/blob/2c5342a8cb0eaecaabf61435a5f37dd594c510ba/LICENSE) |
 | [ComfyUI-MiniMax-H3-MotionCache-FastVAE](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE) | Split app | [MIT（ノードのコード）](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE/blob/b719329e0ecf35f0ae08d241c363ed1e56adbb95/LICENSE) |
 
