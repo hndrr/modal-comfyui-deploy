@@ -108,7 +108,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 
 ```text
 .
-├── comfyapp.py                     # 通常構成の Modal アプリ（GPU 常時起動）
+├── comfyapp.py                     # 通常構成の Modal アプリ（CPU/GPU 同一コンテナ）
 ├── splitapp.py                     # CPU/GPU 分離構成の Modal アプリ（オンデマンド GPU）
 ├── mediaapp.py                     # split の保存済みメディア配信専用 CPU アプリ
 ├── split_guis.py                   # split の /models・/assets 用 Web GUI

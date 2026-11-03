@@ -156,6 +156,8 @@
 
 - **モデルの追加**: `list_models` でカテゴリを確認し、`add_model(repo, file, category, request_id)` で Hugging Face から safetensors、GGUF、ONNX などのファイルを取得・追加します（専用 CPU でダウンロードするため GPU は起動しません。必要に応じて `revision` や `sha256` を指定可能）。
 - **モデルの退避（削除）**: `inspect_model(path)` で取得した `version`（ファイル全体の SHA-256）を `remove_model(path, version, request_id)` に渡して退避します。
+  - ※16 MiB を超える大容量ファイルでは `inspect_model` が非同期処理となり、初回応答は `status: "running"` と `request_id` が返り `version` はまだ含まれません。返された ID で `get_admin_operation(request_id)` を呼び、`status: "completed"` になった結果の `result.version` を使用してください。
+  - ※退避処理（`remove_model`）自体も非同期となるため、同様に `get_admin_operation(request_id)` で完了を確認してください。対象ファイルのみを退避します。
 - **モデルの復元**: `restore_model` を使用します。`removal_id` には**削除時の** `request_id` を、`request_id` には**今回の復元操作用の新しい ID** を指定してください（削除時の ID を両方に指定すると競合します）。追加・復元処理が既存ファイルを上書きすることはありません。
 - **通信切断時の対応**: 管理操作の通信が途切れた場合は、同じ `request_id` で結果を確認してください。`unknown` の場合は対象の状態を確認してから次の操作を判断してください。
 

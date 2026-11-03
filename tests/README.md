@@ -84,6 +84,7 @@ CI は変更されたファイルを自動判定し、影響のあるテスト�
 | `web/` | **Asset manager** | Web フロントエンドのテスト |
 | `worker/`、`mcp/` | **Access proxy** | Worker と MCP パッケージのテスト、Worker の型検査（`typecheck`） |
 | `asset_manager.py`、`asset_rpc.py`、`preserve_model.py`、`pyproject.toml`、`uv.lock`、`.python-version` | **Python** + **Asset manager** | Python バックエンドと Web アセット管理の両方に依存するため |
+| `.node-version` | **Asset manager** + **Access proxy** | Node.js バージョン指定ファイルの変更は Web と Worker の両方に影響するため |
 | `.github/workflows/tests.yml` | **全テスト** | CI 定義自体の変更のためすべてのジョブを実行 |
 | `README.md`、`docs/` のみ | **テストなし**（全スキップ） | ドキュメントのみの変更時はテストを省略 |
 
