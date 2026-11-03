@@ -402,7 +402,10 @@ FUNCTION_TIMEOUT = _resolve_int_env(
 def gui_image(extra_env: dict[str, str] | None = None):
     return (
         modal.Image.debian_slim(python_version="3.12")
-        .pip_install(f"gradio=={GRADIO_VERSION}", f"modal=={MODAL_VERSION}")
+        .pip_install(
+            f"gradio=={GRADIO_VERSION}", f"modal=={MODAL_VERSION}",
+            "brotli>=1.2.1", "certifi>=2026.10.19",
+        )
         # コンテナ内で再 import されてもデプロイ時と同じ設定にする。
         .env(
             {
