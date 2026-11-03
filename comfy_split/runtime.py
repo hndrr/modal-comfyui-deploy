@@ -15,6 +15,7 @@ from pathlib import Path
 from aiohttp import ClientError, ClientSession
 
 from comfy_split import node_packs
+from comfy_split.gateway_access import ENV as GATEWAY_TOKEN_ENV
 from comfy_split.state import write_json
 from comfy_split.storage import ENVIRONMENTS, TEMP_ARCHIVE, USER
 
@@ -250,6 +251,8 @@ class ComfyProcess:
         environment = dict(os.environ)
         environment.pop(node_packs.TOKEN_ENV, None)
         environment.pop("COMFY_API_KEY", None)
+        # Custom nodes, including unreviewed candidate packs, must not bypass the gateway boundary.
+        environment.pop(GATEWAY_TOKEN_ENV, None)
         environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),

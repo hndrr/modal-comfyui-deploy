@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from comfy_split import node_packs, runtime
+from comfy_split.gateway_access import ENV as GATEWAY_TOKEN_ENV
 from comfy_split.config import NODE_PACKS, Settings
 from comfy_split.extension_sources import INTEGRATIONS
 
@@ -47,12 +48,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                          patch.object(runtime, "Path", side_effect=local_path), \
                          patch.dict(os.environ, {**selection,
                                                 node_packs.TOKEN_ENV: "not-for-comfy",
+                                                GATEWAY_TOKEN_ENV: "not-for-comfy",
                                                 **provider_keys}), \
                          patch.object(runtime.asyncio, "create_subprocess_exec", launch), \
                          self.assertRaisesRegex(RuntimeError, "captured launch"):
                         await process.start("env-snapshot", cpu=role == "cpu")
                     command = launch.call_args.args
                     self.assertNotIn(node_packs.TOKEN_ENV, launch.call_args.kwargs["env"])
+                    self.assertNotIn(GATEWAY_TOKEN_ENV, launch.call_args.kwargs["env"])
                     self.assertEqual({key: launch.call_args.kwargs["env"][key] for key in provider_keys},
                                      provider_keys)
                     config = Path(command[command.index("--extra-model-paths-config") + 1])
