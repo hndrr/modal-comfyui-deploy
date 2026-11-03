@@ -1,37 +1,23 @@
 # modal-comfyui
 
-Modal 上で ComfyUI を動かし、Hugging Face のモデルや生成素材を Modal Volume で管理するリポジトリです。
+Modal 上で ComfyUI を動かし、Hugging Face のモデルや生成素材を Modal Volume で永続管理するリポジトリです。
 
 ![ComfyUI](docs/assets/2025-09-28-21-11-34.png)
 
-## アプリと使い方
+## 構成の選択
 
-| やりたいこと | 入口 | ガイド |
-| --- | --- | --- |
-| GPU 上で ComfyUI を動かす | `comfyapp.py` | [通常構成](docs/guides/comfyui-modal.md) |
-| UI を CPU、生成をオンデマンド GPU で動かす | `splitapp.py` | [CPU/GPU 分離構成](docs/guides/comfyui-split.md)（Experimental・開発検証中） |
-| Split app をチャットから使う（MCP） | `splitapp.py` + Cloudflare Worker の `/mcp` | [Split app の MCP 利用ガイド](docs/mcp/usage.md) |
-| Hugging Face のモデルを保存する | `preserve_model.py` / `preserve_model_gui.py` | [モデル保存の CLI・Web GUI・ローカル GUI](docs/guides/preserve-model.md) |
-| モデル・入力・出力を管理する | split の `/assets` または `web/` | [資産管理画面](docs/guides/asset-manager.md) |
-| Volume をコピーする・ファイルを移動する | `scripts/rename_volume.py` / `scripts/move_volume_file.py` | [Volume 操作](docs/guides/volume-tools.md) |
-| 公開アプリにログイン認証を付ける | `worker/` | [Cloudflare Access の設定](docs/operations/cloudflare-access.md) |
+用途に合わせて 2 つの構成を提供しています。
 
-追加ノードや拡張を使う場合は[split の任意拡張](docs/guides/split-integrations.md)、不具合の回避策は[既知の不具合と注意点](docs/guides/known-issues.md)を参照してください。
+| 構成 | 特徴・向いている用途 | エントリポイント | ガイド |
+| --- | --- | --- | --- |
+| **通常構成** | GPU 上で ComfyUI 全体を常時起動。短時間の集中作業や、既存 ComfyUI そのままの挙動・拡張性を求める場合に最適。 | `comfyapp.py` | [通常構成ガイド](docs/guides/comfyui-modal.md) |
+| **CPU/GPU 分離構成 (Split)**<br>*(Experimental)* | UI・ファイル管理は CPU、生成時のみオンデマンドで GPU を起動（アイドル時は自動停止）。コストを抑えたい場合や、**MCP 連携（AI チャットからの画像生成）** を行いたい場合に最適。 | `splitapp.py` | [分離構成ガイド](docs/guides/comfyui-split.md) |
 
-## MCP（Split app 専用）
+---
 
-このリポジトリの MCP は、CPU/GPU 分離構成の **Split app（`splitapp.py`）専用**です。ChatGPT Web・Claude Code・Codex から接続できます。通常構成の `comfyapp.py` は対象に含みません。
+## クイックスタート
 
-| 読者 | ガイド | 内容 |
-| --- | --- | --- |
-| 利用者 | [Split app の MCP 利用ガイド](docs/mcp/usage.md) | 接続、チャットでの生成依頼、素材の送信、結果の再生・保存 |
-| 管理者 | [Split app の MCP 設定・運用](docs/mcp/setup.md) | HTTPS・OAuth、課金先、メディア配信、ノード・モデルの管理 |
-| 開発者・ツールを直接呼ぶ人 | [MCP ツールリファレンス](docs/mcp/tools.md) | 各ツールの引数・戻り値・実行先 |
-| 開発者 | [上流との対応表](docs/mcp/upstream.md) | 固定版の上流ツール・アクションをどう扱うか |
-
-認証や CPU・GPU の起動条件など、内部の仕組みは[MCP の経路図](docs/design/split-mcp-routing.md)を参照してください。
-
-## セットアップと起動
+### 1. 環境準備
 
 ```bash
 git clone https://github.com/hndrr/modal-comfyui-deploy.git
@@ -40,41 +26,72 @@ uv sync
 cp .env.example .env
 ```
 
-Modal CLI でログインし、`.env` を必要に応じて編集してください。Hugging Face のモデル保存には、Modal Secret `huggingface-secret` が必要です。複数の Modal アカウントを使う場合は、先に[このチェックアウトのプロファイルを固定](docs/operations/modal-profiles.md)してください。
+1. Modal CLI でログインします (`uv run modal setup`)。
+2. 必要に応じて `.env` を編集します。Hugging Face のモデル保存を行う場合は、Modal Secret `huggingface-secret` を作成してください。
+3. 複数アカウントを使い分ける場合は、[Modal プロファイルの固定手順](docs/operations/modal-profiles.md)を確認してください。
 
-通常構成の開発・デプロイ:
+### 2. デプロイ
 
-```bash
-./scripts/modal.sh serve comfyapp.py
-./scripts/modal.sh deploy comfyapp.py
-```
+選択した構成に応じてデプロイします。
 
-CPU/GPU 分離構成は、別の Modal App としてデプロイします。
+- **通常構成**:
+  ```bash
+  ./scripts/modal.sh serve comfyapp.py   # ローカル開発・検証
+  ./scripts/modal.sh deploy comfyapp.py  # 本番デプロイ
+  ```
+- **CPU/GPU 分離構成 (Split app)**:
+  ```bash
+  ./scripts/modal.sh deploy splitapp.py
+  ```
 
-```bash
-./scripts/modal.sh deploy splitapp.py
-```
+### 3. 公開とアクセス制御
 
-通常構成は `.env` を自動で読み込み、設定済みのシェル環境変数を優先します。GPU・Volume・追加ノードの設定は、それぞれの構成のガイドを参照してください。
+安全に外部公開するために、Cloudflare Worker と Cloudflare Access を組み合わせた認証中継を推奨しています。
+設定手順は [Cloudflare Access の設定](docs/operations/cloudflare-access.md) を参照してください。
 
-各ガイドのコマンド例は、特記がなければリポジトリのルートで実行します。`<SPLIT_PUBLIC_HOST>` などの山括弧付きの値は、各手順で説明する実環境の値に置き換えます。`HOST` はホスト名だけ、`ORIGIN` は `https://` を含む URL（パス・末尾の `/` なし）です。Modal の URL はデプロイ結果からコピーし、ワークスペース名から組み立てないでください。JSON や設定ファイルのプレースホルダーは自動では展開されません。
+> [!TIP]
+> **ドキュメントのパラメータ表記について**  
+> コマンド例の `<SPLIT_PUBLIC_HOST>` などの山括弧は実環境の値に置き換えます。`HOST` はホスト名のみ、`ORIGIN` はプロトコルを含む URL（例: `https://example.com`、末尾スラッシュなし）を表します。Modal の URL はデプロイ出力からコピーしてください。
 
-## 運用・開発
+---
 
-| 手順 | 内容 |
+## 主な機能とツール
+
+### MCP（Model Context Protocol）連携
+CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web、Claude Code、Codex などの AI チャットから自然言語で画像生成を指示できます。
+- 利用者向け: [Split app の MCP 利用ガイド](docs/mcp/usage.md)
+- 管理者向け: [MCP 設定・運用ガイド](docs/mcp/setup.md)
+- ツール仕様: [MCP ツールリファレンス](docs/mcp/tools.md) / [上流ツール対応表](docs/mcp/upstream.md)
+
+### モデルとストレージの管理
+- **モデルの保存**: Hugging Face から Volume へモデルをダウンロード・永続化（[モデル保存ガイド](docs/guides/preserve-model.md)）
+  - CLI: `preserve_model.py`
+  - Web GUI: `preserve_model.py`
+  - ローカル GUI: `preserve_model_gui.py`
+- **資産管理画面**: モデル・入力・出力ファイルを Web UI から一覧・管理（[資産管理画面ガイド](docs/guides/asset-manager.md)）
+- **Volume 操作ツール**: Volume の複製やファイル移動用スクリプト（[Volume 操作ガイド](docs/guides/volume-tools.md)）
+
+---
+
+## ドキュメント一覧
+
+### 利用・運用ガイド
+- [通常構成ガイド](docs/guides/comfyui-modal.md)
+- [CPU/GPU 分離構成ガイド](docs/guides/comfyui-split.md)
+- [Split app の任意拡張ノード](docs/guides/split-integrations.md)
+- [既知の不具合と注意点](docs/guides/known-issues.md)
+- [Cloudflare Access の設定](docs/operations/cloudflare-access.md)
+- [Modal プロファイルの運用](docs/operations/modal-profiles.md)
+- [CI 設定](docs/operations/ci.md)
+- [テスト実行方法](tests/README.md)
+
+### 設計・検証記録
+<details>
+<summary>設計の経緯やアーキテクチャの検証記録を展開</summary>
+
+| ドキュメント | 内容 |
 | --- | --- |
-| [Cloudflare Access](docs/operations/cloudflare-access.md) | Worker の設定・デプロイ、認証、Modal への中継 |
-| [Modal プロファイル](docs/operations/modal-profiles.md) | 複数アカウントを使う場合のチェックアウトごとの接続先固定 |
-| [CI](docs/operations/ci.md) | 変更箇所に応じたジョブの実行条件 |
-| [テスト](tests/README.md) | ローカルでの全体・部分実行とテストの配置 |
-
-## 設計・検証記録
-
-設計の理由や過去の検証を残しています。導入・更新時は、上の使い方・運用ガイドを参照してください。
-
-| 文書 | 内容 |
-| --- | --- |
-| [MCP の経路](docs/design/split-mcp-routing.md) | 操作ごとの実行先と CPU・GPU を起動する条件 |
+| [MCP の経路図](docs/design/split-mcp-routing.md) | 操作ごとの実行先と CPU・GPU を起動する条件 |
 | [メディア配信](docs/design/split-media-delivery.md) | 現在の参照用 CPU と、未実装の R2 配信案 |
 | [split のストレージ](docs/design/split-storage.md) | 保存先の役割と当時の一度限りの移行方針 |
 | [split の実行環境とストレージ](docs/design/runtime-and-storage.md) | Volume とイメージの使い分け |
@@ -83,6 +100,10 @@ CPU/GPU 分離構成は、別の Modal App としてデプロイします。
 | [アイドル停止計画](docs/design/modal-idle-scale-to-zero.md) | アイドル時の縮退を導入する際の計画 |
 | [Sleep/Wake 構成案](docs/design/modal-power-control.md) | 手動・自動の GPU 操作と分離構成の検討 |
 | [PyTorch / CUDA の検討](docs/design/pytorch-cu130-upgrade.md) | アップグレードの調査と検証案 |
+
+</details>
+
+---
 
 ## ディレクトリ構成
 
@@ -102,19 +123,18 @@ CPU/GPU 分離構成は、別の Modal App としてデプロイします。
 ├── mcp/                     # MCP パッケージ設定・CLI ヘルパー・対応表生成
 ├── extensions/              # 同梱の ComfyUI 拡張
 ├── scripts/                 # Volume 操作・モデル準備・検証・Modal CLI ラッパー
-├── docs/                    # 使い方・運用・MCP・設計記録・説明用画像
+├── docs/                    # 各種ガイド・設計資料
 └── tests/                   # Python の機能別テスト
 ```
 
-デプロイと GUI の起動に使う Python ファイルはルートに置き、補助コマンドは `scripts/` にまとめています。説明用のスクリーンショットは `docs/assets/`、実環境のログや測定結果は Git 管理外の `validation/` で扱います。
+---
 
 ## ライセンス
 
 **本リポジトリ自身のライセンスは未指定です。** 以下は依存ソフトウェアの確認結果で、本リポジトリの独自コードにライセンスを付与するものではありません。
 
-### 主な依存ソフトウェア
-
-現在のデプロイ定義・ロックファイルにある版について、上流のライセンス本文またはパッケージメタデータを確認した結果です。通常構成では ComfyUI の版を固定しない設定もあるため、実際に導入した版の条件を確認してください。
+<details>
+<summary>主な依存ソフトウェアのライセンス</summary>
 
 | 依存先 | 確認した版 | ライセンス・出典 |
 | --- | --- | --- |
@@ -129,9 +149,7 @@ CPU/GPU 分離構成は、別の Modal App としてデプロイします。
 | python-dotenv | 1.2.2 | [BSD-3-Clause](https://pypi.org/project/python-dotenv/1.2.2/) |
 | aiohttp | 3.12.15 | [Apache-2.0 AND MIT](https://pypi.org/project/aiohttp/3.12.15/) |
 
-### Split app に導入するカスタムノード
-
-`splitapp.py` の `NODE_REVISIONS` で固定したコミットのライセンスです。リンク先も確認したコミットに固定しています。
+#### Split app に導入するカスタムノード
 
 | ノードパック | ライセンス・出典 |
 | --- | --- |
@@ -140,5 +158,7 @@ CPU/GPU 分離構成は、別の Modal App としてデプロイします。
 | ComfyUI-Image-Browsing | [GNU GPL v3](https://github.com/hayden-cn/ComfyUI-Image-Browsing/blob/3d0b5f8233d9d6b322ed3ff9a6cb15efbcf7bed7/LICENSE) |
 | rgthree-comfy | [MIT](https://github.com/rgthree/rgthree-comfy/blob/2c5342a8cb0eaecaabf61435a5f37dd594c510ba/LICENSE) |
 | ComfyUI-MiniMax-H3-MotionCache-FastVAE | [MIT（ノードのコード）](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE/blob/b719329e0ecf35f0ae08d241c363ed1e56adbb95/LICENSE) |
+
+</details>
 
 この一覧は主な依存先をまとめたもので、推移的依存を含むすべての配布物を網羅していません。追加する任意拡張・ノード・モデル、実行イメージに含まれる CUDA・FFmpeg などには、それぞれのライセンス・利用条件が適用されます。導入するコードやモデル、イメージを再配布する場合は、対象の版の条件と必要な著作権表示・ライセンス文書を確認してください。
