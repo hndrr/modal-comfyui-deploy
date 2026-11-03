@@ -1,13 +1,13 @@
 # Cloudflare Access で ComfyUI を保護する
 
 Modal 上の ComfyUI の手前に Cloudflare Access を置き、許可した利用者だけを通す構成の手順。
-なぜこの構成なのか、Worker が何をしているかは [design/cloudflare-access.md](design/cloudflare-access.md) を参照。
+なぜこの構成なのか、Worker が何をしているかは [Access と Worker の設計](../design/cloudflare-access.md) を参照。
 
 ## 設定値
 
 **`worker/wrangler.jsonc` には環境固有の値を一切書かない。** リポジトリを公開しても、ワークスペース名・ドメイン・Team domain が漏れないようにするためである。
 
-そのため、必須の 5 項目と、必要に応じて使う任意の 2 項目を Cloudflare の secret として登録する。secret は Cloudflare 側に保存され、設定ファイルに書かれていなくてもデプロイで消えない（Cloudflare のドキュメントに *Secrets not included in the file are preserved from the previous version* と明記されている）。以下のドメイン・ワークスペース名・トークンはすべて例示用で、実際の値は secret にのみ保存する。
+そのため、必須の 5 項目と、必要に応じて使う任意の 2 項目を Cloudflare の secret として登録する。secret は Cloudflare 側に保存され、設定ファイルに書かれていなくてもデプロイで消えない（Cloudflare のドキュメントに *Secrets not included in the file are preserved from the previous version* と明記されている）。以下の山括弧付きの値は、取得元で確認した値に置き換える。実値は Cloudflare の secret と Git 管理外のローカル設定で扱う。
 
 | 名前 | 必須 / 任意 | 役割と値 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Modal 上の ComfyUI の手前に Cloudflare Access を置き、許可した利�
 | `MODAL_KEY` | 必須 | 接続先別の指定がない場合に使う、特定の Modal ワークスペースの Proxy Auth Token ID（`wk-...`） |
 | `MODAL_SECRET` | 必須 | 上の Token ID と対になる Token Secret（`ws-...`）。作成時のみ表示される |
 | `MODAL_PROXY_CREDENTIALS` | 任意 | 接続先別の認証キー一覧。Modal オリジン → `{ "key": "wk-...", "secret": "ws-..." }` の JSON マップ |
-| `TEAM_DOMAIN` | 必須 | Access の Team domain。`https://<team-name>.cloudflareaccess.com`。Zero Trust → Settings → Custom Pages で確認する |
+| `TEAM_DOMAIN` | 必須 | Access の Team domain。`<ACCESS_TEAM_ORIGIN>`。Zero Trust → Settings → Custom Pages で確認する |
 | `POLICY_AUD` | 必須 | Access アプリの Application Audience (AUD) Tag。アプリの Overview で確認する |
 
 **Proxy Auth トークンは Modal ワークスペース単位で発行する。** `MODAL_KEY` / `MODAL_SECRET` は、そのうち 1 つのワークスペースのペアを既定値として置く設定であり、別ワークスペースにも通用するキーではない。同じワークスペース内の複数のModal Appには同じペアを使える。
@@ -27,12 +27,26 @@ Modal 上の ComfyUI の手前に Cloudflare Access を置き、許可した利�
 
 `MODAL_ORIGINS` は**公開ホスト名から転送先 Modal オリジンへのマップ**である。ホスト名も Modal の URL も環境固有なので、両方まとめてこの secret に入れることでリポジトリから追い出している。
 
-URL の `<workspace>` はワークスペース名なので、別ワークスペースへ切り替える場合は転送先 URL と認証キーの両方を合わせる。転送先一覧を更新し、新しい接続先に `MODAL_PROXY_CREDENTIALS` でキーを指定するか、既定の `MODAL_KEY` / `MODAL_SECRET` をペアで更新する。既定のペアを更新すると、接続先別の指定がないすべての URL に影響する。アカウントの切り替え自体は [modal-profiles.md](modal-profiles.md) を参照。
+別ワークスペースへ切り替える場合は、デプロイ出力から転送先 URL をコピーし、認証キーもそのワークスペースのものに合わせる。新しい接続先に `MODAL_PROXY_CREDENTIALS` でキーを指定するか、既定の `MODAL_KEY` / `MODAL_SECRET` をペアで更新する。既定のペアを更新すると、接続先別の指定がないすべての URL に影響する。アカウントの切り替え自体は [Modal プロファイル](modal-profiles.md) を参照。
+
+### 接続先の表記と取得元
+
+`HOST` はホスト名だけ、`ORIGIN` は `https://` を含む URL（パス・末尾の `/` なし）を表す。JSON のプレースホルダーは自動では展開されないので、貼り付ける前に置き換える。
+
+| 表記 | 設定する値・取得元 |
+| --- | --- |
+| `<COMFYUI_PUBLIC_HOST>` | 通常構成の ComfyUI 用に決める公開ホスト名。Cloudflare で管理するドメインのサブドメインを使う |
+| `<MODELS_PUBLIC_HOST>` | モデル保存 Web GUI 用に決める公開ホスト名 |
+| `<SPLIT_PUBLIC_HOST>` | split 用に決める公開ホスト名 |
+| `<COMFYUI_MODAL_ORIGIN>` | `comfyapp.py` のデプロイ出力にある `ui` の Web URL |
+| `<MODELS_MODAL_ORIGIN>` | `preserve_model.py` のデプロイ出力にある `web` の Web URL |
+| `<SPLIT_MODAL_ORIGIN>` | `splitapp.py` のデプロイ出力にある `ui` の Web URL |
+| `<ACCESS_TEAM_ORIGIN>` | Zero Trust → Settings → Custom Pages に表示される Team domain の HTTPS URL |
 
 ```json
 {
-  "comfy.example.com": "https://<workspace>--comfyui-ui.modal.run",
-  "model.example.com": "https://<workspace>--preserve-model-web.modal.run"
+  "<COMFYUI_PUBLIC_HOST>": "<COMFYUI_MODAL_ORIGIN>",
+  "<MODELS_PUBLIC_HOST>": "<MODELS_MODAL_ORIGIN>"
 }
 ```
 
@@ -46,7 +60,7 @@ Worker はリクエストの `Host` を見て転送先を決める。app を増�
 
 ```json
 {
-  "comfy-staging.example.com": "https://<workspace>--comfyui-split-ui.modal.run"
+  "<SPLIT_PUBLIC_HOST>": "<SPLIT_MODAL_ORIGIN>"
 }
 ```
 
@@ -61,13 +75,13 @@ Worker は HTTP と WebSocket のどちらでも、次の順に設定を使う�
 2. そのオリジンが `MODAL_PROXY_CREDENTIALS` にあれば、登録された `key` / `secret` を使う。
 3. 登録がなければ `MODAL_KEY` / `MODAL_SECRET` を使う。接続先のワークスペースとキーが合わなければ認証に失敗する。
 
-例えば既定のペアがワークスペース A のもので、追加の接続先がワークスペース B の場合、`MODAL_PROXY_CREDENTIALS` に B のペアを登録する。以下の値はすべてプレースホルダーである。
+例えば既定のペアがワークスペース A のもので、追加の接続先がワークスペース B の場合、`MODAL_PROXY_CREDENTIALS` に B のペアを登録する。`<OTHER_WORKSPACE_MODAL_ORIGIN>` は B でのデプロイ出力にある転送先の Web URL、`<OTHER_WORKSPACE_PROXY_KEY>` / `<OTHER_WORKSPACE_PROXY_SECRET>` は B の Settings → Proxy Auth Tokens で発行するペアに置き換える。
 
 ```json
 {
-  "https://<workspace-b>--comfyui-split-ui.modal.run": {
-    "key": "wk-WORKSPACE_B_EXAMPLE",
-    "secret": "ws-WORKSPACE_B_EXAMPLE"
+  "<OTHER_WORKSPACE_MODAL_ORIGIN>": {
+    "key": "<OTHER_WORKSPACE_PROXY_KEY>",
+    "secret": "<OTHER_WORKSPACE_PROXY_SECRET>"
   }
 }
 ```
@@ -86,7 +100,7 @@ Cloudflare Accessのログイン情報やModal CLIのAPIトークンと混同し
 - 値が URL として不正、または **https でない**（http へ転送すると `Modal-Key` / `Modal-Secret` が平文経路に載るため）
 - リクエストのホスト名がマップに無い（Custom Domain は明示的に割り当てるものなので、これは設定の追加漏れを意味する）
 
-接続先ホスト名（`comfy.example.com`）も `wrangler.jsonc` に書かず、Cloudflare ダッシュボードで Custom Domain として登録する。Cloudflare のドキュメントは *To manage routes via the Cloudflare dashboard only, remove any route and routes keys from your Wrangler configuration file* としており、`routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
+接続先ホスト名（`<COMFYUI_PUBLIC_HOST>`）も `wrangler.jsonc` に書かず、Cloudflare ダッシュボードで Custom Domain として登録する。Cloudflare のドキュメントは *To manage routes via the Cloudflare dashboard only, remove any route and routes keys from your Wrangler configuration file* としており、`routes` キーを持たない設定ファイルはダッシュボード側の設定を上書きしない。
 
 ローカルで `wrangler dev` を動かす場合は、必須の 5 項目と使用する任意項目を `worker/.dev.vars`（gitignore 済み）に書く。`worker/.dev.vars.example` をコピーして使う。
 
@@ -132,31 +146,33 @@ uv run modal profile current   # ワークスペース名
 uv run modal app list          # comfyui が deployed であること
 ```
 
-URL は `https://<workspace>--comfyui-ui.modal.run` になる。
+`<COMFYUI_MODAL_ORIGIN>` には、`comfyapp.py` のデプロイ出力に表示された `ui` の Web URL をコピーする。Modal ダッシュボードの対象 App → `ui` からも確認できる。ワークスペース名から URL を組み立てない。
 
 > ComfyUI の URL に直接 `curl` を投げると GPU コンテナがコールドスタートして課金対象になる。到達確認は手順 8 の 401 チェックで行えばよい（401 は Modal のエッジが返すため、コンテナは起動しない）。
 
 ### 3.（任意）Google を Identity provider として追加する
 
-**この手順は省略できる。** One-time PIN は Cloudflare 標準機能で既定から使えるため、個人利用ならこれだけで足りる。実際の構築でも One-time PIN のみで運用している。
+**この手順は省略できる。** Google を使わない場合は、手順 4 で One-time PIN を登録すればよい。
 
 Google ログインも使いたくなった場合は、後から追加しても Access アプリを作り直す必要はない（IdP を登録し、アプリの Login methods に足すだけ）。
 
 Google Cloud Console で OAuth 2.0 クライアント ID を作成する。
 
-- 承認済みのリダイレクト URI: `https://<team-name>.cloudflareaccess.com/cdn-cgi/access/callback`
+- 承認済みのリダイレクト URI: `<ACCESS_TEAM_ORIGIN>/cdn-cgi/access/callback`
 
-Cloudflare Zero Trust → Settings → Authentication → Login methods → Add new → Google に、発行された Client ID と Client secret を登録する。Test を実行して成功することを確認する。
+Cloudflare Zero Trust → Integrations → Identity providers → Add new identity provider → Google に、発行された Client ID と Client secret を登録する。Test を実行して成功することを確認する。
 
 IdP が 1 つだけの場合は、Access アプリ側で `auto_redirect_to_identity` を有効にすると IdP 選択画面を飛ばせる。複数登録するとこの設定は使えない。
 
 ### 4. Access アプリケーションを作成する
 
+先に Zero Trust → Integrations → Identity providers を開き、One-time PIN が未登録なら Add new identity provider → One-time PIN で追加する。新しい組織には自動で追加されないため、アプリの作成前に確認する（[Cloudflare の One-time PIN 設定手順](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/)）。
+
 Zero Trust → Access controls → Applications → Create new application → **Self-hosted and private** → **Add public hostname**。
 
-- Public hostname: `comfy.example.com`（Cloudflare で管理しているゾーンのサブドメイン）
+- Public hostname: `<COMFYUI_PUBLIC_HOST>`（Cloudflare で管理しているゾーンのサブドメイン）
 - Session Duration: 毎回ログインし直さずに済む長さにする（例: 24 時間、1 週間）
-- Login methods: One-time PIN と Google を有効にする
+- Login methods: One-time PIN を有効にする。Google は手順 3 で登録した場合のみ追加する
 - Policy:
   - Action: `Allow`
   - Include: `Emails` → 自分のメールアドレス（複数可）
@@ -171,7 +187,7 @@ Cloudflare にログインし、Worker を先にデプロイする。この時�
 cd worker
 npm install
 npx wrangler login
-npx wrangler deploy
+npm run deploy
 ```
 
 ### 6. 設定値を secret として登録する
@@ -179,8 +195,8 @@ npx wrangler deploy
 `wrangler.jsonc` は編集しない。5 つとも対話入力で登録する。
 
 ```bash
-npx wrangler secret put MODAL_ORIGINS   # {"comfy.example.com":"https://..."} を 1 行で
-npx wrangler secret put TEAM_DOMAIN     # https://<team-name>.cloudflareaccess.com
+npx wrangler secret put MODAL_ORIGINS   # {"<COMFYUI_PUBLIC_HOST>":"<COMFYUI_MODAL_ORIGIN>"} を置き換えて 1 行で
+npx wrangler secret put TEAM_DOMAIN     # 管理画面で確認した <ACCESS_TEAM_ORIGIN>
 npx wrangler secret put POLICY_AUD      # 手順 4 でコピーした AUD タグ
 npx wrangler secret put MODAL_KEY       # wk-... を貼り付け
 npx wrangler secret put MODAL_SECRET    # ws-... を貼り付け
@@ -196,11 +212,11 @@ npx wrangler secret list
 
 ### 7. ホスト名を割り当てる
 
-Cloudflare ダッシュボード → Workers & Pages → `comfyui-access-proxy` → Settings → Domains & Routes → Add → Custom Domain で `comfy.example.com` を登録する。
+Cloudflare ダッシュボード → Workers & Pages → `comfyui-access-proxy` → Settings → Domains & Routes → Add → Custom Domain で `<COMFYUI_PUBLIC_HOST>` を登録する。
 
 DNS レコードと証明書は Cloudflare が自動で作成する。`wrangler.jsonc` に `routes` キーが無いため、以降の `wrangler deploy` でこの設定が上書きされることはない。
 
-ブラウザで `https://comfy.example.com` を開き、Cloudflare のログイン画面 → 認証 → ComfyUI が表示されることを確認する。
+ブラウザで `https://<COMFYUI_PUBLIC_HOST>` を開き、Cloudflare のログイン画面 → 認証 → ComfyUI が表示されることを確認する。
 
 ### 8. Modal 直 URL を閉じる
 
@@ -222,15 +238,15 @@ uv run modal deploy comfyapp.py
 
 ```bash
 # 401 になること（Modal のエッジが返すためコンテナは起動しない）
-curl -sS -o /dev/null -w '%{http_code}\n' https://<workspace>--comfyui-ui.modal.run/
+curl -sS -o /dev/null -w '%{http_code}\n' "<COMFYUI_MODAL_ORIGIN>/"
 
 # 200 になること
 curl -sS -o /dev/null -w '%{http_code}\n' \
   -H 'Modal-Key: wk-...' -H 'Modal-Secret: ws-...' \
-  https://<workspace>--comfyui-ui.modal.run/
+  "<COMFYUI_MODAL_ORIGIN>/"
 ```
 
-最後にブラウザで `https://comfy.example.com` を再読み込みし、ComfyUI がそのまま使えることを確認する。
+最後にブラウザで `https://<COMFYUI_PUBLIC_HOST>` を再読み込みし、ComfyUI がそのまま使えることを確認する。
 
 ## 制約と運用上の注意
 
@@ -246,7 +262,7 @@ Cloudflare を経由するリクエストにはサイズ上限がある。
 
 通常の画像入力では問題になりにくいが、100MB を超える動画やモデルファイルを ComfyUI の画面からアップロードすると Free / Pro では `413 Payload Too Large` になる。
 
-大きいファイルは Cloudflare を経由させず、[ComfyUI 資産の管理画面](asset-manager.md)（`web/`）を使ってローカルから Modal Volume へ直接アップロードする。管理画面は `asset_rpc.py` 経由で Modal SDK を直接呼ぶため、この構成の影響を受けない。
+大きいファイルは Cloudflare を経由させず、[ComfyUI 資産の管理画面](../guides/asset-manager.md)（`web/`）を使ってローカルから Modal Volume へ直接アップロードする。管理画面は `asset_rpc.py` 経由で Modal SDK を直接呼ぶため、この構成の影響を受けない。
 
 ### コールドスタートと 524
 
@@ -254,7 +270,7 @@ Cloudflare は既定の Proxy Read Timeout である **125 秒**だけオリジ�
 
 ComfyUI は `min_containers=0` でゼロ台まで縮退するため、縮退後の初回アクセスではコンテナ起動を待つことになる。イメージ取得を含む起動時間が 125 秒を超えると `524` になり得る。
 
-なお `startup_timeout=60`（[comfyapp.py:349](../comfyapp.py#L349)）は **Modal がコンテナ内の Web サーバーの起動を待つ上限**であり、Cloudflare のタイムアウトとは別物である。両者は独立して効く。
+なお `startup_timeout=60`（[comfyapp.py:349](../../comfyapp.py#L349)）は **Modal がコンテナ内の Web サーバーの起動を待つ上限**であり、Cloudflare のタイムアウトとは別物である。両者は独立して効く。
 
 分離構成の `splitapp.py` はHTTPの入口を先に起動し、追加ノード更新・環境複製・ComfyUIの
 読み込み中は起動状況のページを返す。`/split/startup` を短いHTTPリクエストで確認し、
@@ -287,8 +303,8 @@ Modal の URL が変わった場合は、`MODAL_ORIGINS` または `MODAL_ADDITI
 
 | 症状 | 原因の切り分け |
 | --- | --- |
-| `comfy.example.com` が 403 | **Access の拒否と Worker の検証失敗の両方で起こる。まず切り分ける。** Zero Trust → Logs → Access で該当リクエストの `allowed` を見るか、レスポンス本文を確認する（Cloudflare の拒否ページなら Access、`Cloudflare Access authentication required.` なら Worker）。Access が拒否した場合はリクエストが Worker に届かないので `npx wrangler tail` には何も出ない。Access を通過していた場合のみ、下の行へ進む |
-| `comfy.example.com` が 401 | Worker が付けた `Modal-Key` / `Modal-Secret` を Modal が拒否している。シークレットが正しく登録されているか（`npx wrangler secret list`）、Modal 側でトークンが失効していないか確認する |
+| `<COMFYUI_PUBLIC_HOST>` が 403 | **Access の拒否と Worker の検証失敗の両方で起こる。まず切り分ける。** Zero Trust → Logs → Access で該当リクエストの `allowed` を見るか、レスポンス本文を確認する（Cloudflare の拒否ページなら Access、`Cloudflare Access authentication required.` なら Worker）。Access が拒否した場合はリクエストが Worker に届かないので `npx wrangler tail` には何も出ない。Access を通過していた場合のみ、下の行へ進む |
+| `<COMFYUI_PUBLIC_HOST>` が 401 | Worker が付けた `Modal-Key` / `Modal-Secret` を Modal が拒否している。シークレットが正しく登録されているか（`npx wrangler secret list`）、Modal 側でトークンが失効していないか確認する |
 | ログイン画面が出ずに ComfyUI が表示される | Access アプリのホスト名が Worker のホスト名と一致していない。Access アプリの設定を確認する |
 | 生成の進捗が更新されない | `/ws` が繋がっていない。DevTools → Network → WS で `/ws?clientId=...` と**クエリ付きの再接続**が出ているか確認する。クエリ無しの `/ws` が 1 秒間隔で並ぶ場合はフレームが届いていないので、「WebSocket を透過する」の `Sec-WebSocket-*` の扱いを見直す。なお WebSocket が繋がる前にキューへ入れた job は古い `client_id` 宛に進捗が送られるため、直した後は生成を新規に流し直して確認する |
 | Access を通過した後に Worker が 403 を返す | Worker の JWT 検証に失敗している。`npm run tail` で `Access token rejected: ...` の理由が出るので、それを見る。`POLICY_AUD` が Access アプリの AUD と、`TEAM_DOMAIN` が JWT の `iss` と完全一致しているかを確認する（team domain を改名した後に secret を更新し忘れているとここで落ちる） |

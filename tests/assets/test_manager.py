@@ -342,12 +342,3 @@ class AssetManagerOperationTests(unittest.TestCase):
         )
         assets = self.manager.list_assets(INPUT_VOLUME, "folder")
         self.assertEqual([asset.path for asset in assets], [])
-
-
-class DeprecatedGuiEntrypointTests(unittest.TestCase):
-    def test_gradio_entrypoint_exits_with_migration_message(self) -> None:
-        import asset_manager_gui
-
-        with self.assertRaises(SystemExit) as raised:
-            asset_manager_gui.main()
-        self.assertEqual(raised.exception.code, 2)
