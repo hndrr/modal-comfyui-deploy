@@ -2,7 +2,7 @@
 
 artokun/comfyui-mcp 0.52.206 の全ツール（41件）とそのアクションを示します。使い方は[チャットから ComfyUI を使う](split-mcp.md)を参照してください。
 
-「上流を使用」は split の CPU で元の npm パッケージを呼びます。「split で代替」は右欄に記載した範囲の機能を提供します。「未提供」はこの HTTPS 接続では呼べません。ローカル stdio の機能は変わりません。
+「上流を使用」は split の CPU で元の npm パッケージを呼びます。「split で代替」は右欄に記載した範囲の機能を提供します。「未提供」はこの HTTPS 接続では呼べません。クライアントは HTTPS 接続に統一しています。CPU 内で呼ぶ上流パッケージは残します。
 
 | 上流ツール | アクション | HTTPS での扱い | 使い方・理由 |
 |---|---|---|---|
@@ -29,7 +29,7 @@ artokun/comfyui-mcp 0.52.206 の全ツール（41件）とそのアクション�
 | `get_defaults` | `get`、`set`、`get_ui`、`set_ui` | 未提供 | 上流のローカル設定／UI の個人設定はクライアント間で暗黙共有しない。 |
 | `get_history` | `list`、`diagnose` | 上流を使用 | 同名ツールを使用。 |
 | `get_history` | `stats`、`suggest` | 未提供 | 上流の一時的なプロセス内の生成履歴 DB は split の永続ジョブ台帳とは異なる。 |
-| `get_image` | `get` | 上流を使用 | 共有 output の画像をインラインで返す。 |
+| `get_image` | `get` | split で代替 | 配信用 CPU が共有 output の画像を返す。8 MiB超は認証付きリンク。ComfyUI は起動しない。 |
 | `get_image` | `list_outputs`、`list_assets`、`asset_metadata` | split で代替 | list_outputs は prompt_id 単位、list_inputs は入力置き場、inspect_media は寸法・音声など。上流の asset ID は使わない。 |
 | `get_image` | `view`、`convert`、`analyze_color` | 未提供 | 任意パスの閲覧・形式変換・色解析は公開していない。取得は get_image。 |
 | `get_system_stats` | `stats`、`health` | split で代替 | get_split_status は実際の GPU 台数と処理状態を返す。ハードウェア全項目を返すものではない。 |

@@ -1,4 +1,5 @@
 import {receiptLink} from "./job-review.ts";
+import {callSavedMedia, savedMediaTools} from "./saved-media.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -35,7 +36,9 @@ async function rejected(response: Response): Promise<CallToolResult> {
 }
 
 // Only a tool invocation may call send(). No polling survives this invocation.
-export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string): Promise<CallToolResult> {
+export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string, mediaSend?:Send): Promise<CallToolResult> {
+  if (mediaSend && savedMediaTools.has(name))
+    return callSavedMedia(mediaSend,name,args,browserOrigin || "https://split.invalid");
   const deadline = Date.now() + 12_000;
   try {
     for (;;) {
@@ -112,60 +115,62 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
   }
 }
 
-export async function remoteMcp(request:Request,send:Send, browserOrigin:string, blobHosts?:string) {
+export async function remoteMcp(request:Request,send:Send, browserOrigin:string, blobHosts?:string, mediaSend?:Send) {
   const u = new URL(request.url);
   if (request.headers.has("Origin") && request.headers.get("Origin") !== u.origin)
     return new Response("Invalid origin",{status:403});
   // Stateless HTTP: no idle SSE or client pings are forwarded to Modal.
   if (request.method !== "POST") return new Response(null,{status:405,headers:{Allow:"POST"}});
   const server = new McpServer({name:"comfyui-split",version:"1.0.0"});
+  const call=(name:string,args:Record<string,unknown>,origin?:string,hosts?:string)=>
+    callSplit(send,name,args,origin || browserOrigin,hosts,mediaSend);
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
   server.registerTool("calculate",{description:"Calculate dimensions, seeds or a batch of numeric expressions.",annotations:read,
-    inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>callSplit(send,"calculate",a));
+    inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>call("calculate",a));
   server.registerTool("search_custom_nodes",{description:"Find a node pack in the public Comfy Registry or read its release details. Does not install it.",annotations:{...read,openWorldHint:true},
-    inputSchema:{action:z.enum(["search","details"]),query:z.string().max(150).optional(),id:z.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/).optional(),limit:z.number().int().min(1).max(50).optional(),page:z.number().int().positive().optional()}},a=>callSplit(send,"search_custom_nodes",a));
-  server.registerTool("get_workflow",{description:"List/get/analyze/query/strip/slice saved library workflows without generating. Use analyze for sections, query for matching nodes.",annotations:read,inputSchema:workflowInputs},a=>callSplit(send,"get_workflow",a));
+    inputSchema:{action:z.enum(["search","details"]),query:z.string().max(150).optional(),id:z.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/).optional(),limit:z.number().int().min(1).max(50).optional(),page:z.number().int().positive().optional()}},a=>call("search_custom_nodes",a));
+  server.registerTool("get_workflow",{description:"List/get/analyze/query/strip/slice saved library workflows without generating. Use analyze for sections, query for matching nodes.",annotations:read,inputSchema:workflowInputs},a=>call("get_workflow",a));
   server.registerTool("save_workflow",{description:"Save a NEW named workflow in the ComfyUI library. Existing names are never overwritten. Converts API graphs for the editor when possible.",annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
-    inputSchema:{filename,workflow:graph}},a=>callSplit(send,"save_workflow",{...a,action:"save"}));
-  server.registerTool("visualize_workflow",{description:"Use render to turn workflow JSON into Mermaid; mermaid parses flowchart text back to JSON. Also converts workflow DSL. Does not generate.",annotations:read,inputSchema:{action:z.enum(["render","render_hierarchical","mermaid","to_dsl","from_dsl"]),workflow:graph.optional(),mermaid:z.string().optional(),dsl:z.string().optional(),show_values:z.boolean().optional(),direction:z.enum(["LR","TB"]).optional(),view:z.enum(["overview","detail","list","summary"]).optional(),section:z.string().optional()}},a=>callSplit(send,"visualize_workflow",a));
+    inputSchema:{filename,workflow:graph}},a=>call("save_workflow",{...a,action:"save"}));
+  server.registerTool("visualize_workflow",{description:"Use render to turn workflow JSON into Mermaid; mermaid parses flowchart text back to JSON. Also converts workflow DSL. Does not generate.",annotations:read,inputSchema:{action:z.enum(["render","render_hierarchical","mermaid","to_dsl","from_dsl"]),workflow:graph.optional(),mermaid:z.string().optional(),dsl:z.string().optional(),show_values:z.boolean().optional(),direction:z.enum(["LR","TB"]).optional(),view:z.enum(["overview","detail","list","summary"]).optional(),section:z.string().optional()}},a=>call("visualize_workflow",a));
   for(const [name,tool] of Object.entries({...production,...adminTools})) {
     server.registerTool(name,{description:tool.description,annotations:{readOnlyHint:!tool.write,destructiveHint:tool.write && name!=="reuse_output",openWorldHint:name==="add_model" || name==="change_node"},
-      inputSchema:tool.inputs},(a:Record<string,unknown>)=>callSplit(send,name,a));
+      inputSchema:tool.inputs},(a:Record<string,unknown>)=>call(name,a));
   }
   server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
-    _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>callSplit(send,"upload_media",a,undefined,blobHosts));
-  server.registerTool("list_models",{description:"List installed ComfyUI model categories, or filenames in one category. Supports paging and substring search; reads only.",annotations:read,inputSchema:modelInputs}, a=>callSplit(send,"list_models",a));
+    _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>call("upload_media",a,undefined,blobHosts));
+  server.registerTool("list_models",{description:"List installed ComfyUI model categories, or filenames in one category. Supports paging and substring search; reads only.",annotations:read,inputSchema:modelInputs}, a=>call("list_models",a));
   server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe.",annotations:read,
-    inputSchema:{prompt_id:z.uuid()}}, a=>callSplit(send,"get_job_progress",a));
+    inputSchema:{prompt_id:z.uuid()}}, a=>call("get_job_progress",a));
   server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
     annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false},
-    inputSchema:{prompt_id:z.uuid()}},a=>callSplit(send,"cancel_job",a));
+    inputSchema:{prompt_id:z.uuid()}},a=>call("cancel_job",a));
   server.registerTool("create_workflow",{description:"Inspect installed nodes, create, edit or validate an API workflow. Does not generate.",
     annotations:read,inputSchema:{action:z.enum(["node_info","create","modify","validate"]),node_type:z.string().optional(),
       template:z.string().optional(),params:graph.optional(),workflow:graph.optional(),operations:z.array(graph).optional(),
-      health:z.boolean().optional(),verbose:z.boolean().optional(),refresh:z.boolean().optional(),raw:z.boolean().optional()}}, a=>callSplit(send,"create_workflow",a));
+      health:z.boolean().optional(),verbose:z.boolean().optional(),refresh:z.boolean().optional(),raw:z.boolean().optional()}}, a=>call("create_workflow",a));
   server.registerTool("enqueue_workflow",{description:"Generate once. Choose a unique request_id for each new render; preserve it and the identical graph across retries, disconnects and agents. Local generation returns prompt_id immediately. External providers return an owner review URL; only the owner may approve sending the displayed data and incurring charges.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
-    inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>callSplit(send,"enqueue_workflow",a,browserOrigin));
+    inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>call("enqueue_workflow",a,browserOrigin));
   server.registerTool("queue",{description:"List jobs or check prompt_id status.",annotations:read,
-    inputSchema:{action:z.enum(["list","status"]),prompt_id:z.string().optional()}},a=>callSplit(send,"queue",a));
+    inputSchema:{action:z.enum(["list","status"]),prompt_id:z.string().optional()}},a=>call("queue",a));
   server.registerTool("get_history",{description:"Get job history, including the output filename and subfolder.",annotations:read,
     inputSchema:{action:z.enum(["list","diagnose"]),prompt_id:z.string().optional(),limit:z.number().int().min(1).max(100).optional()}},
-    a=>callSplit(send,"get_history",a));
+    a=>call("get_history",a));
   server.registerTool("get_image",{description:"Return a generated output image inline using its history filename.",annotations:read,
-    inputSchema:{filename:relative,subfolder:relative.optional()}},a=>callSplit(send,"get_image",{...a,action:"get"}));
+    inputSchema:{filename:relative,subfolder:relative.optional()}},a=>call("get_image",{...a,action:"get"}));
   server.registerResource("video-player", PLAYER_URI, {mimeType:PLAYER_MIME}, async () => ({
     contents:[{uri:PLAYER_URI, mimeType:PLAYER_MIME, text:playerHtml}],
   }));
   server.registerTool("get_video",{title:"Retrieve a generated video",
     description:"Retrieve the MP4 from a completed split prompt_id. Returns video bytes or an authenticated browser link. For larger files request chunks using byte_offset and next_offset. Does not generate.",
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI},
-    annotations:read,inputSchema:videoInputs}, a=>callSplit(send,"get_video",a,browserOrigin));
+    annotations:read,inputSchema:videoInputs}, a=>call("get_video",a,browserOrigin));
   server.registerTool("get_audio",{title:"Retrieve generated audio",
     description:"Play saved audio. In chat, call with only prompt_id and optional index: show the player and include the returned authenticated link as a fallback. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
     _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI,"openai/widgetAccessible":true},
-    annotations:read,inputSchema:audioInputs,outputSchema:audioOutput}, a=>callSplit(send,"get_audio",a,browserOrigin));
+    annotations:read,inputSchema:audioInputs,outputSchema:audioOutput}, a=>call("get_audio",a,browserOrigin));
   // Clients with cached descriptors can still read the current player at their old URI.
   for (const [index,uri] of [AUDIO_PLAYER_URI,...PREVIOUS_AUDIO_PLAYER_URIS].entries())
     server.registerResource(index===0?"audio-player":"previous-audio-player-"+index,uri,{mimeType:PLAYER_MIME},async()=>({
@@ -173,7 +178,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     }));
   server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
-    annotations:read,inputSchema:audioPartInputs,outputSchema:audioOutput}, a=>callSplit(send,"read_audio_part",a,browserOrigin));
+    annotations:read,inputSchema:audioPartInputs,outputSchema:audioOutput}, a=>call("read_audio_part",a,browserOrigin));
   const transport = new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
   await server.connect(transport);
   try { return await transport.handleRequest(request); } finally { await server.close(); }
