@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Tuple
 
-REPO_PROFILE_FILE = Path(__file__).with_name(".modal-profile")
+REPO_PROFILE_FILE = Path(__file__).resolve().parents[1] / ".modal-profile"
 
 
 def _apply_repo_modal_profile(profile_file: Path = REPO_PROFILE_FILE) -> None:
@@ -12,7 +12,7 @@ def _apply_repo_modal_profile(profile_file: Path = REPO_PROFILE_FILE) -> None:
 
     modal は `import modal` の時点で使用プロファイルを確定するため、必ず
     その前に呼ぶこと。シェルで指定済みの MODAL_PROFILE が優先される。
-    詳細は docs/modal-profiles.md。
+    詳細は docs/operations/modal-profiles.md。
     """
     if os.environ.get("MODAL_PROFILE", "").strip():
         return

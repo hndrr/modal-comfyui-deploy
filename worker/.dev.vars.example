@@ -5,16 +5,20 @@
 #
 # 本番へは同じ 5 つを `wrangler secret put <NAME>` で登録する。
 # wrangler.jsonc には環境固有の値を一切書かない方針のため、ここが唯一の
-# ローカル設定ファイルになる。詳細は docs/cloudflare-access.md を参照。
+# ローカル設定ファイルになる。詳細は docs/operations/cloudflare-access.md を参照。
 
 # 公開ホスト名 → Modal のオリジン、の JSON マップ（1 行で書く）。
 # ホスト名も Modal の URL も環境固有の値なので、リポジトリには置かず
 # まとめてここ（と secret）に入れる。
-# URL は `uv run modal deploy ...` の出力に表示される。すべて https であること。
-MODAL_ORIGINS={"comfy.example.com":"https://<workspace>--comfyui-ui.modal.run","model.example.com":"https://<workspace>--preserve-model-web.modal.run"}
+# 山括弧付きの値は自動展開されないので、コピー後に実値へ置き換える。
+# <COMFYUI_PUBLIC_HOST> / <MODELS_PUBLIC_HOST>: Worker の Custom Domain に登録するホスト名だけ。
+# <COMFYUI_MODAL_ORIGIN>: comfyapp.py のデプロイ出力にある ui の Web URL。
+# <MODELS_MODAL_ORIGIN>: preserve_model.py のデプロイ出力にある web の Web URL。
+# ORIGIN は https:// を含み、パス・末尾の / を含まない。
+MODAL_ORIGINS={"<COMFYUI_PUBLIC_HOST>":"<COMFYUI_MODAL_ORIGIN>","<MODELS_PUBLIC_HOST>":"<MODELS_MODAL_ORIGIN>"}
 
 # Zero Trust → Settings → Custom Pages に表示される Team domain
-TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com
+TEAM_DOMAIN=<ACCESS_TEAM_ORIGIN>
 
 # Access アプリの Overview にある Application Audience (AUD) Tag
 POLICY_AUD=
@@ -25,8 +29,9 @@ MODAL_KEY=
 # 同じく Token Secret（ws- 始まり。作成時にしか表示されない）
 MODAL_SECRET=
 
-# Optional: allow only this signed Access service identity on this exact split host.
-# SPLIT_MCP_ACCESS={"client_id":"example.access","hostname":"split.example.com","origin":"https://<workspace>--comfyui-split-ui.modal.run"}
-
 # Optional separate user OAuth application (no client or Modal credentials).
-# SPLIT_REMOTE_MCP={"hostname":"mcp.example.com","split_hostname":"split.example.com","origin":"https://example.modal.run","audience":"dedicated-aud","owner_email":"owner@example.com"}
+# <SPLIT_PUBLIC_HOST>: split 用の Custom Domain のホスト名だけ。
+# <SPLIT_MODAL_ORIGIN>: splitapp.py のデプロイ出力にある ui の Web URL。
+# <MCP_ACCESS_AUD>: MCP 専用 Access アプリの Application Audience (AUD) Tag。
+# <OWNER_EMAIL>: MCP 専用 Access アプリの Allow に登録する本人のメールアドレス。
+# SPLIT_REMOTE_MCP={"hostname":"<SPLIT_PUBLIC_HOST>","split_hostname":"<SPLIT_PUBLIC_HOST>","origin":"<SPLIT_MODAL_ORIGIN>","audience":"<MCP_ACCESS_AUD>","owner_email":"<OWNER_EMAIL>"}

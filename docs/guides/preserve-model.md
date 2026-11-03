@@ -10,7 +10,7 @@ uv run modal run preserve_model.py::preserve_model \
   --destination-subdir "text_encoders"
 ```
 
-Modal アカウントを複数使い分けている場合は `uv run modal` を `./scripts/modal.sh` に置き換えます（[modal-profiles.md](modal-profiles.md)）。
+Modal アカウントを複数使い分けている場合は `uv run modal` を `./scripts/modal.sh` に置き換えます（[modal-profiles.md](../operations/modal-profiles.md)）。
 
 ## 保存先の決まり方
 
@@ -86,7 +86,7 @@ uv run preserve_model_gui.py
 
 実行のたびに `modal.App.run()` で一時コンテナを起動するため、**事前のデプロイは不要**です。既定 URL は `http://127.0.0.1:7860`。
 
-接続先は Modal CLI の既定アカウントです。複数アカウントを使い分けている場合は [modal-profiles.md](modal-profiles.md) を参照してください。
+接続先は Modal CLI の既定アカウントです。複数アカウントを使い分けている場合は [modal-profiles.md](../operations/modal-profiles.md) を参照してください。
 
 ブラウザから使いたい場合は、同じ UI を Modal にデプロイできます（後述）。
 
@@ -126,7 +126,7 @@ Comfy-Org/Qwen-Image-Edit_ComfyUI::split_files/diffusion_models/model.safetensor
 PRESERVE_WEB_REQUIRES_PROXY_AUTH=on uv run modal deploy preserve_model.py
 ```
 
-デプロイ先のアカウントに Secret `huggingface-secret` が無いと失敗します。`uv run modal secret list` で確認してください（複数アカウント時は [modal-profiles.md](modal-profiles.md)）。
+デプロイ先のアカウントに Secret `huggingface-secret` が無いと失敗します。`uv run modal secret list` で確認してください（複数アカウント時は [modal-profiles.md](../operations/modal-profiles.md)）。
 
 Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 つ並びます。
 
@@ -146,7 +146,7 @@ Modal 上の App は `preserve-model` の 1 つで、そこに Function が 2 �
 - `modal.App.run()` による一時コンテナ起動は Modal が禁じているため、**デプロイ済み関数を呼ぶモードに固定**されます
 - Modal の認証はコンテナ ID で自動的に通るため、`modal token` でのログインは不要です
 
-`PRESERVE_WEB_REQUIRES_PROXY_AUTH=on` にすると Modal の直 URL は 401 になるので、ブラウザから使うには Cloudflare Access 越しに公開します。手順は [cloudflare-access.md](cloudflare-access.md) を参照してください。1 つの Worker で ComfyUI と併せて出せます（`MODAL_ORIGINS` にホスト名を足すだけで、Worker のコード変更は不要）。
+`PRESERVE_WEB_REQUIRES_PROXY_AUTH=on` にすると Modal の直 URL は 401 になるので、ブラウザから使うには Cloudflare Access 越しに公開します。手順は [cloudflare-access.md](../operations/cloudflare-access.md) を参照してください。1 つの Worker で ComfyUI と併せて出せます（`MODAL_ORIGINS` にホスト名を足すだけで、Worker のコード変更は不要）。
 
 デフォルト URL:
 

@@ -21,7 +21,7 @@ def _apply_repo_modal_profile(profile_file: Path = REPO_PROFILE_FILE) -> None:
 
     modal は `import modal` の時点で使用プロファイルを確定するため、必ず
     その前に呼ぶこと。シェルで指定済みの MODAL_PROFILE が優先される点は
-    `scripts/modal.sh` や資産管理画面と同じ。詳細は docs/modal-profiles.md。
+    `scripts/modal.sh` や資産管理画面と同じ。詳細は docs/operations/modal-profiles.md。
     """
     if os.environ.get("MODAL_PROFILE", "").strip():
         return
