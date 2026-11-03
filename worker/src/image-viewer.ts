@@ -7,24 +7,26 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:.5rem;p
 <img hidden alt="生成した画像"><footer><span role="status">画像を読み込み中…</span><a hidden target="_blank" rel="noopener noreferrer">画像を開く・保存する</a></footer>
 <script>
 const image=document.querySelector("img"),label=document.querySelector("span"),link=document.querySelector("a");
-let peer="*",ready=false,openLinks=false;
+let peer="*",ready=false,openLinks=false,rpcId=2;
 function send(message){parent.postMessage({jsonrpc:"2.0",...message},peer);}
 function clear(){image.hidden=true;image.removeAttribute("src");link.hidden=true;link.removeAttribute("href");}
 function render(result){
   clear();
   if(result.isError){label.textContent=result.content?.find(x=>x.type==="text")?.text || "画像を取得できませんでした。";return;}
   const info=result.structuredContent;
-  if(!info)return;
-  const url=new URL(info.url);
-  if(url.protocol==="https:" && url.pathname==="/view"){link.href=url.href;link.hidden=false;}
+  if(!info || typeof info.filename!=="string"){label.textContent="画像情報を読み込めませんでした。";return;}
+  try{
+    const url=new URL(info.url);
+    if(url.protocol==="https:" && url.pathname==="/view"){link.href=url.href;link.hidden=false;}
+  }catch{}
   label.textContent=info.filename;
   const file=result.content?.find(x=>x.type==="image");
   if(file && ["image/png","image/jpeg","image/webp"].includes(file.mimeType)){
     image.alt=info.filename;image.src="data:"+file.mimeType+";base64,"+file.data;image.hidden=false;
-  }else label.textContent=info.filename+"：閲覧リンクから開けます。";
+  }else label.textContent=info.filename+(link.hidden?"：画像を表示できません。":"：閲覧リンクから開けます。");
 }
-image.onerror=()=>{image.hidden=true;label.textContent="画像を表示できません。閲覧リンクから開いてください。";};
-link.onclick=e=>{if(openLinks){e.preventDefault();send({id:2,method:"ui/open-link",params:{url:link.href}});}};
+image.onerror=()=>{image.hidden=true;label.textContent=link.hidden?"画像を表示できません。":"画像を表示できません。閲覧リンクから開いてください。";};
+link.onclick=e=>{if(openLinks){e.preventDefault();send({id:rpcId++,method:"ui/open-link",params:{url:link.href}});}};
 function legacy(globals){
   const meta=globals?.toolResponseMetadata,result=meta?.mcp_tool_result || meta?.call_tool_result;
   if(result?.structuredContent || result?.isError)render(result);
