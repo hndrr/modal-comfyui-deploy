@@ -1,8 +1,9 @@
 // The MCP view uses tool-result bytes only. Do not send browser credentials,
 // fetch /view from the iframe, or publish an output to an unprotected URL.
+import {audioBudgetScript} from "./audio-budget.ts";
 import {AUDIO_PART_BYTES} from "./media.ts";
-export const AUDIO_PLAYER_URI = "ui://split/audio-player-v3.html";
-export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
+export const AUDIO_PLAYER_URI = "ui://split/audio-player-v4.html";
+export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
 export const audioPlayerHtml = `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した音声</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}input{flex:1;min-width:4rem}output{font-variant-numeric:tabular-nums}a{color:LinkText}</style>
@@ -10,6 +11,7 @@ p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:
 <div id="transport" role="group" aria-label="生成した音声" hidden><button id="play">再生</button><input type="range" min="0" max="0" step="0.1" value="0" aria-label="再生位置" disabled><output>0:00</output></div>
 <footer><button hidden>音声を再取得</button><a hidden target="_blank" rel="noopener noreferrer">再生・保存ページを開く</a></footer>
 <script>
+${audioBudgetScript}
 const transport=document.querySelector("#transport"), play=document.querySelector("#play"), seek=document.querySelector("input"), clock=document.querySelector("output");
 const statusLabel=document.querySelector("p"), retry=document.querySelector("footer button"), link=document.querySelector("a");
 const autoLoad=4*1024*1024, limit=64*1024*1024, pending=new Map();
@@ -30,9 +32,14 @@ function resetPlayer(){stop();if(context)void context.close().catch(()=>{});cont
 play.onclick=async()=>{
   if(source){stop();return;}if(!file)return;
   const selected=file;play.disabled=true;
-  try{context??=new AudioContext();await context.resume();
+  try{context??=new AudioContext({sampleRate:48000});await context.resume();
     if(selected!==file)return;
-    if(!buffer){const decoded=await context.decodeAudioData(await selected.arrayBuffer());if(selected!==file)return;buffer=decoded;
+    if(!buffer){const bytes=await selected.arrayBuffer();if(selected!==file)return;
+      const estimate=audioBudget(new Uint8Array(bytes),selected.type);
+      if(!estimate || estimate.seconds>600 || estimate.pcmBytes>128*1024*1024){
+        resetPlayer();statusLabel.textContent="音声の展開サイズが上限を超えるか確認できません。再生・保存ページを開いてください。";return;
+      }
+      const decoded=await context.decodeAudioData(bytes);if(selected!==file)return;buffer=decoded;
       seek.max=buffer.duration;seek.disabled=false;}
     start();
   }catch{if(selected===file)statusLabel.textContent="音声を再生できません。再生・保存ページを開いてください。";}
@@ -141,6 +148,6 @@ addEventListener("message",e=>{
 });
 function resize(){if(ready)send({method:"ui/notifications/size-changed",params:{height:document.body.scrollHeight}});}
 new ResizeObserver(resize).observe(document.body);
-send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-audio",version:"3"},appCapabilities:{}}});
+send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-audio",version:"4"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;

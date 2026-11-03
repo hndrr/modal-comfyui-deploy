@@ -49,17 +49,15 @@ test("signed Access identity controls both transports before contacting an origi
       [split]: "https://different.modal.run",
     }) })).status, 403);
     assert.equal(forwarded.length, before);
-    assert.equal((await call(split, machine, ws)).status, ws ? 101 : 200);
-    const up = forwarded.at(-1);
-    assert.equal(new URL(up.url).hostname, "split.modal.run");
-    for (const name of ["CF-Access-Jwt-Assertion", "CF-Access-Client-Id", "CF-Access-Client-Secret", "CF-Access-Token"]) {
-      assert.equal(up.headers.get(name), null);
-    }
-    assert.equal(up.headers.get("Cookie"), "other=ok");
-    assert.equal(up.headers.get("Modal-Secret"), env.MODAL_SECRET);
-    assert.equal(up.headers.get("X-Modal-Execution-Mode"), "split");
-    assert.equal((await call(other, browser, ws)).status, ws ? 101 : 200);
-    assert.equal(forwarded.at(-1).headers.get("X-Modal-Execution-Mode"), null);
+    assert.equal((await call(split, machine, ws)).status,410);
+    assert.equal(forwarded.length,before);
+    assert.equal((await call(other,browser,ws)).status,ws?101:200);
+    const up=forwarded.at(-1);
+    for(const name of ["CF-Access-Jwt-Assertion","CF-Access-Client-Id","CF-Access-Client-Secret","CF-Access-Token"])
+      assert.equal(up.headers.get(name),null);
+    assert.equal(up.headers.get("Cookie"),"other=ok");
+    assert.equal(up.headers.get("Modal-Secret"),env.MODAL_SECRET);
+    assert.equal(up.headers.get("X-Modal-Execution-Mode"),null);
   }
   const forged = await sign({ sub: "", common_name: clientId }, (await generateKeyPair("RS256")).privateKey);
   const before = forwarded.length;
@@ -96,7 +94,7 @@ test('only the signed UI owner may view/decide one review; service POSTs cannot 
     ...(method==="POST"?{body:"x=1"}:{})}),env);
   for(const token of [oauth,other,service,""]){assert.equal((await call(path,token)).status,403);}
   for(const p of [path,internal,"/api"+internal,"/api/split/mode","/api/prompt/","/api/%70rompt","/prompt?alternate=1"])
-    assert.equal((await call(p,service,"POST")).status,403);
+    assert.ok([403,410].includes((await call(p,service,"POST")).status));
   for(const headers of [{},{"Origin":"https://other.example","Content-Type":"application/x-www-form-urlencoded"},
     {"Origin":"https://"+host,"Content-Type":"application/json"}])assert.equal((await call(path,owner,"POST",headers)).status,403);
   assert.equal(hits.length,0);
@@ -108,11 +106,9 @@ test('only the signed UI owner may view/decide one review; service POSTs cannot 
   }
   assert.equal((await call(internal,owner)).status,200); // Origin must still refuse requests without the marker.
   assert.equal(hits.at(-1).headers.get("X-Split-Browser-Review"),null);
-  const r=await call("/api/prompt",service,"POST");
-  assert.equal(r.status,409);assert.ok((await r.json()).error.message.includes("https://"+host+path));
-  assert.equal(hits.at(-1).url,origin+"/_remote_mcp/submit");
-  assert.equal(hits.at(-1).headers.get("X-Split-Browser-Review"),null);
-  assert.equal(hits.at(-1).headers.get("X-Split-Remote-Tool"),"1");
+  const beforeRetired=hits.length;
+  for(let retry=0;retry<2;retry++)assert.equal((await call("/api/prompt",service,"POST")).status,410);
+  assert.equal(hits.length,beforeRetired); // No random keys, new reviews or duplicate jobs.
   assert.equal((await call("/split/mode",owner,"POST")).status,200);
   assert.equal(hits.at(-1).headers.get("X-Split-Browser-Review"),null);
 });

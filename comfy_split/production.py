@@ -123,25 +123,30 @@ def inspect(file, name):
         "opus": "ogg",
     }.get(ext, ext)
     fd = file.fileno()
-    probe = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-protocol_whitelist",
-            "file",
-            "-f",
-            demux,
-            "-show_entries",
-            "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,sample_rate,channels",
-            "-of",
-            "json",
-            f"/dev/fd/{fd}",
-        ],
-        pass_fds=(fd,),
-        capture_output=True,
-        timeout=15,
-    )
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-protocol_whitelist",
+                "file",
+                "-f",
+                demux,
+                "-show_entries",
+                "format=duration:stream=codec_type,codec_name,width,height,avg_frame_rate,sample_rate,channels",
+                "-of",
+                "json",
+                f"/dev/fd/{fd}",
+            ],
+            pass_fds=(fd,),
+            capture_output=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        raise web.HTTPBadRequest(text="Media inspection timed out") from None
+    except OSError:
+        raise web.HTTPServiceUnavailable(text="Media inspection service is unavailable") from None
     require(probe.returncode == 0, "Unreadable media")
     metadata = json.loads(probe.stdout)
     duration = metadata.get("format", {}).get("duration")

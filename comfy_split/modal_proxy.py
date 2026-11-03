@@ -21,7 +21,7 @@ def encoded_path(scope, *, has_body=False):
     return quote(path, safe="/")
 
 
-def web_server_proxy(host, port):
+def web_server_proxy(host, port, *, gateway_token=None):
     # Modal 1.1.4's web_server proxy reconstructs URLs from ASGI's decoded
     # `path`. ComfyUI's /userdata/{file} requires folders to stay encoded in
     # that single route parameter. Keep the pinned SDK's streaming, lifespan
@@ -31,6 +31,13 @@ def web_server_proxy(host, port):
     upstream = modal_proxy(host, port)
 
     async def app(scope, receive, send):
+        if gateway_token is not None and scope["type"] in {"http", "websocket"}:
+            # Replace any caller-supplied marker; only this authenticated ASGI
+            # boundary knows the per-container gateway capability.
+            scope = {**scope, "headers": [
+                (key, value) for key, value in scope.get("headers", [])
+                if key.lower() != b"x-split-gateway-token"
+            ] + [(b"x-split-gateway-token", gateway_token.encode())]}
         if scope["type"] == "http":
             # ASGI has already decoded the incoming chunk framing. aiohttp
             # chooses framing for the outgoing body stream; forwarding this

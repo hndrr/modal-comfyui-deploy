@@ -186,7 +186,10 @@ def remote_mcp_image(base):
 # Apply the same deployment identity after all reusable CPU and GPU layers.
 billing_secret = os.environ.get("SPLIT_COMFY_BILLING_SECRET", "").strip()
 billing_label = os.environ.get("SPLIT_COMFY_BILLING_LABEL","").strip() or billing_secret
-billing_config = {"SPLIT_COMFY_BILLING_SECRET": billing_secret, "SPLIT_COMFY_BILLING_LABEL": billing_label}
+billing_config = {"SPLIT_COMFY_BILLING_SECRET": billing_secret, "SPLIT_COMFY_BILLING_LABEL": billing_label,
+    "SPLIT_GEMINI_BILLING_LABEL": os.environ.get("SPLIT_GEMINI_BILLING_LABEL", "").strip() or secret_names.get("GEMINI_SECRET_NAME", ""),
+    "SPLIT_OPENROUTER_BILLING_LABEL": os.environ.get("SPLIT_OPENROUTER_BILLING_LABEL", "").strip() or secret_names.get("OPENROUTER_SECRET_NAME", "")}
+
 cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID,
     **billing_config,
     "SPLIT_COMFY_BILLING_ENABLED": "1" if billing_secret else "0",
@@ -243,11 +246,15 @@ async def gpu_worker(spec):
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app(requires_proxy_auth=True)
 def ui():
+    import secrets
     from modal._runtime.asgi import wait_for_web_server
 
     from comfy_split.cpu_snapshot import resume
     from comfy_split.modal_proxy import web_server_proxy
+    from comfy_split.gateway_access import ENV
 
+    gateway_token = secrets.token_urlsafe(32)
+    os.environ[ENV] = gateway_token
     gateway = resume()
 
     def monitor():
@@ -264,4 +271,4 @@ def ui():
 
     threading.Thread(target=monitor, daemon=True).start()
     wait_for_web_server("127.0.0.1", 8000, timeout=600)
-    return web_server_proxy("127.0.0.1", 8000)
+    return web_server_proxy("127.0.0.1", 8000, gateway_token=gateway_token)

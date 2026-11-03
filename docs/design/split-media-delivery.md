@@ -32,7 +32,8 @@ flowchart TD
 | `get_workflow(list)`、`get(format:ui)`、保存済み API グラフの `get` | 参照用 CPU のみ |
 | `get_history(list/diagnose)`・`get_job_workflow` | 参照用 CPU のみ。保存時点の記録 |
 | `list_models(source:runtime)`、UI→API 変換、グラフ解析・検証 | 従来の split CPU。現在のノード定義を使う |
-| `/view`・`/api/view` の元の output ファイル | 配信用 CPU のみ |
+| `/view`・`/api/view` の元の output ファイル（下記の対応形式） | 配信用 CPU のみ |
+| GLB・SVGなど配信未対応形式の `/view` | 従来の split CPU |
 | 入力・一時画像、`preview` / `channel` 付き変換、ノード・ライブ進捗照会 | 従来の split CPU |
 | 生成 | 従来の split CPU と GPU |
 
@@ -40,8 +41,11 @@ flowchart TD
 `/split/startup` を呼ばない。リクエスト終了後は自動縮退する。30秒は停止待ち設定であり起動・停止時間の保証ではない。
 再生中の転送には CPU を使う。読み込み済みデータの再生や、クライアントが停止した後の keep-alive は追加しない。
 
+配信対象はPNG・JPEG・WebP・GIF、MP3・WAV・FLAC・Ogg・Opus・M4A、MP4・MOV・WebM・MKV。
+Workerは拡張子で経路を選ぶ。これ以外の出力も従来のComfyUIから開ける。対応形式の配信が失敗した場合にComfyUIへ送り直す仕組みではない。
+
 ファイルは256 KiBずつ送り、全体をメモリに載せない。GET / HEAD、単一 Range（途中・末尾）、
-ETag / If-Range に対応する。範囲外は416、削除済みは404。途中でファイルが置き換わったら配信を中断し、
+ETag / If-Range に対応する。範囲外は416、削除済みは404、ストレージのI/O障害は再試行可能な503。途中でファイルが置き換わったら配信を中断し、
 新旧の内容を混ぜない。保存領域の再読み込みとファイル操作は排他し、遅いクライアントへの送信中はファイルを閉じる。
 
 新規の公開 URL、公開バケット、認証の Bypass は不要。Modal の直接 URL は Proxy Auth が必要。
@@ -58,7 +62,9 @@ API 形式で保存されていれば直接返す。UI→API 変換は現在の�
 保存ファイルが UI 形式の場合だけ既存 ComfyUI 経路を使う。ノード定義のキャッシュは追加しない。
 取得失敗や壊れた JSON を「変換が必要」と見なして ComfyUI を起動しない。
 
-履歴では CPU の台帳に GPU の完了記録を重ね、CPU が停止中に完了した結果も取得する。
+履歴では CPU が保存したジョブ別の記録に GPU の完了記録を重ね、CPU が停止中に完了した結果も取得する。
+一覧は小さな索引を順に読み、返す件数分だけ本文を取得する。失敗がCPU側で確定しGPUの完了記録がなくても取得できる。
+承認待ち本文や期限切れジョブの履歴を含む台帳全体は読まない。新しい保存形式への移行は[設定手順](../split-mcp-setup.md#保存済みメディアの配信用-cpu)を参照。
 `live: false` を付け、実行中の最新状態と区別する。診断は指定 ID、または直近の指定件数内の
 失敗を優先する。`get_job_workflow` は投入したグラフだけを返し、認証用 extra_data は返さない。
 

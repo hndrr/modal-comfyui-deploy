@@ -16,6 +16,7 @@ const fail=(text:string):CallToolResult=>({isError:true,content:[{type:"text",te
 // Missing files, storage failures and malformed replies never wake ComfyUI.
 export async function callSavedCatalog(send:Send,name:string,args:Record<string,unknown>):Promise<CallToolResult|null> {
   try {
+    if(typeof args.prompt_id==="string")args={...args,prompt_id:args.prompt_id.toLowerCase()};
     let route:string, values:Record<string,unknown>;
     if(name==="list_models") {
       const {source,...rest}=z.object(modelInputs).strict().parse(args);

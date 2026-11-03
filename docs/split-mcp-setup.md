@@ -34,10 +34,14 @@ Comfy の Partner Node でクレジットを使う場合は、`COMFY_API_KEY` �
 
 更新時は Worker と split の両方を更新する。MCP は専用の生成受付ルートにのみ送信するため、未対応の旧バックエンドには生成を投入できない。標準の ComfyUI ブラウザからの手動生成は従来どおり。これは MCP から投入する生成グラフの制御であり、任意の Python パックをサンドボックス化する機能ではない。インストール・更新するカスタムノードのコードは管理者が信頼できるものに限定する。
 
+直接接続するGemini・OpenRouterの表示名は `SPLIT_GEMINI_BILLING_LABEL`・`SPLIT_OPENROUTER_BILLING_LABEL` で指定できる。未指定なら、実際に設定した各プロバイダーのSecret名を使う。CPUとGPUに同じ表示名を渡し、キーそのものは表示しない。
+
+承認待ちの本文・送信内容・素材一覧は `data/state/review-payloads/` に分離して保存する。期限切れ・拒否・承認後は本文を削除する。素材の検証中はジョブ台帳をロックせず、検証後に承認状態と環境を再確認する。MCP子プロセスの接続先にも制限を置き、通常のHTTPクライアントを使って `/prompt` や管理操作へ迂回しても拒否する。新しいワークフローの保存と必要な照会だけを許可する。
+
 ## 保存済みメディアの配信用 CPU
 
-1. 既存の split と同じ Modal プロファイル・環境で `scripts/modal.sh deploy mediaapp.py` を実行する。
-   既存の output / data / models Volume を参照する。モデルはファイル情報だけを読み、ロード・変更しない。ComfyUI の再デプロイは不要。
+1. 既存の split と同じ Modal プロファイル・環境で、先に更新した `splitapp.py` をデプロイし、一度CPUを起動する。起動時に既存台帳からジョブ別の保存記録と索引を作る。この更新ではComfyUIのバージョン・依存パッケージは変えない。
+   次に `scripts/modal.sh deploy mediaapp.py` を実行する。既存の output / data / models Volume を参照し、モデルはファイル情報だけを読む。
 2. Worker のテスト・型検査後、新しいコードをデプロイする。
 3. Worker の secret `SPLIT_MEDIA_ORIGIN` に以下を登録する。実値は Git に残さない。認証情報は既存 split の Proxy Auth を再利用し、追加登録しない。
 
@@ -49,9 +53,11 @@ Comfy の Partner Node でクレジットを使う場合は、`COMFY_API_KEY` �
    MCP の出力一覧・画像・音声・動画、モデル保存一覧、ワークフロー一覧・元JSON、履歴を取得する。この間起動してよいのは参照用 CPU だけ。
    通常・途中・末尾の Range を検証し、取得停止後は配信用 CPU も0台へ戻ることを確認する。
 
-既存の `/view` と `/api/view` の元の output ファイルも同じ配信用 CPU を使う。
-入力・一時プレビュー・画像変換は従来の ComfyUI 経路。詳細と未実装の R2 案は
+既存の `/view` と `/api/view` では、PNG・JPEG・WebP・GIF、MP3・WAV・FLAC・Ogg・Opus・M4A、MP4・MOV・WebM・MKVの元の output ファイルも同じ配信用 CPU を使う。
+GLB・SVGなど未対応の形式、入力・一時プレビュー・画像変換は従来の ComfyUI 経路。詳細と未実装の R2 案は
 [メディア配信の設計](design/split-media-delivery.md)を参照。
+
+保存済み履歴の新しい読取経路は `data/state/saved-jobs.jsonl` と `data/state/saved-jobs/` を使う。台帳全体や承認待ちの本文を読み込まないため、`controller.json` が32 MiBを超えてもジョブ単位で取得できる。旧形式の読取互換は32 MiBまでなので、大きな既存台帳がある場合は手順1のCPU起動を先に済ませる。ジョブの保持期限・出力ファイルの保持方針は変わらない。
 
 切り戻す場合は `SPLIT_MEDIA_ORIGIN` を削除する。旧経路に戻り、取得時に ComfyUI CPU を使う。
 配信アプリを停止しても Volume は削除しない。設定済みの配信先に障害があるときは、暗黙には旧経路へ戻さない。
@@ -65,6 +71,7 @@ split CPU 内の `artokun/comfyui-mcp` はワークフロー編集・ノード�
 
 旧接続専用の Access サービストークンは失効し、対応する Service Auth ポリシーと Worker の
 `SPLIT_MCP_ACCESS` を外す。他用途のトークンやブラウザ用 Allow は削除しない。
+Worker更新後は、旧専用トークンによる通常のAPI要求を410で拒否する。自動生成したキーで再投入する互換経路は残さない。
 専用の `.env.comfy-mcp` は旧登録を外した後に削除できる。共有の `.env` は変更しない。
 
 ### モデルの取得元と上流版の更新

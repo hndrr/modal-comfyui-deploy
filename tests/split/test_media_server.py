@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import json
 import os
 import tempfile
@@ -107,6 +108,21 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         code, h, body, _ = await self.request()
         self.assertEqual((code, h[b"retry-after"]), (503, b"2"))
         self.assertNotIn(self.content[:12], body)
+
+    async def test_gif_and_filesystem_errors_keep_their_http_meaning(self):
+        gif = b"GIF89a" + b"fixture"
+        (self.output / "animation.gif").write_bytes(gif)
+        code, headers, body, _ = await self.request(query="type=output&filename=animation.gif")
+        self.assertEqual((code, headers[b"content-type"], body), (200, b"image/gif", gif))
+        for error in (FileNotFoundError(), OSError(errno.ENOENT, "missing"),
+                      OSError(errno.ENOTDIR, "not a directory"), OSError(errno.ELOOP, "symlink")):
+            with patch("comfy_split.media_server.regular", side_effect=error):
+                self.assertEqual((await self.request())[0], 404)
+        for number in (errno.EIO, errno.ESTALE, errno.EMFILE, errno.EACCES):
+            with patch("comfy_split.media_server.regular", side_effect=OSError(number, "private details")):
+                code, headers, body, _ = await self.request()
+                self.assertEqual((code, headers[b"retry-after"]), (503, b"2"))
+                self.assertNotIn(b"private", body)
 
     async def test_catalog_routes_read_only_and_refresh_saved_files(self):
         models = self.root / "models"

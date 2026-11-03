@@ -94,7 +94,7 @@ CLI の転送は、`upload_id + filename` で開始・再開位置を確認し�
 | ツール | 主な引数 | できること・返るもの | 実行先 |
 | --- | --- | --- | --- |
 | `list_outputs` | `prompt_id`、任意で `offset`・`limit` | 出力の `filename`・`subfolder`・種類・再利用用 `index` | 配信用 CPU |
-| `get_image` | `filename`、任意で `subfolder` | 保存済み画像を MCP の画像として返す。8 MiBを超える場合は認証付きリンク | 配信用 CPU |
+| `get_image` | `filename`、任意で `subfolder` | PNG・JPEG・WebPを MCP の画像として返す。8 MiBを超える場合は認証付きリンク | 配信用 CPU |
 | `get_audio` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | MP3・WAV・FLAC・Ogg・Opus。通常はプレイヤー情報と認証付きリンク。明示的な部分取得では音声データ | 配信用 CPU。プレイヤーHTML自体はWorker |
 | `get_video` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | MP4のデータ、認証付きリンク、または部分データ | 配信用 CPU |
 
@@ -112,7 +112,7 @@ CLIで音声・動画の全バイトを取る場合は `byte_offset: 0` から�
 | `inspect_model` | `path`、任意で `request_id` | サイズと全体のSHA-256による `version`。大きいファイルは追跡用 `request_id` | ComfyUI CPU。内容を読み出してハッシュ計算するが変更しない |
 | `add_model` | `repo`・`file`・`category`・`request_id`、任意で `revision`・`sha256` | Hugging Faceの1ファイルを追加。結果は `get_admin_operation` で確認 | ComfyUI CPU → モデル取得 CPU。既存ファイルは上書きしない |
 | `remove_model` | `path`・`version`・`request_id` | 確認した1ファイルをローダーの対象から退避。再帰削除ではない | ComfyUI CPU。ファイル変更を検知したら拒否。実行中ジョブがある間は退避しない |
-| `restore_model` | `removal_id`・`request_id` | 退避済みの1ファイルを復元。`removal_id` は削除時の `request_id` | ComfyUI CPU。新しく同名ファイルがある場合は上書きしない |
+| `restore_model` | `removal_id`・`request_id` | 退避済みの1ファイルを復元。`removal_id` は削除時の `request_id`、`request_id` は新しい復元用ID | ComfyUI CPU。新しく同名ファイルがある場合は上書きしない |
 
 **保存一覧と選択肢の違い**：`storage` は「Volumeに何があるか」、`runtime` は「ComfyUIのモデルを選ぶ欄に何が表示されるか」です。保存されている全ファイルをComfyUIが使えるとは限りません。どちらも生成はせず、GPUを起動しません。
 
