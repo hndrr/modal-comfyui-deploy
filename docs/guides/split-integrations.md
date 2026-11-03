@@ -23,7 +23,7 @@ SPLIT_AGENT_BRIDGE=off
 
 ## 取得と更新
 
-[拡張カタログ](../comfy_split/extension_catalog.toml)に配布元、取得するコミット、読み込み先を定義しています。設定や固定コミットを変更したら、`./scripts/modal.sh deploy splitapp.py`で再デプロイします。取得のタイミングは次のとおりです。
+[拡張カタログ](../../comfy_split/extension_catalog.toml)に配布元、取得するコミット、読み込み先を定義しています。設定や固定コミットを変更したら、`./scripts/modal.sh deploy splitapp.py`で再デプロイします。取得のタイミングは次のとおりです。
 
 | 対象 | 取得する版 | 取得・検証のタイミング |
 | --- | --- | --- |
@@ -80,6 +80,6 @@ uv sync --locked --extra split-test
 uv run --locked --extra split-test python scripts/test_standalone.py
 ```
 
-標準スイートは全登録拡張のimportを禁止し、通常生成・CPU復元・拡張フック・候補環境・Secretの分離を検証します。[テストの配置](../tests/README.md)を参照してください。
+標準スイートは全登録拡張のimportを禁止し、通常生成・CPU復元・拡張フック・候補環境・Secretの分離を検証します。[テストの配置](../../tests/README.md)を参照してください。
 
 実パッケージとのAPI・通信・保存形式の契約は各拡張repoで管理します。検証対象のsplitチェックアウトを明示し、実際のController・Journal・workerに接続して検証します。splitのPython依存とCIは非公開repoの取得権限を必要としません。

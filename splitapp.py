@@ -127,11 +127,6 @@ image = (
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
-    .add_local_file(
-        "vendor/sol_attn_minimax_v5.py",
-        "/opt/comfy-extensions/sol_attn_minimax_v5.py",
-        copy=True,
-    )
     .add_local_dir(
         "comfy_split",
         "/opt/split/comfy_split",

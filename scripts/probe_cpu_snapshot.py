@@ -1,12 +1,15 @@
 """Isolated ComfyUI CPU Memory Snapshot experiment; never deploys the gateway.
 
 Deploy with: scripts/modal.sh deploy scripts/probe_cpu_snapshot.py
-Compare with: MODAL_PROFILE="<profile>" .venv/bin/python scripts/probe_cpu_snapshot.py
+Compare with: .venv/bin/python scripts/probe_cpu_snapshot.py
 Stop with: scripts/modal.sh app stop comfyui-cpu-snapshot-probe
 
-Uses the deployed image and an immutable environment mounted read-only. All
+Derives a probe image from the deployed image, adding the two target identifiers
+as environment variables, and mounts an immutable environment read-only. All
 user files and outputs stay in the disposable container. No GPU, provider
 secrets, generation requests, or public HTTP endpoint are configured.
+Export MODAL_PROFILE, CPU_SNAPSHOT_PROBE_IMAGE_ID and
+CPU_SNAPSHOT_PROBE_ENVIRONMENT before all three commands.
 """
 
 import asyncio
@@ -22,8 +25,8 @@ import uuid
 import modal
 
 APP_NAME = "comfyui-cpu-snapshot-probe"
-IMAGE_ID = "im-BUQdzUJzuhhjHZzFg6a8yl"
-ENVIRONMENT = "env-cd487277be974529ac2a0969e52cedac"
+IMAGE_ID = os.environ["CPU_SNAPSHOT_PROBE_IMAGE_ID"]
+ENVIRONMENT = os.environ["CPU_SNAPSHOT_PROBE_ENVIRONMENT"]
 READY_FILE = Path("/tmp/comfy-snapshot-probe-ready.json")
 HELPER_LOG = Path("/tmp/comfy-snapshot-probe-helper.log")
 COMFY_LOG = Path("/tmp/split-comfy-cpu.log")
@@ -57,7 +60,10 @@ asyncio.run(main())
 """
 
 app = modal.App(APP_NAME)
-image = modal.Image.from_id(IMAGE_ID)
+image = modal.Image.from_id(IMAGE_ID).env({
+    "CPU_SNAPSHOT_PROBE_IMAGE_ID": IMAGE_ID,
+    "CPU_SNAPSHOT_PROBE_ENVIRONMENT": ENVIRONMENT,
+})
 resources = dict(
     image=image,
     cpu=2,

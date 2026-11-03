@@ -27,5 +27,5 @@
   //
   // - ローカルの `wrangler dev` では .dev.vars（gitignore 済み）から読む。
   //
-  // 詳細は docs/cloudflare-access.md を参照。
+  // 詳細は docs/operations/cloudflare-access.md を参照。
 }

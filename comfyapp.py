@@ -207,7 +207,7 @@ def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> 
 
     modal は `import modal` の時点で使用プロファイルを確定するため、その後に走る
     `load_dotenv()` の値は無視される。放置すると意図しない Modal アカウントへ
-    黙ってデプロイされるので、ここで止める。詳細は docs/modal-profiles.md。
+    黙ってデプロイされるので、ここで止める。詳細は docs/operations/modal-profiles.md。
     """
     if not dotenv_path.exists():
         return
