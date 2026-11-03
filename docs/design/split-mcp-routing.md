@@ -127,6 +127,7 @@ sequenceDiagram
 | --- | --- | --- |
 | ChatGPTの添付 | ChatGPTが渡した添付情報 → Workerが許可済み配信元から取得 → ComfyUI CPUで分割検証・入力に確定 | 起動する。取得元に本人の認証ヘッダーは送らない |
 | CLIのローカルファイル | 転送ヘルパーがファイルを読む → 同じOAuthのHTTPS MCP → ComfyUI CPU | 起動する。クライアント上に別のMCPサーバーは立てない |
+| MCP内の画像ビューア | HTMLはWorker、画像は `get_image` → 配信用CPU → output Volume。取得済みデータを表示し、認証付き閲覧リンクも返す | 起動しない |
 | MCP内の音声プレイヤー | HTMLはWorker、音声部分は `read_audio_part` → 配信用CPU → output Volume | 起動しない |
 | ブラウザで出力を再生・保存 | 通常のAccessブラウザログイン → Worker → 配信用CPU → output Volume | 配信対応形式の元の出力ファイルなら起動しない。GLB・SVGなどは従来のComfyUI経路 |
 | 入力画像・一時画像・`preview` / `channel` 指定の画像変換 | ブラウザ認証 → Worker → 通常のComfyUI API | 起動する |

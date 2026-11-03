@@ -32,6 +32,12 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models","calculate","get_split_status","save_workflow","visualize_workflow","list_nodes","search_custom_nodes","get_job_workflow","reuse_output","list_inputs","list_outputs","inspect_media","prepare_environment","change_node","apply_environment","discard_environment","add_model","inspect_model","remove_model","restore_model","get_admin_operation"])
     assert.ok(list.result.tools.some(t => t.name === name));
   const upload=list.result.tools.find(t=>t.name==='upload_media');
+  const image=list.result.tools.find(t=>t.name==='get_image');
+  assert.equal(image._meta['openai/outputTemplate'],image._meta.ui.resourceUri);
+  assert.deepEqual(image.outputSchema.required.sort(),['delivery','filename','mimeType','url']);
+  const viewer=await (await request(jwt,'resources/read',{uri:image._meta.ui.resourceUri})).json();
+  assert.match(viewer.result.contents[0].mimeType,/profile=mcp-app/);
+  assert.match(viewer.result.contents[0].text,/<img hidden/);
   const audio=list.result.tools.find(t=>t.name==="get_audio"),
     part=list.result.tools.find(t=>t.name==="read_audio_part");
   assert.deepEqual(part._meta.ui.visibility,["app"]);

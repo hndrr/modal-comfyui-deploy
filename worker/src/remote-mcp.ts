@@ -1,5 +1,5 @@
 import {receiptLink} from "./job-review.ts";
-import {callSavedMedia, savedMediaTools} from "./saved-media.ts";
+import {callSavedMedia, imageOutput, savedMediaTools} from "./saved-media.ts";
 import {callSavedCatalog, savedCatalogRequest} from "./saved-catalog.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -13,6 +13,7 @@ import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
+import { IMAGE_VIEWER_URI, imageViewerHtml } from "./image-viewer.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
@@ -56,6 +57,10 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
+        if (name === "get_image") {
+          if (!browserOrigin) return failure("Missing split browser origin.");
+          return callSavedMedia(send,name,args,browserOrigin);
+        }
         if (name === "upload_media") return uploadMedia(send,args,fetch,blobHosts);
         if (name === "list_models") return await listModels(send,args);
         if (name === "cancel_job" || name === "get_job_progress") {
@@ -163,8 +168,13 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   server.registerTool("get_history",{description:"Read saved job history, output filenames, errors and timing without starting ComfyUI. diagnose prefers a failed job in the recent history window. Saved records are not live progress; use get_job_progress for that.",annotations:read,
     inputSchema:{action:z.enum(["list","diagnose"]),prompt_id:z.string().optional(),limit:z.number().int().min(1).max(100).optional()}},
     a=>call("get_history",a));
-  server.registerTool("get_image",{description:"Return a generated output image inline using its history filename.",annotations:read,
-    inputSchema:{filename:relative,subfolder:relative.optional()}},a=>call("get_image",{...a,action:"get"}));
+  server.registerResource("image-viewer",IMAGE_VIEWER_URI,{mimeType:PLAYER_MIME},async()=>({
+    contents:[{uri:IMAGE_VIEWER_URI,mimeType:PLAYER_MIME,text:imageViewerHtml}],
+  }));
+  server.registerTool("get_image",{title:"View a generated image",
+    description:"View a saved PNG, JPEG or WebP using its history filename. Shows an image viewer and always returns an authenticated link to open or save the image. Include that link in your reply; do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
+    _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
+    inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
   server.registerResource("video-player", PLAYER_URI, {mimeType:PLAYER_MIME}, async () => ({
     contents:[{uri:PLAYER_URI, mimeType:PLAYER_MIME, text:playerHtml}],
   }));
