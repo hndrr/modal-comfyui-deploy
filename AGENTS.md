@@ -4,7 +4,7 @@
 
 - Modal上のComfyUIは、通常構成（`comfyapp.py`）とCPU/GPU分離構成（`splitapp.py`）を区別し、変更対象に応じて[通常構成](docs/guides/comfyui-modal.md)・[分離構成](docs/guides/comfyui-split.md)の手順を参照する。
 - Cloudflare側は`worker/`のWorkersがModalへの中継とMCPの入口を担い、Accessで認証する。[Cloudflare Accessの手順](docs/operations/cloudflare-access.md)と、MCPに関わる変更では[MCPの管理手順](docs/mcp/setup.md)を参照する。認証・中継を変更した場合は、Modal側との接続と未認証アクセスの拒否も確認する。
-- 検証は[CIの説明](docs/operations/ci.md)と既存のテストを優先し、画面に関わる変更は対象画面も確認する。`worker/`の変更では、対象の既存テストと`npm run typecheck`を使う。
+- 検証は[テストとCIの説明](tests/README.md)と既存のテストを優先し、画面に関わる変更は対象画面も確認する。`worker/`の変更では、対象の既存テストと`npm run typecheck`を使う。
 - Modalの実行環境は`modal.Image`で定義し、イメージのビルド・実行はModal側で行う。ローカルではDockerを起動・実行しない。
 - クラウドへの反映依頼に合わせて、Modalのビルド・デプロイは既存のModalの手順、Cloudflare Workerのデプロイは`worker/`の`npm run deploy`（Wrangler）を使う。両方にまたがる変更は、関連ドキュメントに沿って反映順序を確認する。
 

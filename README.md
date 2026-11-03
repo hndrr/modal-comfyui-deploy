@@ -82,8 +82,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 - [既知の不具合と注意点](docs/guides/known-issues.md)
 - [Cloudflare Access の設定](docs/operations/cloudflare-access.md)
 - [Modal プロファイルの運用](docs/operations/modal-profiles.md)
-- [CI 設定](docs/operations/ci.md)
-- [テスト実行方法](tests/README.md)
+- [テスト・CI ガイド](tests/README.md)
 
 ### 設計・検証記録
 <details>
@@ -109,22 +108,60 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 
 ```text
 .
-├── comfyapp.py              # 通常構成の Modal アプリ
-├── splitapp.py              # CPU/GPU 分離構成の Modal アプリ
-├── mediaapp.py              # split の保存済みメディア配信
-├── split_guis.py            # split の /models・/assets 用 GUI
-├── preserve_model.py        # モデル保存処理と Modal 上の Web GUI
-├── preserve_model_gui.py    # ローカルのモデル保存 GUI
-├── asset_manager.py         # Volume 操作
-├── asset_rpc.py             # 資産管理画面と Python バックエンド間の RPC
-├── comfy_split/             # split の実行・状態管理・ストレージ
-├── web/                     # 資産管理画面（React + Hono）
-├── worker/                  # Cloudflare Access の認証・中継・MCP 入口
-├── mcp/                     # MCP パッケージ設定・CLI ヘルパー・対応表生成
-├── extensions/              # 同梱の ComfyUI 拡張
-├── scripts/                 # Volume 操作・モデル準備・検証・Modal CLI ラッパー
-├── docs/                    # 各種ガイド・設計資料
-└── tests/                   # Python の機能別テスト
+├── comfyapp.py                     # 通常構成の Modal アプリ（CPU/GPU 同一コンテナ）
+├── splitapp.py                     # CPU/GPU 分離構成の Modal アプリ（オンデマンド GPU）
+├── mediaapp.py                     # split の保存済みメディア配信専用 CPU アプリ
+├── split_guis.py                   # split の /models・/assets 用 Web GUI
+├── preserve_model.py               # モデル保存処理と Modal 上の Web GUI
+├── preserve_model_gui.py           # ローカル環境のモデル保存 GUI
+├── asset_manager.py                # Modal Volume 操作ツール
+├── asset_rpc.py                    # 資産管理画面と Python バックエンド間の RPC
+│
+├── comfy_split/                    # split 構成のバックエンド実装
+│   ├── gateway.py                  # HTTP/WebSocket 受付とリクエスト中継
+│   ├── modal_proxy.py              # ASGI パス再エンコードと認証付きプロキシ
+│   ├── worker.py                   # オンデマンド GPU ワーカーの実行処理
+│   ├── runtime.py / startup.py     # コンテナライフサイクルと初期化画面制御
+│   ├── cpu_snapshot.py             # CPU Memory Snapshot による復元
+│   ├── storage.py / state.py       # Volume ストレージ・ジョブ状態台帳の管理
+│   └── node_packs.py / extensions.py # ノードパック自動更新と拡張機能の配布
+│
+├── extensions/                     # 同梱の ComfyUI 拡張機能
+│   ├── ComfyUI-Modal-Bridge/       # CPU 生成ガードとジョブ整形（split 構成に必須）
+│   └── ComfyUI-Modal-Control/      # GPU 稼働状態表示とモード切替用 UI パネル
+│
+├── web/                            # 資産管理画面（Volume ファイルブラウザ）
+│   ├── src/                        # React フロントエンド
+│   └── server/                     # Hono バックエンドサーバー
+│
+├── worker/                         # Cloudflare Worker（認証・中継・MCP 入口）
+│   ├── src/                        # Access 認証・WebSocket 中継・MCP ハンドラー
+│   ├── tests/                      # Worker の自動テストスイート
+│   └── wrangler.jsonc              # Cloudflare Worker 設定ファイル
+│
+├── mcp/                            # MCP（Model Context Protocol）連携パッケージ
+│   ├── remote-call.mjs             # MCP リモート呼び出しスクリプト
+│   ├── upload.mjs                  # 非対話環境向け素材アップロードヘルパー
+│   └── surface.json                # 上流ツール対応定義
+│
+├── scripts/                        # 運用・検証・ユーティリティスクリプト
+│   ├── modal.sh                    # プロファイル切り替え対応の Modal CLI ラッパー
+│   ├── test_standalone.py          # Python 単体テスト共通ランナー
+│   ├── prepare_models.py           # モデル一括ダウンロードスクリプト
+│   ├── move_volume_file.py         # Volume 間ファイル移動スクリプト
+│   └── verify_*.py                 # コンテナ内 API・アイドル・Bridge スモークテスト
+│
+├── docs/                           # 各種ドキュメント
+│   ├── guides/                     # 各構成・機能の利用ガイド
+│   ├── operations/                 # Cloudflare Access・Modal プロファイル運用
+│   ├── mcp/                        # MCP 利用・設定・ツール仕様
+│   └── design/                     # アーキテクチャ設計資料・技術検証記録
+│
+└── tests/                          # Python テストスイート
+    ├── standard/                   # 通常構成の回帰テスト
+    ├── split/                      # 分離構成（Gateway/Worker/Snapshot等）のテスト
+    ├── assets/                     # 資産管理・RPC のテスト
+    └── models/                     # モデル準備・保存処理のテスト
 ```
 
 ---
