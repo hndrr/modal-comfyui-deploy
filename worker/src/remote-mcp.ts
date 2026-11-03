@@ -11,8 +11,8 @@ import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
-import { AUDIO_PLAYER_URI, audioPlayerHtml } from "./audio-player.ts";
-import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
+import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URI, audioPlayerHtml } from "./audio-player.ts";
+import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
 const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsWith("/") &&
@@ -96,9 +96,16 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
         }
         return await r.json<CallToolResult>();
       }
+      if (name==="get_audio" && args.byte_offset===undefined && args.chunk_bytes===undefined) break;
       await new Promise(resolve=>setTimeout(resolve,Math.min(1500,Math.max(0,deadline-Date.now()))));
     }
-    return failure("Split CPU is starting. Retry after 2 seconds; keep the same request_id. No tool was executed.");
+    if (name==="get_audio" && args.byte_offset===undefined && args.chunk_bytes===undefined) {
+      const {prompt_id,index=0}=audioSchema.parse(args);
+      return {structuredContent:{delivery:"starting",prompt_id,index},content:[{type:"text",
+        text:"The audio player is waiting for split to start. No generation was submitted. Clients without a player can retry get_audio."}]};
+    }
+    const waiting=failure("Split CPU is starting. Retry after 2 seconds; keep the same request_id. No tool was executed.");
+    return name==="read_audio_part" ? {...waiting,_meta:{"split/starting":true}} : waiting;
   } catch {
     return failure(name==="enqueue_workflow" ?
       "No receipt available. Retry only with the SAME request_id and unchanged workflow." : "Split CPU request failed; retry the read.");
@@ -156,15 +163,17 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI},
     annotations:read,inputSchema:videoInputs}, a=>callSplit(send,"get_video",a,browserOrigin));
   server.registerTool("get_audio",{title:"Retrieve generated audio",
-    description:"Play a saved WAV, FLAC, MP3, Ogg or Opus from a completed split prompt_id in the audio player. Use this tool instead of posting the /view URL. Other MCP clients can read native audio or byte ranges. Does not generate.",
-    _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI},
-    annotations:read,inputSchema:audioInputs}, a=>callSplit(send,"get_audio",a,browserOrigin));
-  server.registerResource("audio-player", AUDIO_PLAYER_URI, {mimeType:PLAYER_MIME}, async () => ({
-    contents:[{uri:AUDIO_PLAYER_URI, mimeType:PLAYER_MIME, text:audioPlayerHtml}],
-  }));
+    description:"Play saved audio. In chat, call with only prompt_id and optional index: show the player and include the returned authenticated link as a fallback. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI,"openai/widgetAccessible":true},
+    annotations:read,inputSchema:audioInputs,outputSchema:audioOutput}, a=>callSplit(send,"get_audio",a,browserOrigin));
+  // A client may still hold the v1 tool descriptor until its next tools/list.
+  for (const uri of [AUDIO_PLAYER_URI,PREVIOUS_AUDIO_PLAYER_URI])
+    server.registerResource(uri===AUDIO_PLAYER_URI?"audio-player":"previous-audio-player",uri,{mimeType:PLAYER_MIME},async()=>({
+      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerHtml}],
+    }));
   server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
-    annotations:read,inputSchema:audioPartInputs}, a=>callSplit(send,"read_audio_part",a,browserOrigin));
+    annotations:read,inputSchema:audioPartInputs,outputSchema:audioOutput}, a=>callSplit(send,"read_audio_part",a,browserOrigin));
   const transport = new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
   await server.connect(transport);
   try { return await transport.handleRequest(request); } finally { await server.close(); }
