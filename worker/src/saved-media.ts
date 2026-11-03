@@ -17,7 +17,7 @@ export function mediaSender(raw:string, hostname:string, credentials:Headers):Se
     throw new Error("Invalid saved-media binding");
   return (path,init)=>{
     const target=new URL(path,url.origin);
-    if (target.origin!==url.origin || !/^\/(?:view|api\/view|history\/[0-9a-f-]+|outputs\/[0-9a-f-]+)$/.test(target.pathname) ||
+    if (target.origin!==url.origin || !/^\/(?:view|api\/view|history\/[0-9a-f-]+|outputs\/[0-9a-f-]+|catalog\/(?:models|workflows|history|job-workflow))$/.test(target.pathname) ||
         !["GET","HEAD"].includes(init.method || "GET")) throw new Error("Invalid media operation");
     const headers=new Headers({"Modal-Key":key,"Modal-Secret":secret,"X-Modal-Execution-Mode":"split"});
     const supplied=new Headers(init.headers);

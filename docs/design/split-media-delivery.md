@@ -1,13 +1,14 @@
 # 保存済みメディアの配信と R2 の将来案
 
-## 現在の構成：原本は Modal Volume、取得は配信用 CPU
+## 現在の構成：原本は Modal Volume、取得は参照用 CPU
 
-生成済みの画像・音声・動画を取得するために ComfyUI を起動しない。
+生成済みメディア・保存済みワークフロー・履歴・モデルファイルを参照するために ComfyUI を起動しない。
 Worker が認証したリクエストを、独立した `mediaapp.py` の配信用 CPU に渡す。
 ここでいう「アプリ」は Modal のデプロイ単位。利用者が別の画面やログイン先を使うという意味ではない。
 既存の HTTPS URL を使い、ファイルも複製せず同じ Volume から読む。
 このアプリは Python 標準ライブラリで出力ファイルと保存済みジョブ記録を読む。
-ComfyUI・PyTorch・Node.js・artokun MCP を起動せず、モデル・入力・ノード環境の Volume も接続しない。
+ComfyUI・PyTorch・Node.js・artokun MCP を起動せず、output・data・models Volume だけを接続する。
+モデルの重みはロードせずファイル情報だけを読む。入力・ノード環境の Volume は接続しない。
 
 ```mermaid
 flowchart TD
@@ -16,8 +17,8 @@ flowchart TD
   OAuth --> Worker[Cloudflare Worker]
   Access --> Worker
   Worker -->|初期化・ツール一覧| Edge[Worker 内で応答]
-  Worker -->|保存済み画像・音声・動画・出力一覧| Media[配信用 CPU：必要時だけ起動]
-  Media --> Output[Modal Volume：出力とジョブ記録]
+  Worker -->|保存済みメディア・グラフ・履歴・モデル一覧| Media[参照用 CPU：必要時だけ起動]
+  Media --> Output[Modal Volume：出力・グラフ・モデル・ジョブ記録]
   Worker -->|ノード照会・グラフ編集・素材投入| Split[split CPU：ComfyUI / artokun MCP]
   Split -->|生成ジョブ| GPU[GPU：ComfyUI]
   GPU --> Output
@@ -27,8 +28,12 @@ flowchart TD
 | --- | --- |
 | MCP 初期化・ツール一覧・静的プレイヤー HTML | Worker のみ |
 | `get_image`・`get_audio`・`get_video`・`read_audio_part`・`list_outputs` | 配信用 CPU のみ |
+| `list_models` の既定の保存ファイル一覧 | 参照用 CPU のみ。ComfyUI の認識確認ではない |
+| `get_workflow(list)`、`get(format:ui)`、保存済み API グラフの `get` | 参照用 CPU のみ |
+| `get_history(list/diagnose)`・`get_job_workflow` | 参照用 CPU のみ。保存時点の記録 |
+| `list_models(source:runtime)`、UI→API 変換、グラフ解析・検証 | 従来の split CPU。現在のノード定義を使う |
 | `/view`・`/api/view` の元の output ファイル | 配信用 CPU のみ |
-| 入力・一時画像、`preview` / `channel` 付き変換、ノード・通常履歴照会 | 従来の split CPU |
+| 入力・一時画像、`preview` / `channel` 付き変換、ノード・ライブ進捗照会 | 従来の split CPU |
 | 生成 | 従来の split CPU と GPU |
 
 配信用 CPU は 0.25 CPU / 512 MiB、最小0台・最大1台。起動待ちは実際のファイル要求で処理し、
@@ -43,6 +48,19 @@ ETag / If-Range に対応する。範囲外は416、削除済みは404。途中�
 Worker は固定された配信先にだけ接続し、ユーザーの JWT・Cookie・Authorization は渡さない。
 保存先外へのパス、シンボリックリンク、隠しファイル、生成・削除・書き込み操作は受け付けない。
 配信失敗時は再試行可能な読取エラーを返し、ComfyUI へ自動迂回しない。
+
+モデルの既定一覧は Volume 内のディレクトリと通常ファイルを読み、サイズ・更新日時を返す。
+ComfyUI が追加登録する別名カテゴリや拡張子の制約は推測しない。実際にローダーで選べるかは
+`source: "runtime"` で照会する。モデルを追加・削除しても、次の保存ファイル一覧で Volume を再読み込みする。
+
+ワークフローは `data/user/default/workflows` の日本語名・サブフォルダを扱う。
+API 形式で保存されていれば直接返す。UI→API 変換は現在のノード定義を必要とするため、
+保存ファイルが UI 形式の場合だけ既存 ComfyUI 経路を使う。ノード定義のキャッシュは追加しない。
+取得失敗や壊れた JSON を「変換が必要」と見なして ComfyUI を起動しない。
+
+履歴では CPU の台帳に GPU の完了記録を重ね、CPU が停止中に完了した結果も取得する。
+`live: false` を付け、実行中の最新状態と区別する。診断は指定 ID、または直近の指定件数内の
+失敗を優先する。`get_job_workflow` は投入したグラフだけを返し、認証用 extra_data は返さない。
 
 `prompt_id` で取得する操作は既存ジョブ記録の保持期間（7日）に従う。記録が期限切れでも、
 原本が残っていればファイル名によるブラウザ取得や `get_image` は可能。今回、独立した永続ライブラリ索引は追加しない。

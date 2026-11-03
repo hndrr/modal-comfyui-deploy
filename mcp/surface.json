@@ -49,7 +49,7 @@
     {"actions":["get","set","get_ui","set_ui"],"mode":"deferred","note":"上流のローカル設定／UI の個人設定はクライアント間で暗黙共有しない。"}
   ],
   "get_history": [
-    {"actions":["list","diagnose"],"mode":"direct","note":"同名ツールを使用。"},
+    {"actions":["list","diagnose"],"mode":"split","note":"参照用 CPU が保存済み台帳・GPU 完了記録から出力・エラー・時間を返す。ライブ状態ではない。"},
     {"actions":["stats","suggest"],"mode":"deferred","note":"上流の一時的なプロセス内の生成履歴 DB は split の永続ジョブ台帳とは異なる。"}
   ],
   "get_image": [
@@ -62,7 +62,7 @@
     {"actions":["logs"],"mode":"deferred","note":"CPU/GPU の運用ログは Modal 側。ジョブの失敗は get_history(diagnose)。"}
   ],
   "get_workflow": [
-    {"actions":["list","get","analyze","query","slice","strip"],"mode":"direct","note":"保存ライブラリ内の相対名に限定。"},
+    {"actions":["list","get","analyze","query","slice","strip"],"mode":"direct","note":"保存ライブラリ内の相対名に限定。一覧・元 JSON・保存済み API グラフの取得は参照用 CPU で代替。UI→API 変換と解析には上流と現在のノード定義を使う。"},
     {"actions":["from_image","prompt_director"],"mode":"deferred","note":"画像内のグラフ抽出・プロンプト指示の抽出は未対応。既知の生成 ID は get_job_workflow。"}
   ],
   "install_comfyui": [

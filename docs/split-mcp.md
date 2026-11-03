@@ -20,7 +20,7 @@ codex mcp add comfyui-remote --url https://split.example.com/mcp
 codex mcp login comfyui-remote
 ```
 
-最初は「保存済みのワークフローを一覧にして。まだ生成しないで」と頼んでみてください。接続やツール一覧の取得だけでは Modal は起動しません。ワークフローやモデルの照会、素材の保存には CPU を使い、生成を投入すると GPU が起動します。
+最初は「保存済みのワークフローを一覧にして。まだ生成しないで」と頼んでみてください。接続やツール一覧の取得だけでは Modal は起動しません。保存ファイル・モデル一覧・履歴の照会では小さな参照用 CPU だけを使います。変換・解析・素材保存には ComfyUI CPU を使い、生成を投入すると GPU が起動します。
 
 ## 添付を使って1件生成する
 
@@ -61,6 +61,10 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 ## 生成中・生成後にできること
 
 保存済み画像・音声・動画と `list_outputs` は専用の配信用 CPU が Volume を読みます。ComfyUI CPU・GPU は起動しません。取得中は配信用 CPU の料金が発生し、利用が終わると0台に戻ります。原本は Modal に残り、取得で削除しません。`get_image` は8 MiBまでインラインで返し、大きい画像は認証付きリンクを返します。
+
+ワークフロー一覧・元 JSON（`get_workflow` の `format: "ui"`）・保存済み API グラフの取得と、`get_history`・`get_job_workflow` も参照用 CPU だけで応答します。UI 形式から API 形式へ変換する場合は、現在のノード定義を使うため ComfyUI CPU が起動します。履歴は保存時点の記録なので、実行中の最新状態には `get_job_progress` を使ってください。
+
+`list_models` は既定で保存ファイルの一覧・サイズ・更新日時を返します。保存されていることと、ComfyUI が利用できることは別です。「ローダーで実際に選べるモデルを確認して」と頼む場合は `source: "runtime"` を指定し、ComfyUI CPU で認識一覧を取得します。
 
 | 聞きたいこと | 使うツールと答え |
 | --- | --- |
