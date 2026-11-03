@@ -17,6 +17,8 @@ Modal 上で ComfyUI を動かし、Hugging Face のモデルや生成素材を 
 
 ## クイックスタート
 
+agentにセットアップを任せる場合は、[依頼文とセットアップ手順](docs/guides/agent-setup.md)を使ってください。新規導入・既存環境の再構築に対応し、`scripts/setup.sh` で環境準備と対象ごとのデプロイを実行できます。
+
 ### 1. 環境準備
 
 ```bash
@@ -76,6 +78,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 ## ドキュメント一覧
 
 ### 利用・運用ガイド
+- [agent向けセットアップ手順・依頼文](docs/guides/agent-setup.md)
 - [通常構成ガイド](docs/guides/comfyui-modal.md)
 - [CPU/GPU 分離構成ガイド](docs/guides/comfyui-split.md)
 - [Split app の任意拡張ノード](docs/guides/split-integrations.md)
