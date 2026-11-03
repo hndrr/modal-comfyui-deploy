@@ -32,14 +32,14 @@ Modal CLI でログインし、`.env` を必要に応じて編集してくださ
 通常構成の開発・デプロイ:
 
 ```bash
-uv run modal serve comfyapp.py
-uv run modal deploy comfyapp.py
+./scripts/modal.sh serve comfyapp.py
+./scripts/modal.sh deploy comfyapp.py
 ```
 
 CPU/GPU 分離構成は、別の Modal App としてデプロイします。
 
 ```bash
-uv run modal deploy splitapp.py
+./scripts/modal.sh deploy splitapp.py
 ```
 
 通常構成は `.env` を自動で読み込み、設定済みのシェル環境変数を優先します。GPU・Volume・追加ノードの設定は、それぞれの構成のガイドを参照してください。
@@ -63,8 +63,7 @@ uv run modal deploy splitapp.py
 ├── extensions/              # 同梱の ComfyUI 拡張
 ├── scripts/                 # Volume 操作・モデル準備・検証・Modal CLI ラッパー
 ├── docs/                    # 使い方・運用・MCP・設計記録・説明用画像
-├── tests/                   # Python の機能別テスト
-└── vendor/                  # 配布元から取り込んだコード
+└── tests/                   # Python の機能別テスト
 ```
 
 デプロイと GUI の起動に使う Python ファイルはルートに置き、補助コマンドは `scripts/` にまとめています。コマンド例は、特記がなければリポジトリのルートで実行します。

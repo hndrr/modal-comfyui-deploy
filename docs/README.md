@@ -44,7 +44,7 @@
 | --- | --- |
 | [MCP の経路](design/split-mcp-routing.md) | 操作ごとの実行先と CPU・GPU を起動する条件 |
 | [メディア配信](design/split-media-delivery.md) | 現在の参照用 CPU と、未実装の R2 配信案 |
-| [split のストレージ](design/split-storage.md) | 保存先の役割と移行記録 |
+| [split のストレージ](design/split-storage.md) | 保存先の役割と当時の一度限りの移行方針 |
 | [split の実行環境とストレージ](design/runtime-and-storage.md) | Volume とイメージの使い分け |
 | [Access と Worker](design/cloudflare-access.md) | 認証・WebSocket 中継・迂回経路の遮断 |
 | [CPU Memory Snapshots](design/cpu-memory-snapshot.md) | split への組み込みと独立検証の記録 |
