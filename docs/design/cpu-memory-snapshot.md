@@ -22,7 +22,7 @@ MODAL_PROFILE="<profile>" .venv/bin/python scripts/verify_cpu_snapshot.py \
   --output /private/tmp/cpu-snapshot-boots.json --boots 2
 ```
 
-本体への反映記録は`docs/validation/2026-09-20/cpu-memory-snapshot-deploy/`に保存する。
+本体への反映記録は Git 管理外の `docs/validation/<検証日>/cpu-memory-snapshot-deploy/` に保存する。
 
 ### 本体での確認結果
 
@@ -62,11 +62,11 @@ Modalは実行先のワーカーの種類ごとにSnapshotを作成するため�
 
 ## 構成
 
-検証コードは[scripts/probe_cpu_snapshot.py](../scripts/probe_cpu_snapshot.py)。
+検証コードは[scripts/probe_cpu_snapshot.py](../../scripts/probe_cpu_snapshot.py)。
 
 - 専用アプリ：`comfyui-cpu-snapshot-probe`
-- 元イメージ：`im-BUQdzUJzuhhjHZzFg6a8yl`
-- 固定環境：`env-cd487277be974529ac2a0969e52cedac`
+- 元イメージ：環境変数 `CPU_SNAPSHOT_PROBE_IMAGE_ID` で指定
+- 固定環境：環境変数 `CPU_SNAPSHOT_PROBE_ENVIRONMENT` で指定
 - CPU 2、メモリ8192 MiB、GPUなし、min_containers 0、max_containers 1。
 - 既存の環境Volumeを読み取り専用でマウント。モデル・入力・出力・ジョブ状態の共有Volumeはマウントしていない。
 - user・DB・出力は一時コンテナ内。外向き通信は遮断、APIキー等のSecretは未指定、公開HTTPエンドポイントなし。
@@ -78,14 +78,18 @@ Modalは実行先のワーカーの種類ごとにSnapshotを作成するため�
 
 ## 再現方法
 
+検証対象の split と同じ Modal プロファイルで、次の値を確認する。イメージ ID は Modal ダッシュボードの対象 CPU 関数で使うイメージ、環境 ID は MCP の `get_split_status` が返す稼働版 `active` を使う。両者が同じ ComfyUI・拡張の構成を参照していることを確認する。実値は Git 管理外の設定で扱い、以下のプレースホルダーを置き換える。
+
 ```sh
+export CPU_SNAPSHOT_PROBE_IMAGE_ID='<PROBE_IMAGE_ID>'
+export CPU_SNAPSHOT_PROBE_ENVIRONMENT='<PROBE_ENVIRONMENT_ID>'
 scripts/modal.sh deploy scripts/probe_cpu_snapshot.py
 MODAL_PROFILE="<profile>" .venv/bin/python scripts/probe_cpu_snapshot.py \
   --output /private/tmp/comfy-cpu-snapshot-results
 scripts/modal.sh app stop comfyui-cpu-snapshot-probe
 ```
 
-Snapshotはデプロイしたアプリで作成されるため、`modal run`による一時アプリで代用しない。環境IDとイメージIDは今回の測定対象に固定してある。再利用時は実在する組み合わせに更新して再デプロイする。試験途中で失敗・中断した場合も、最後の専用アプリ停止を行う。
+Snapshotはデプロイしたアプリで作成されるため、`modal run`による一時アプリで代用しない。指定した環境 ID とイメージ ID は検証コンテナにも渡す。対象を変更した場合は再デプロイする。試験途中で失敗・中断した場合も、最後の専用アプリ停止を行う。
 
 `boots.json`の`comfyInitSeconds`・`totalInitSeconds`は**保存時の初期化時間**であり、復元時にその初期化を再実行した時間ではない。実際の待ち時間は`clientSeconds`。
 
@@ -98,11 +102,11 @@ Snapshotはデプロイしたアプリで作成されるため、`modal run`に�
 
 ## 記録と終了状態
 
-測定記録は`docs/validation/2026-09-20/cpu-memory-snapshot/`に保存した。
+測定記録は Git 管理外の `docs/validation/<検証日>/cpu-memory-snapshot/` に保存する。
 
 - `boots.json`：全起動の時間、コンテナID、初期化ID、定義のハッシュ。
 - `app.log`：Snapshot作成・復元のログ。
 - `run.log`：各起動前後のCPU停止確認。
 - `all-idle.json`：専用アプリ停止後の最終確認。
 
-19:35:05 JSTに検証用アプリの停止が完了した。19:37:42 JST、管理APIから運用側の全6関数でrunners・backlogが0であることを確認した。検証アプリもstopped・Tasks 0で、コンテナ一覧は空だった。既存のデプロイとノード選択は変更していない。
+検証後は、Modal の管理画面・管理 API で専用アプリの停止と、対象関数の runners・backlog が 0 であることを確認する。実環境の停止時刻や設定変更の履歴は、Git 管理外の検証記録に残す。

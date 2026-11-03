@@ -40,11 +40,14 @@ Modal のプロキシは [permessage-deflate（RFC 7692）に未対応](https://
 
 切り分けるときは、圧縮の有無を変えて接続すると一発で分かります。
 
+`<COMFYUI_MODAL_ORIGIN>` は `comfyapp.py` のデプロイ出力にある `ui` の Web URL に置き換えてください。パスと末尾の `/` は除きます。
+
 ```bash
 uv run --with websockets python -c "
 import asyncio, websockets
 async def main():
-    url = 'wss://<workspace>--comfyui-ui.modal.run/ws?clientId=diag'
+    origin = '<COMFYUI_MODAL_ORIGIN>'
+    url = origin.replace('https://', 'wss://', 1) + '/ws?clientId=diag'
     async with websockets.connect(url, open_timeout=30) as ws:   # 既定=圧縮あり
         print(await asyncio.wait_for(ws.recv(), timeout=15))
 asyncio.run(main())
@@ -157,7 +160,7 @@ COMFYUI_REQUIRES_PROXY_AUTH=on uv run modal serve comfyapp.py
 
 ブラウザからそのまま使いたい場合は、Cloudflare Access を ComfyUI の手前に置き、Cloudflare Worker に `Modal-Key` / `Modal-Secret` を付与させる構成が使えます。ComfyUI 本体にも Modal にもログイン機能を足さずに、メールのワンタイム PIN や Google ログインで利用者を制限できます。
 
-構成の説明とセットアップ手順は [cloudflare-access.md](cloudflare-access.md) にまとめています。
+構成の説明とセットアップ手順は [cloudflare-access.md](../operations/cloudflare-access.md) にまとめています。
 
 ## アイドル時のscale-to-zero
 

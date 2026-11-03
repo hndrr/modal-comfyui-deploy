@@ -9,11 +9,11 @@ ComfyUI標準のワークフロー作成・編集・保存・読み込みに、�
 ./scripts/modal.sh deploy splitapp.py
 ```
 
-このコマンドは、[Modalプロファイルの設定](modal-profiles.md)に従ってデプロイします。
+このコマンドは、[Modalプロファイルの設定](../operations/modal-profiles.md)に従ってデプロイします。
 拡張・追加ノード・中継の有効化設定は既定で無効です。設定方法と取得・更新手順は[任意拡張](split-integrations.md)を参照してください。
 
 接続先はデプロイ出力の `ui` URLです。Modal Proxy Authが必須で、`COMFYUI_REQUIRES_PROXY_AUTH`による無効化はできません。
-ブラウザで使う場合は、[Cloudflare Accessの設定手順](cloudflare-access.md)に従い、Workerの転送先設定、Custom Domain、Accessアプリの宛先と許可ポリシーを設定します。`MODAL_ORIGINS`にURLを追加するだけでは公開・認証の設定は完了しません。
+ブラウザで使う場合は、[Cloudflare Accessの設定手順](../operations/cloudflare-access.md)に従い、Workerの転送先設定、Custom Domain、Accessアプリの宛先と許可ポリシーを設定します。`MODAL_ORIGINS`にURLを追加するだけでは公開・認証の設定は完了しません。
 
 ## 起動と停止
 
@@ -21,7 +21,7 @@ CPUサーバー・GPUワーカーとも最小0台・最大1台、停止待ちは
 30秒は停止待ちの設定値であり、実際に0台へ戻るまでの時間はModalの制御に依存する。
 画面を閉じ、生成キュー・環境更新がなくなるとCPUも自動停止する。
 画面のWebSocket接続や定期リクエストが続く間はCPUが稼働する。
-次に開くときはCPUコンテナの起動・復元を待つ。CPU Memory Snapshotが利用可能で、保存時と有効な環境版が一致していれば、初期化済みのComfyUIを再利用する。再利用できない場合は通常起動する。復元後はジョブ状態とユーザーデータを読み直す。[CPU復元の詳細](cpu-memory-snapshot.md#本体への組み込み)。
+次に開くときはCPUコンテナの起動・復元を待つ。CPU Memory Snapshotが利用可能で、保存時と有効な環境版が一致していれば、初期化済みのComfyUIを再利用する。再利用できない場合は通常起動する。復元後はジョブ状態とユーザーデータを読み直す。[CPU復元の詳細](../design/cpu-memory-snapshot.md#本体への組み込み)。
 バックグラウンド生成・環境更新中はModalのautoscalerでCPUを一時的に1台維持し、
 処理と保存の完了後に最小0台へ戻す。GPUを常時起動するモードでは、画面を閉じてもCPUとGPUを維持する。
 コンテナ停止後も保存済みVolumeのストレージ料金は発生する。
@@ -49,7 +49,7 @@ CPU Snapshotの参照は`comfy-split-environments/.cpu-snapshots/`に記録す�
 
 完了時刻を記録した終了済みジョブの詳細履歴は7日後に清掃対象となる。結果不明のジョブは期限では削除しない。再実行を防ぐ最小限の記録は残す。
 `.split-temp`内のファイルは更新から24時間以上経過し、履歴や処理から参照されていなければ清掃対象となる。通常の生成物・入力・保存済みワークフローは自動削除しない。
-清掃は分離モードのアイドル時に、GPUコンテナと待機呼び出しがともに0であることを確認して行う。停止中に清掃のためのCPU/GPU起動は行わない。[保存構成の設計・変更記録](design/split-storage.md)。
+清掃は分離モードのアイドル時に、GPUコンテナと待機呼び出しがともに0であることを確認して行う。停止中に清掃のためのCPU/GPU起動は行わない。[保存構成の設計・変更記録](../design/split-storage.md)。
 
 GPUは入力のreload後に実行し、出力のcommit後に結果を保存する。
 CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを共有しない。
@@ -73,7 +73,7 @@ CPUは出力をreloadしてから完了を通知する。稼働中のSQLiteを�
 停止中、起動待ち、使用中、停止待ち、常駐中、環境検証中を表示する。
 取得失敗時は停止と推測せず「確認できません」にする。
 表示のためにGPUワーカーを実行することはない。パネルに最終確認時刻と説明を表示する。キャンバス上の固定ボタン・独自ダイアログは設置しない。
-UIは独立した [ComfyUI-Modal-Control](../extensions/ComfyUI-Modal-Control/README.md) に置く。
+UIは独立した [ComfyUI-Modal-Control](../../extensions/ComfyUI-Modal-Control/README.md) に置く。
 標準の `WEB_DIRECTORY` によって配信し、ゲートウェイによる `/split.js` の追加配信は行わない。
 ComfyUI本体を変更せず、追加のcustom_nodes検索パスから読み込む。
 
@@ -158,7 +158,7 @@ uv sync --locked --extra split-test
 uv run --locked --extra split-test python scripts/test_standalone.py --suite split
 ```
 
-全体テストと任意拡張との連携検証は[テストの説明](../tests/README.md)を参照。任意拡張の実パッケージとの連携テストは各拡張repoで実行する。
+全体テストと任意拡張との連携検証は[テストの説明](../../tests/README.md)を参照。任意拡張の実パッケージとの連携テストは各拡張repoで実行する。
 
 実機ではGPUゼロのまま10分間の編集・保存・閲覧、生成とプレビュー、
 停止待ち設定30秒でのGPU停止、連続生成、再接続、Manager更新と失敗時復帰、モード往復を確認する。
@@ -195,7 +195,7 @@ MiniMax生成結果の参照を確認する。このスクリプトは出力Volu
 
 ComfyUIは`python main.py`で起動する。キュー読み取り・履歴・生成スレッド・一時ファイル削除の処理は上書きしない。分離モードの生成受付とGPUへの投入はGatewayが担当する。
 
-[ComfyUI-Modal-Bridge](../extensions/ComfyUI-Modal-Bridge/README.md)が、CPUへの直接投入を拒否する`PromptQueue.put`のガードと、ノード定義・ジョブ整形・CPU復元用の内部APIを提供する。これらの内部APIは公開Gatewayからアクセスできない。この拡張はsplitに必須で、任意のAgentBridge中継とは別物。
+[ComfyUI-Modal-Bridge](../../extensions/ComfyUI-Modal-Bridge/README.md)が、CPUへの直接投入を拒否する`PromptQueue.put`のガードと、ノード定義・ジョブ整形・CPU復元用の内部APIを提供する。これらの内部APIは公開Gatewayからアクセスできない。この拡張はsplitに必須で、任意のAgentBridge中継とは別物。
 
 Managerのインストール処理は候補環境へ中継する。`comfyapp.py`のWebSocket圧縮・user_managerソースパッチはsplitには適用しない。
 この境界を変更する際は、`scripts/verify_comfy_bridge.py`によるCPUガード・ジョブAPIの確認に加え、実モデルでの生成とプレビュー、通常出力・一時出力の保存、CPU再起動後の復元、重複実行の防止を確認する。

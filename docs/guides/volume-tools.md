@@ -2,20 +2,20 @@
 
 どちらも Modal CLI の既定アカウントに接続します。Volume はアカウントごとに別物なので、**アカウントを跨いだコピーや移動はできません**。
 
-複数アカウントを使い分けている場合のみ、`.modal-profile` の固定先が優先されます（[modal-profiles.md](modal-profiles.md)）。
+複数アカウントを使い分けている場合のみ、`.modal-profile` の固定先が優先されます（[modal-profiles.md](../operations/modal-profiles.md)）。
 
 ## Volume を別名へコピーする
 
-`rename_volume.py` は Modal Volume 間でデータをコピーするユーティリティです。実質的に Volume 名を移行したい時に使います。
+`scripts/rename_volume.py` は Modal Volume 間でデータをコピーするユーティリティです。実質的に Volume 名を移行したい時に使います。
 
 ```bash
-uv run python rename_volume.py <コピー元ボリューム名> <コピー先ボリューム名>
+uv run python scripts/rename_volume.py <コピー元ボリューム名> <コピー先ボリューム名>
 ```
 
 確認を省略する場合:
 
 ```bash
-uv run python rename_volume.py <コピー元> <コピー先> --yes
+uv run python scripts/rename_volume.py <コピー元> <コピー先> --yes
 ```
 
 仕様:
@@ -26,10 +26,10 @@ uv run python rename_volume.py <コピー元> <コピー先> --yes
 
 ## Volume 内のファイルを移動する
 
-`move_volume_file.py` は Modal Volume 内の単一ファイルまたはディレクトリを移動するユーティリティです。同じ Volume 内でのリネームにも、別 Volume への移動にも使えます。
+`scripts/move_volume_file.py` は Modal Volume 内の単一ファイルまたはディレクトリを移動するユーティリティです。同じ Volume 内でのリネームにも、別 Volume への移動にも使えます。
 
 ```bash
-uv run python move_volume_file.py \
+uv run python scripts/move_volume_file.py \
   comfy-model \
   diffusion_models/old-model.safetensors \
   comfy-model \
@@ -39,7 +39,7 @@ uv run python move_volume_file.py \
 別 Volume へ移動する例:
 
 ```bash
-uv run python move_volume_file.py \
+uv run python scripts/move_volume_file.py \
   comfy-inputs \
   uploads/example.png \
   comfy-outputs \

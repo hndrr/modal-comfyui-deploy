@@ -46,11 +46,11 @@ ValueError: I/O operation on closed file       ← 終了後のログ書き込�
 
 この 2 つはコンテナ内の `_build_launch_command()` で `os.environ` から読んでいます。`.env` はコンテナに送られない（送られるのは `comfyapp.py` 1 ファイルだけ）ため、**`.env` に `COMFYUI_SAGE_ATTENTION=off` と書いても既定の `on` のまま動いている**可能性があります。`COMFYUI_CLI_ARGS` も常に空として扱われている可能性があります。
 
-既定値と一致している限り表面化しないため、今まで問題になっていません。決着させるには次を実行し、`--use-sage-attention` が消えるかを見ます。
+既定値と一致している限り表面化しないため、今まで問題になっていません。決着させるには次を実行し、`--use-sage-attention` が消えるかを見ます。`<COMFYUI_MODAL_ORIGIN>` は、デプロイ出力に表示される `ui` の Web URL に置き換えてください（パス・末尾の `/` なし）。
 
 ```bash
 COMFYUI_SAGE_ATTENTION=off ./scripts/modal.sh deploy comfyapp.py
-curl -s https://<workspace>--comfyui-ui.modal.run/system_stats | grep -o '"argv":[^]]*]'
+curl -s "<COMFYUI_MODAL_ORIGIN>/system_stats" | grep -o '"argv":[^]]*]'
 ```
 
 消えれば推測は誤り、残っていれば届いていません。修正すると**挙動が変わる**（`off` にしていた人は本当に無効になる）ため、確認してから直す方針です。
@@ -64,4 +64,4 @@ curl -s https://<workspace>--comfyui-ui.modal.run/system_stats | grep -o '"argv"
 ## 運用上の注意
 
 - **`COMFYUI_REQUIRES_PROXY_AUTH=off` は認証なし**です。Modal の直 URL を知っている人は誰でも開けます。ここに `COMFYUI_MANAGER_INSTALL=on` を併用し、かつ実効の `security_level` がインストールを許す値（`normal` / `normal-` / `weak`）だと、**その人が任意のコードをインストールできる状態**になります。`config.ini` で `security_level = strong` を明示している場合は `COMFYUI_MANAGER_INSTALL=on` でもインストールは拒否されます（起動時に警告が出ます）
-- Volume・Secret・Proxy Auth トークン・デプロイ URL はすべて**ワークスペース単位**です。アカウントを切り替えたときの影響は [modal-profiles.md](modal-profiles.md) を参照してください
+- Volume・Secret・Proxy Auth トークン・デプロイ URL はすべて**ワークスペース単位**です。アカウントを切り替えたときの影響は [modal-profiles.md](../operations/modal-profiles.md) を参照してください
