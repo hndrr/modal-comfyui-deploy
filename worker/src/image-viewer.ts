@@ -21,13 +21,14 @@ function render(result){
   const file=result.content?.find(x=>x.type==="image");
   if(file && ["image/png","image/jpeg","image/webp"].includes(file.mimeType)){
     image.alt=info.filename;image.src="data:"+file.mimeType+";base64,"+file.data;image.hidden=false;
-  }else label.textContent="この画像は閲覧リンクから開けます。";
+  }else label.textContent=info.filename+"：閲覧リンクから開けます。";
 }
 image.onerror=()=>{image.hidden=true;label.textContent="画像を表示できません。閲覧リンクから開いてください。";};
 link.onclick=e=>{if(openLinks){e.preventDefault();send({id:2,method:"ui/open-link",params:{url:link.href}});}};
 function legacy(globals){
   const meta=globals?.toolResponseMetadata,result=meta?.mcp_tool_result || meta?.call_tool_result;
-  if(result)render(result);
+  if(result?.structuredContent || result?.isError)render(result);
+  else if(globals?.toolOutput && image.hidden)render({structuredContent:globals.toolOutput});
 }
 addEventListener("openai:set_globals",e=>legacy(e.detail?.globals));
 addEventListener("message",e=>{

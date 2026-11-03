@@ -56,3 +56,15 @@ test("ChatGPT globals also display images; oversized or undecodable images retai
   assert.equal(elements.a.hidden,true);
   assert.match(elements.span.textContent,/404/);
 });
+
+test("structured-only ChatGPT globals show the link without replacing a full MCP image",()=>{
+  const globals={toolOutput:result.structuredContent};
+  const {elements,handlers,receive}=viewer(globals);
+  assert.equal(elements.img.hidden,true);
+  assert.equal(elements.a.href,result.structuredContent.url);
+  receive({method:"ui/notifications/tool-result",params:result});
+  assert.equal(elements.img.hidden,false);
+  handlers["openai:set_globals"]({detail:{globals}});
+  assert.equal(elements.img.hidden,false);
+  assert.equal(elements.img.src,"data:image/png;base64,cG5n");
+});
