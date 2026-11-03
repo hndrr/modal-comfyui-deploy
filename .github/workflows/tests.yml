@@ -49,6 +49,7 @@ jobs:
               - 'comfy_split/extension_catalog.toml'
               - 'extensions/**/web/**'
               - 'scripts/modal.sh'
+              - 'scripts/setup.sh'
             web:
               - '.node-version'
               - '.github/workflows/tests.yml'
