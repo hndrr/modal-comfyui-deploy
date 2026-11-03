@@ -13,7 +13,7 @@ test("signed Access identity controls both transports before contacting an origi
     MODAL_ORIGINS: JSON.stringify({
       [split]: "https://split.modal.run", [other]: "https://models.modal.run",
     }),
-    TEAM_DOMAIN: team, POLICY_AUD: "aud", MODAL_KEY: "modal-id", MODAL_SECRET: "modal-secret",
+    TEAM_DOMAIN: ` \t${team}///\n`, POLICY_AUD: "aud", MODAL_KEY: "modal-id", MODAL_SECRET: "modal-secret",
     SPLIT_MCP_ACCESS: binding,
   };
   const keys = await generateKeyPair("RS256");

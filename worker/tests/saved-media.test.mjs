@@ -54,7 +54,7 @@ test("image links work for small and oversized files, including the legacy Comfy
   const small=await callSplit(send,"get_image",args,host);
   assert.deepEqual(paths.map(p=>new URL(p,host).pathname),["/split/startup","/view"]);
   assert.equal(small.structuredContent.delivery,"inline");
-  assert.match(small.content.find(c=>c.type==="text").text,/https:\/\/split.example.com\/view\?/);
+  assert.match(small.content.find(c=>c.type==="text").text,/https:\/\/split\.example\.com\/view\?/);
   let cancelled=false;
   const large=await callSplit(()=>{throw Error("ComfyUI must not start");},"get_image",args,host,undefined,
     async()=>new Response(new ReadableStream({cancel(){cancelled=true;}}),{headers:{"Content-Length":String(8*1024*1024+1)}}));

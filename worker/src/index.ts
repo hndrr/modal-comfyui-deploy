@@ -107,7 +107,10 @@ async function getKeySet(teamDomain: string) {
 }
 
 function normalizeTeamDomain(raw: string): string {
-  return raw.trim().replace(/\/+$/, "");
+  const domain = raw.trim();
+  let end = domain.length;
+  while (end > 0 && domain[end - 1] === "/") end--;
+  return domain.slice(0, end);
 }
 
 /**

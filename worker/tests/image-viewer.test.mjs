@@ -11,7 +11,7 @@ function viewer(openai){
   const handlers={},messages=[];
   const elements=Object.fromEntries(["img","span","a"].map(k=>[k,{hidden:true,removeAttribute(k){delete this[k];}}]));
   const parent={postMessage:m=>messages.push(m)};
-  runInNewContext(imageViewerHtml.match(/<script>([\s\S]*?)<\/script>/)[1],{
+  runInNewContext(imageViewerHtml.split("<script>")[1].split("</script>")[0],{
     window:{openai},parent,URL,document:{querySelector:k=>elements[k],body:{scrollHeight:100}},
     addEventListener:(n,f)=>{handlers[n]=f;},ResizeObserver:class{observe(){}},
   });
