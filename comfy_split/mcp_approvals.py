@@ -18,6 +18,7 @@ from comfy_split import input_media
 from comfy_split import mcp_policy as policy
 from comfy_split.config import DEPLOYMENT_ENV
 from comfy_split.state import body_digest
+from comfy_split.media_server import byte_range, version as file_version
 from comfy_split.storage import MOUNTS
 
 TTL = 15 * 60
@@ -247,6 +248,70 @@ def page(row, message=""):
     )
 
 
+async def review_asset(c, request, token, asset):
+    """Hash outside the controller lock and stream only the verified file range."""
+    def verified_file():
+        with policy.regular(Path(MOUNTS["input"]), asset["snapshot"]) as file:
+            before = file_version(os.fstat(file.fileno()))
+            if (hashlib.file_digest(file, "sha256").hexdigest() != asset["sha256"]
+                    or file_version(os.fstat(file.fileno())) != before):
+                raise web.HTTPConflict(text="Review media changed")
+            return os.dup(file.fileno()), before
+
+    task = asyncio.create_task(asyncio.to_thread(verified_file))
+    try:
+        fd, original = await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            fd, _ = await task
+            os.close(fd)
+        finally:
+            raise
+    try:
+        async with c.lock:
+            row = c.journal.data.get("mcp_reviews", {}).get(token)
+            if not row or row["status"] != "pending" or row["expires"] <= time.time():
+                raise web.HTTPNotFound()
+        etag = '"' + asset["sha256"] + '"'
+        requested = request.headers.get("Range") if request.headers.get("If-Range", etag) == etag else None
+        try:
+            start, end, status = byte_range(requested, original[0])
+        except ValueError:
+            raise web.HTTPRequestRangeNotSatisfiable(headers={"Content-Range": f"bytes */{original[0]}"}) from None
+        headers = {"Cache-Control": "no-store", "Content-Security-Policy": "sandbox; default-src 'none'",
+            "X-Content-Type-Options": "nosniff", "Accept-Ranges": "bytes", "ETag": etag,
+            "Content-Length": str(end-start),
+            "Content-Type": mimetypes.guess_type(asset["snapshot"])[0] or "application/octet-stream"}
+        if status == 206:
+            headers["Content-Range"] = f"bytes {start}-{end-1}/{original[0]}"
+        response = web.StreamResponse(status=status, headers=headers)
+        await response.prepare(request)
+        def read(offset):
+            if file_version(os.fstat(fd)) != original:
+                raise OSError("Review media changed during delivery")
+            block = os.pread(fd, min(256 * 1024, end-offset), offset)
+            if not block or file_version(os.fstat(fd)) != original:
+                raise OSError("Review media changed during delivery")
+            return block
+        while start < end:
+            task = asyncio.create_task(asyncio.to_thread(read, start))
+            try:
+                block = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # A thread cannot be cancelled: keep its descriptor valid
+                # until it finishes, then let the outer finally close it.
+                try:
+                    await task
+                finally:
+                    raise
+            start += len(block)
+            await response.write(block)
+        await response.write_eof()
+        return response
+    finally:
+        os.close(fd)
+
+
 async def review(c, request, path):
     if request.headers.get("X-Split-Browser-Review") != "1":
         raise web.HTTPForbidden()
@@ -255,6 +320,11 @@ async def review(c, request, path):
     )
     if not match or request.method not in {"GET", "POST"}:
         raise web.HTTPNotFound()
+    form = None
+    if request.method == "POST":
+        if request.content_type != "application/x-www-form-urlencoded":
+            raise web.HTTPUnsupportedMediaType()
+        form = await request.clone(client_max_size=4096).post()
     async with c.lock:
         rows = c.journal.data.get("mcp_reviews", {})
         if prune(rows):
@@ -266,60 +336,53 @@ async def review(c, request, path):
             i = int(match[2])
             if request.method != "GET" or row["status"] != "pending" or i >= len(row["assets"]):
                 raise web.HTTPNotFound()
-            asset = row["assets"][i]
-
-            # Serve only the verified inode, never a symlink or an unreviewed
-            # precompressed FileResponse sidecar. aiohttp streams and closes it.
-            def verified_file():
-                with policy.regular(Path(MOUNTS["input"]), asset["snapshot"]) as file:
-                    if hashlib.file_digest(file, "sha256").hexdigest() != asset["sha256"]:
-                        raise web.HTTPConflict(text="Review media changed")
-                    file.seek(0)
-                    return os.fdopen(os.dup(file.fileno()), "rb")
-
-            return web.Response(
-                body=await asyncio.to_thread(verified_file),
-                content_type=mimetypes.guess_type(asset["snapshot"])[0] or "application/octet-stream",
-                headers={
-                    "Cache-Control": "no-store",
-                    "Content-Security-Policy": "sandbox; default-src 'none'",
-                    "X-Content-Type-Options": "nosniff",
-                },
-            )
-        if request.method == "GET":
+            asset = copy.deepcopy(row["assets"][i])
+        elif request.method == "GET" or row["status"] != "pending":
             return page(row)
-        if request.content_type != "application/x-www-form-urlencoded":
-            raise web.HTTPUnsupportedMediaType()
-        form = await request.clone(client_max_size=4096).post()
+        else:
+            if not secrets.compare_digest(row["csrf"], str(form.get("csrf", ""))) or form.get(
+                "decision"
+            ) not in {"approve", "deny"}:
+                raise web.HTTPForbidden()
+            if form["decision"] == "deny":
+                close(row, "denied")
+                await c.persist()
+                return page(row)
+            if missing_credentials(row):
+                return page(row, "API キーが未設定です。実行していません。")
+            candidate = copy.deepcopy(row)
+    if match[2] is not None:
+        return await review_asset(c, request, match[1], asset)
+    # Large files must not block submit/cancel/status under the journal lock.
+    valid = True
+    try:
+        await asyncio.to_thread(policy.verify_assets, candidate["assets"])
+    except (OSError, ValueError, web.HTTPException):
+        valid = False
+    async with c.lock:
+        rows = c.journal.data.get("mcp_reviews", {})
         if prune(rows):
             await c.persist()
+        row = rows.get(match[1])
+        if not row:
+            raise web.HTTPNotFound()
         if row["status"] != "pending":
             return page(row)
-        if not secrets.compare_digest(row["csrf"], str(form.get("csrf", ""))) or form.get(
-            "decision"
-        ) not in {"approve", "deny"}:
-            raise web.HTTPForbidden()
-        if form["decision"] == "deny":
-            close(row, "denied")
+        # Another approval/denial or an environment change may have completed
+        # during verification. Recheck before creating the one permitted job.
+        if (not valid or c.journal.data["mode"] != "split" or version(c) != row["version"]
+                or body_digest(row) != body_digest(candidate)):
+            close(row, "invalidated")
         elif missing_credentials(row):
             return page(row, "API キーが未設定です。実行していません。")
-        elif c.journal.data["mode"] != "split" or version(c) != row["version"]:
-            close(row, "invalidated")
         else:
-            try:
-                await asyncio.to_thread(policy.verify_assets, row["assets"])
-            except (OSError, ValueError, web.HTTPException):
-                close(row, "invalidated")
-            else:
-                job = c.admit_prompt(row["body"], row["key"])
-                job.update(
-                    mcp_guard=policy.execution_guard(row["body"], row["calls"], row["assets"]),
-                    mcp_digest=row["digest"],
-                )
-                row["receipt"] = c.receipt(job)
-                close(row, "submitted")
-                await c.commit_prompt()
-                await c.status()
-                return page(row)
+            job = c.admit_prompt(row["body"], row["key"])
+            job.update(mcp_guard=policy.execution_guard(row["body"], row["calls"], row["assets"]),
+                       mcp_digest=row["digest"])
+            row["receipt"] = c.receipt(job)
+            close(row, "submitted")
+            await c.commit_prompt()
+            await c.status()
+            return page(row)
         await c.persist()
         return page(row)

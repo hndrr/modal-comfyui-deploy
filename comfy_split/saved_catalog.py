@@ -1,13 +1,13 @@
 """Read saved libraries from named Volume roots, without importing ComfyUI."""
 
 import os
+import heapq
 import re
 import stat
 from contextlib import contextmanager
 from pathlib import Path
-from uuid import UUID
 
-from comfy_split.media_server import parts, read_json
+from comfy_split.media_server import parts, read_json, catalog_index, saved_job
 from comfy_split.job_progress import snapshot
 
 TERMINAL = {"completed", "failed", "cancelled"}
@@ -121,31 +121,16 @@ class SavedCatalog:
             return dict(source="storage", conversion_required=True)
         return dict(source="storage", conversion_required=False, workflow=raw)
 
-    def state(self):
-        return read_json(self.data, "state/controller.json")
-
-    def job(self, state, prompt_id):
-        if str(UUID(prompt_id)) != prompt_id or prompt_id in state.get("retired_jobs", {}):
-            raise FileNotFoundError("Unknown or expired job")
-        job = dict(state.get("jobs", {}).get(prompt_id) or {})
-        try:
-            receipt = read_json(self.data, "jobs/" + prompt_id + ".json")
-        except FileNotFoundError:
-            receipt = {}
-        # The CPU may be asleep when a GPU result is committed. Its receipt is
-        # newer than the controller snapshot; never expose credentials/extra_data.
-        for key in ("status", "history", "error", "seconds", "finished_at"):
-            if key in receipt:
-                job[key] = receipt[key]
+    def job(self, prompt_id):
+        job = saved_job(self.data, prompt_id)
         if not job:
             raise FileNotFoundError("Unknown or expired job")
-        job["id"] = prompt_id
         return job
 
     def job_workflow(self, q):
         if set(q) != {"prompt_id"}:
             raise ValueError("Expected prompt_id")
-        job = self.job(self.state(), q["prompt_id"])
+        job = self.job(q["prompt_id"])
         graph = job.get("body", {}).get("prompt")
         if not isinstance(graph, dict):
             raise FileNotFoundError("Submitted graph is no longer retained")
@@ -159,19 +144,22 @@ class SavedCatalog:
         limit = int(q.get("limit", "25"))
         if not 1 <= limit <= 100:
             raise ValueError("Invalid history limit")
-        state = self.state()
         if q.get("prompt_id"):
-            jobs = [self.job(state, q["prompt_id"])]
+            jobs = [self.job(q["prompt_id"])]
         else:
-            candidates = sorted(state.get("jobs", {}).items(),
-                                key=lambda item: item[1].get("created_at", 0), reverse=True)
-            jobs = []
-            for prompt_id, _ in candidates:
-                job = self.job(state, prompt_id)
-                if job.get("status") in TERMINAL:
-                    jobs.append(job)
-                if len(jobs) >= limit:
-                    break
+            def finished():
+                for row in catalog_index(self.data):
+                    if row["status"] not in TERMINAL:
+                        if row["status"] == "queued":
+                            continue
+                        # A running controller snapshot may already have a
+                        # durable GPU result. Only inspect those active records.
+                        job = self.job(row["id"])
+                        if job["status"] not in TERMINAL:
+                            continue
+                    yield row
+            recent = heapq.nlargest(limit, finished(), key=lambda row: row["created_at"])
+            jobs = [self.job(row["id"]) for row in recent]
         if action == "diagnose" and jobs:
             jobs = [next((j for j in jobs if j["status"] == "failed"), jobs[0])]
         rows = []

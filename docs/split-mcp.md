@@ -94,7 +94,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 | ノードの入力を調べたい、グラフを編集したい | `create_workflow` の `node_info`・`modify`・`validate`。編集や検証だけで生成は始まりません。 |
 | 待機中のジョブを一覧にしたい | `queue(action: "list")`。別のチャットやクライアントからも、同じ `prompt_id` で個々のジョブを追跡できます。 |
 
-曲を聴くには「このジョブの曲を `get_audio` で再生して」と頼みます。MP3・WAV・FLAC・Ogg・Opus を元の形式のまま取得します。ChatGPT では、曲名が表示されたら「再生」を押します。一時停止と再生位置の変更もできます。4 MiB を超える曲は、先に「音声を読み込む」を押してください。64 MiB 超の曲や元ファイルを保存したい場合は、返った再生リンクを使います。
+曲を聴くには「このジョブの曲を `get_audio` で再生して」と頼みます。MP3・WAV・FLAC・Ogg・Opus を元の形式のまま取得します。ChatGPT では、曲名が表示されたら「再生」を押します。一時停止と再生位置の変更もできます。4 MiB を超える曲は、先に「音声を読み込む」を押してください。チャット内再生の上限は元ファイル64 MiB・10分・展開後の音声128 MiBです。圧縮ファイルでも展開量を再生前に確認します。上限を超える曲、展開量を確認できない形式、元ファイルを保存したい場合は、返った再生リンクを使います。
 
 「アプリを表示できませんでした」と出たら、曲を生成し直す必要はありません。再生リンクが見えないときは「同じ `prompt_id` の `list_outputs` から曲のブラウザ用リンクを出して」と頼んでください。リンクは split の `/view?type=output&filename=…&subfolder=…` で、`filename` と `subfolder` はそれぞれ URL エンコードします。split にログインして開くと、曲を再生・保存できます。ブラウザが再生に対応しない形式でも保存できます。
 
@@ -116,7 +116,7 @@ node mcp/upload.mjs https://split.example.com/mcp photo.png sound.wav clip.mp4
 
 **モデル**：`list_models` でカテゴリを確認し、`add_model(repo, file, category, request_id)` で Hugging Face の safetensors・GGUF・ONNX ファイルを追加します。専用の CPU で取得するので GPU は使いません。必要なら `revision` と `sha256` を指定してください。`get_admin_operation` は完了後に取得したコミットと SHA-256 を返します。
 
-削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。版はファイル全体の SHA-256 です。大きなファイルでは照会・退避の応答に `request_id` が返るので、`get_admin_operation` で完了を確認してください。そのファイルだけを退避します。元に戻すには `restore_model(removal_id, request_id)` に **削除時の** `request_id` を指定します。追加・復元は既存ファイルを上書きしません。
+削除する場合は `inspect_model(path)` が返した `version` を `remove_model(path, version, request_id)` に渡します。版はファイル全体の SHA-256 です。大きなファイルでは照会・退避の応答に `request_id` が返るので、`get_admin_operation` で完了を確認してください。そのファイルだけを退避します。元に戻すには `restore_model` の `removal_id` に**削除時の** `request_id`、`request_id` には**新しい復元操作用のID**を指定します。削除時のIDを両方に使うと競合します。追加・復元は既存ファイルを上書きしません。
 
 管理操作の通信が途切れたら、同じ `request_id` で結果を確認してください。`failed` は失敗、`unknown` は結果未確認です。後者では対象の状態を確認してから次の操作を決めてください。
 

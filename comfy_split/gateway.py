@@ -887,7 +887,7 @@ class Controller:
                         return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
                     return web.json_response(job_progress.snapshot(job))
                 async with self.lock:
-                    job = self.journal.data["jobs"].get(job_id)
+                    job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
                     if job is None:
                         return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
                     if job["status"] == "queued":
@@ -1080,9 +1080,10 @@ class Controller:
 
 def application(controller):
     from comfy_split.startup import StartupGate
+    from comfy_split.gateway_access import boundary, ENV
 
     startup = StartupGate(controller)
-    app = web.Application(client_max_size=1024 ** 3)
+    app = web.Application(client_max_size=1024 ** 3, middlewares=[boundary(os.getenv(ENV, ""))])
     app.router.add_route("*", "/{path:.*}", startup.handle)
     app.on_startup.append(startup.start)
     app.on_cleanup.append(startup.close)

@@ -1,4 +1,5 @@
 import tempfile
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,14 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
 
     async def run_op(self, name, **args):
         return await admin.handle(self.c, name, args)
+
+    async def test_probe_timeout_and_missing_executable_have_distinct_errors(self):
+        (self.dirs["input"] / "test.wav").write_bytes(b"RIFFxxxxWAVE")
+        for error, expected in ((subprocess.TimeoutExpired("ffprobe", 15), web.HTTPBadRequest),
+                                (FileNotFoundError("private executable path"), web.HTTPServiceUnavailable)):
+            with patch.object(media.subprocess, "run", side_effect=error), self.assertRaises(expected) as caught:
+                await media.handle(self.c, "inspect_media", {"filename": "test.wav"})
+            self.assertNotIn("private", caught.exception.text)
 
     async def test_job_output_reuse_preserves_bytes_and_graph_and_never_requeues(self):
         job = self.c.journal.enqueue({"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}})

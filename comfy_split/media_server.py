@@ -6,6 +6,7 @@ Each chunk verifies the original file version before it is sent.
 """
 
 import asyncio
+import errno
 import json
 import os
 import re
@@ -18,6 +19,7 @@ from uuid import UUID
 FORMATS = {
     "png": ("image", "image/png"), "jpg": ("image", "image/jpeg"),
     "jpeg": ("image", "image/jpeg"), "webp": ("image", "image/webp"),
+    "gif": ("image", "image/gif"),
     "mp3": ("audio", "audio/mpeg"), "wav": ("audio", "audio/wav"),
     "flac": ("audio", "audio/flac"), "ogg": ("audio", "audio/ogg"),
     "opus": ("audio", "audio/ogg"), "m4a": ("audio", "audio/mp4"),
@@ -73,14 +75,57 @@ def read_json(root, name):
     return json.loads(raw)
 
 
+def catalog_index(root):
+    """Stream a bounded line at a time; the whole journal has no read-size cap."""
+    try:
+        with regular(root, "state/saved-jobs.jsonl") as fd:
+            with os.fdopen(os.dup(fd), "rb") as stream:
+                if json.loads(stream.readline(1024)) != {"version": 1}:
+                    raise ValueError("Invalid saved-job index")
+                while line := stream.readline(1024):
+                    if len(line) >= 1024:
+                        raise ValueError("Invalid saved-job index row")
+                    yield json.loads(line)
+        return
+    except FileNotFoundError:
+        pass
+    # Compatibility until the updated controller publishes its first index.
+    state = read_json(root, "state/controller.json")
+    for key, job in state.get("jobs", {}).items():
+        if key not in state.get("retired_jobs", {}):
+            yield {"id": key, "status": job["status"], "created_at": job.get("created_at", 0)}
+
+
 def saved_job(root, prompt_id):
+    """Read one retained job, overlaying a GPU receipt completed while CPU slept."""
     if str(UUID(prompt_id)) != prompt_id:
         raise ValueError("Invalid prompt_id")
     try:
-        return read_json(root, f"jobs/{prompt_id}.json")
+        with regular(root, "state/saved-jobs.jsonl"):
+            pass
     except FileNotFoundError:
-        # Controller-created failures and pre-existing jobs may have no receipt.
-        return read_json(root, "state/controller.json").get("jobs", {}).get(prompt_id)
+        try:
+            state = read_json(root, "state/controller.json")
+        except FileNotFoundError:
+            state = {}
+        if prompt_id in state.get("retired_jobs", {}):
+            return None
+        job = dict(state.get("jobs", {}).get(prompt_id) or {})
+    else:
+        try:
+            job = read_json(root, f"state/saved-jobs/{prompt_id}.json")
+        except FileNotFoundError:
+            return None
+    try:
+        receipt = read_json(root, f"jobs/{prompt_id}.json")
+    except FileNotFoundError:
+        receipt = {}
+    for key in ("status", "history", "error", "seconds", "finished_at"):
+        if key in receipt:
+            job[key] = receipt[key]
+    if job:
+        job["id"] = prompt_id
+    return job or None
 
 
 def output_rows(job):
@@ -237,8 +282,11 @@ class MediaServer:
                 response_headers.append((b"content-range", f"bytes {start}-{end-1}/{info.st_size}".encode()))
         except (ValueError, UnicodeError):
             return await reply(400, {"error": "Invalid media request or saved metadata"})
-        except OSError:
-            return await reply(404, {"error": "Saved media or job not found"})
+        except OSError as exc:
+            if isinstance(exc, FileNotFoundError) or exc.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+                return await reply(404, {"error": "Saved media or job not found"})
+            return await reply(503, {"error": "Media storage temporarily unavailable; retry the read"},
+                               [(b"retry-after", b"2")])
         except Exception:
             return await reply(503, {"error": "Media storage temporarily unavailable; retry the read"},
                                [(b"retry-after", b"2")])

@@ -2,6 +2,7 @@ import asyncio
 import copy
 import re
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -165,6 +166,11 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             await (await self.client.get(path + "/media/0", headers=self.review_headers)).read(),
             original,
         )
+        response = await self.client.get(path + "/media/0", headers={**self.review_headers, "Range": "bytes=1-5"})
+        self.assertEqual((response.status, await response.read()), (206, original[1:6]))
+        self.assertEqual(response.headers["Content-Range"], f"bytes 1-5/{len(original)}")
+        response = await self.client.get(path + "/media/0", headers={**self.review_headers, "Range": "bytes=999999-"})
+        self.assertEqual(response.status, 416)
         await self.decide(path, csrf, "approve")
         job = next(iter(self.control.journal.data["jobs"].values()))
         snapshot = job["body"]["prompt"]["2"]["inputs"]["image"]
@@ -172,6 +178,53 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         (self.input / snapshot).write_bytes(b"different")
         with self.assertRaises(ValueError):
             policy.verify_assets(job["mcp_guard"]["assets"])
+
+    async def test_deny_remains_available_during_approval_hashing_and_wins_the_race(self):
+        path, csrf, _ = await self.pending("slow", PAID)
+        started, release = threading.Event(), threading.Event()
+        def slow_hash(assets):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release verification")
+        with patch.object(policy, "verify_assets", side_effect=slow_hash):
+            task = asyncio.create_task(self.decide(path, csrf, "approve"))
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                self.assertFalse(self.control.lock.locked())
+                denied = await asyncio.wait_for(self.decide(path, csrf, "deny"), 2)
+                self.assertEqual(denied.status, 200)
+            finally:
+                release.set()
+                await task
+        row = self.control.journal.data["mcp_reviews"][path.split("/")[-1]]
+        self.assertEqual(row["status"], "denied")
+        self.assertFalse(self.control.journal.data["jobs"])
+
+    async def test_preview_hashing_does_not_block_the_controller(self):
+        f = self.input / "small.png"
+        Image.new("RGB", (2, 3)).save(f)
+        graph = copy.deepcopy(PAID)
+        graph["2"] = {"class_type": "LoadImage", "inputs": {"image": f.name}}
+        graph["1"]["inputs"]["images"] = ["2", 0]
+        path, csrf, _ = await self.pending("slow-preview", graph)
+        started, release = threading.Event(), threading.Event()
+        original = approvals.hashlib.file_digest
+        def slow_hash(*args):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release preview")
+            return original(*args)
+        with patch.object(approvals.hashlib, "file_digest", side_effect=slow_hash):
+            task = asyncio.create_task(self.client.get(path + "/media/0", headers=self.review_headers))
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                self.assertFalse(self.control.lock.locked())
+                self.assertEqual((await asyncio.wait_for(self.decide(path, csrf, "deny"), 2)).status, 200)
+            finally:
+                release.set()
+                response = await task
+        self.assertEqual(response.status, 404)
+        self.assertFalse(self.control.journal.data["jobs"])
 
     async def test_unknown_or_indirect_transmission_and_missing_key(self):
         for changes in (
@@ -262,3 +315,11 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(expected, calls[0]["billing"])
             else:
                 self.assertFalse(calls)
+
+    def test_direct_provider_labels_survive_the_runtime_environment(self):
+        labels = {"SPLIT_GEMINI_BILLING_LABEL": "Example Google project",
+                  "SPLIT_OPENROUTER_BILLING_LABEL": "Example OpenRouter account"}
+        with patch.dict("os.environ", labels, clear=True):
+            self.assertEqual(policy.billing_account("Google Gemini アカウント"), labels["SPLIT_GEMINI_BILLING_LABEL"])
+            calls, _ = policy.plan({"1": {"class_type": "OpenRouterText", "inputs": {}}}, DEFS)
+            self.assertEqual(calls[0]["account"], labels["SPLIT_OPENROUTER_BILLING_LABEL"])

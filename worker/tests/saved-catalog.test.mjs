@@ -15,12 +15,14 @@ test("saved models, workflow files, histories and submitted graphs never probe C
   for(const [name,args] of [["list_models",{}],["list_models",{category:"checkpoints",query:"model",limit:1}],
     ["get_workflow",{action:"list"}],["get_workflow",{action:"get",filename:"日本語/編集.json",format:"ui"}],
     ["get_workflow",{action:"get",filename:"API.json"}],["get_history",{action:"list"}],
-    ["get_history",{action:"diagnose",prompt_id:id}],["get_job_workflow",{prompt_id:id}]]) {
+    ["get_history",{action:"diagnose",prompt_id:id.toUpperCase()}],["get_job_workflow",{prompt_id:id.toUpperCase()}]]) {
     const r=await callSplit(split,name,args,origin,undefined,media);assert.ok(!r.isError,JSON.stringify(r));
     if(name==="get_workflow" && args.action==="get")assert.deepEqual(JSON.parse(r.content[0].text),graph);
   }
   assert.ok(paths.every(p=>p.startsWith("/catalog/")));
   assert.ok(paths.some(p=>decodeURIComponent(p).includes("日本語/編集.json")));
+  assert.equal(paths.filter(p=>p.includes("prompt_id=")).length,2);
+  assert.ok(paths.filter(p=>p.includes("prompt_id=")).every(p=>p.includes(id)));
 });
 test("only an explicit UI conversion marker or runtime inventory may use ComfyUI",async()=>{
   const paths=[];

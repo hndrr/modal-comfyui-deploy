@@ -33,7 +33,7 @@ artokun版はCPU内で必要な操作に使うライブラリです。HTTPSで�
 | --- | --- | --- |
 | 接続、ツール一覧、`ping`、プレイヤーHTML | Worker内で完結 | Modalを起こさない |
 | `get_image / get_audio / get_video / list_outputs` | 配信用CPU → 出力とジョブ記録 | 読み取りだけ |
-| `get_history / get_job_workflow` | 配信用CPU → 台帳とGPUの完了記録 | 保存時点の情報。ライブ監視ではない |
+| `get_history / get_job_workflow` | 配信用CPU → ジョブ別の保存記録とGPUの完了記録 | 保存時点の情報。ライブ監視ではない |
 | `get_workflow(list)`・元JSON・保存済みAPI形式 | 配信用CPU → 保存ライブラリ | 読み取りだけ |
 | `list_models` の既定の保存一覧 | 配信用CPU → モデルのファイル情報 | 重みを読んで動作試験はしない |
 | `get_workflow` の変換・解析、`create_workflow` | ComfyUI CPU → artokun → 必要なComfyUI API | 生成しない。編集結果は応答内のJSON |
@@ -128,7 +128,7 @@ sequenceDiagram
 | ChatGPTの添付 | ChatGPTが渡した添付情報 → Workerが許可済み配信元から取得 → ComfyUI CPUで分割検証・入力に確定 | 起動する。取得元に本人の認証ヘッダーは送らない |
 | CLIのローカルファイル | 転送ヘルパーがファイルを読む → 同じOAuthのHTTPS MCP → ComfyUI CPU | 起動する。クライアント上に別のMCPサーバーは立てない |
 | MCP内の音声プレイヤー | HTMLはWorker、音声部分は `read_audio_part` → 配信用CPU → output Volume | 起動しない |
-| ブラウザで出力を再生・保存 | 通常のAccessブラウザログイン → Worker → 配信用CPU → output Volume | 元の出力ファイルなら起動しない |
+| ブラウザで出力を再生・保存 | 通常のAccessブラウザログイン → Worker → 配信用CPU → output Volume | 配信対応形式の元の出力ファイルなら起動しない。GLB・SVGなどは従来のComfyUI経路 |
 | 入力画像・一時画像・`preview` / `channel` 指定の画像変換 | ブラウザ認証 → Worker → 通常のComfyUI API | 起動する |
 
 MCP用OAuthとブラウザログインは別の認証経路です。リンクを開くブラウザ側ではログインが必要になる場合があります。公開バケットや認証なしURLは使いません。PNG・音声・動画を取得できることと、クライアントがその形式のプレイヤーを表示できることは別です。

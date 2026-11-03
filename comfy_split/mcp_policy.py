@@ -102,9 +102,9 @@ def billing_account(billing):
     label_var = (
         "SPLIT_COMFY_BILLING_LABEL"
         if billing == COMFY
-        else "GEMINI_SECRET_NAME"
+        else "SPLIT_GEMINI_BILLING_LABEL"
         if "Google Gemini" in billing
-        else "OPENROUTER_SECRET_NAME"
+        else "SPLIT_OPENROUTER_BILLING_LABEL"
     )
     return os.environ.get(label_var, "").strip() or None
 

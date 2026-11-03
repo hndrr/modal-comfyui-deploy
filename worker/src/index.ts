@@ -1,4 +1,4 @@
-import {browserReview, receiptLink, serviceReadAllowed} from "./job-review.ts";
+import {browserReview} from "./job-review.ts";
 import { splitGui } from "./split-guis.ts";
 import { audioDocument } from "./audio-document.ts";
 import { remoteMcp } from "./remote-mcp.ts";
@@ -583,27 +583,16 @@ export default {
         cfg.origin===modalOrigin && !!cfg.audience && cfg.audience!==env.POLICY_AUD.trim();
       return browserReview(request,owner,modalOrigin,buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin));
     }
-    if (identity.kind==="split-mcp") {
-      if (request.method==="POST" && /^\/(?:api\/)?prompt$/.test(requestUrl.pathname) && !requestUrl.search) {
-        const headers=buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin,true);
-        headers.set("Content-Type","application/json");
-        headers.set("X-Split-Remote-Tool","1");
-        headers.set("Idempotency-Key","stdio:"+crypto.randomUUID());
-        const r=await fetch(new Request(modalOrigin+"/_remote_mcp/submit",{
-          method:"POST",headers,body:request.body,...{duplex:"half"},redirect:"manual"}));
-        if (r.status!==202) return r;
-        try {
-          const url=receiptLink(await r.json(),requestUrl.origin);
-          return Response.json({error:{message:"Owner approval required. Open "+url+
-            ". Approval submits this job once; do not enqueue again."}},{status:409});
-        } catch {return textResponse("Invalid approval receipt.",502);}
-      }
-      if (request.method!=="GET" || !serviceReadAllowed(requestUrl.pathname) ||
-          (isWebSocketUpgrade(request) && !/^\/(?:api\/)?ws$/.test(requestUrl.pathname)))
-        return textResponse("Operation unavailable with MCP service credentials.",403);
+    if (identity.kind==="split-mcp")
+      return textResponse("Local MCP service access was retired. Use HTTPS /mcp with OAuth.",410);
+
+    let mediaHost=false;
+    if(env.SPLIT_MEDIA_ORIGIN){
+      try { mediaHost=JSON.parse(env.SPLIT_MEDIA_ORIGIN).hostname===requestUrl.hostname; }
+      catch { return textResponse("Invalid saved-media binding.",500); }
     }
 
-    if (splitUiHost && identity.kind === "browser") {
+    if ((splitUiHost || mediaHost) && identity.kind === "browser") {
       const page = audioDocument(request);
       if (page) return page;
       if (env.SPLIT_MEDIA_ORIGIN && savedOutputRequest(request)) {
@@ -625,13 +614,13 @@ export default {
     const upstreamUrl = upstreamUrlFor(requestUrl, modalOrigin);
 
     if (isWebSocketUpgrade(request)) {
-      return proxyWebSocket(request, env, upstreamUrl, identity.kind === "split-mcp");
+      return proxyWebSocket(request, env, upstreamUrl, false);
     }
 
     const upstream = await fetch(
       new Request(upstreamUrl, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, identity.kind === "split-mcp"),
+        headers: buildUpstreamHeaders(request, env, upstreamUrl.origin, false),
         body: request.body,
         ...(request.body ? {duplex:"half"} : {}),
         redirect: "manual",

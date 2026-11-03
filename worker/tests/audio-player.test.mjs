@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {runInNewContext} from "node:vm";
+import {shortFlac} from "./audio-fixtures.mjs";
 import {audioPlayerHtml} from "../src/audio-player.ts";
 
 test("ChatGPT globals can mount a cold player and read private audio without standard host tool support", async()=>{
   const id="00000000-0000-4000-8000-000000000001", handlers={}, messages=[], calls=[];
   const elem=()=>({hidden:true,removeAttribute(k){delete this[k];}});
   const elements=Object.fromEntries(["#transport","#play","input","output","p","footer button","a"].map(k=>[k,elem()]));
-  const bytes=Uint8Array.from([102,76,97,67]), base={prompt_id:id,index:0};
+  const bytes=shortFlac, base={prompt_id:id,index:0};
   const meta={...base,delivery:"inline",filename:"sample.flac",url:"https://split.example/view?filename=sample.flac",
     size:bytes.length,mimeType:"audio/flac",byte_offset:0,byte_length:bytes.length,next_offset:null};
   let decoded, started, closed=false;

@@ -188,6 +188,10 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         history = await (await self.client.get("/history/"+queued["id"])).json()
         self.assertEqual(history[queued["id"]]["status"]["messages"][0][0], "execution_interrupted")
         self.assertEqual(finished["history"]["outputs"], {"file":"keep"})
+        self.control.journal.retire([finished["id"]])
+        for _ in range(2):
+            self.assertEqual(await cancel(finished["id"]), (200, "completed"))
+        self.commands.put.aio.assert_awaited_once()
         self.assertEqual(await cancel("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), (404,"not_found"))
         self.assertEqual(other["status"], "queued")
         self.worker.spawn.aio.assert_not_awaited()

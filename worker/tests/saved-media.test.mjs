@@ -21,8 +21,8 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
     return new Response(new URL(path,host).searchParams.get("filename")==="a.mp3"?audio:
       new URL(path,host).searchParams.get("filename")==="v.mp4"?video:png);
   };
-  for(const [name,args] of [["get_audio",{prompt_id:id}],["read_audio_part",{prompt_id:id,byte_offset:0}],
-    ["get_video",{prompt_id:id}],["get_image",{filename:"画像.png"}],["list_outputs",{prompt_id:id}]]) {
+  for(const [name,args] of [["get_audio",{prompt_id:id.toUpperCase()}],["read_audio_part",{prompt_id:id.toUpperCase(),byte_offset:0}],
+    ["get_video",{prompt_id:id.toUpperCase()}],["get_image",{filename:"画像.png"}],["list_outputs",{prompt_id:id.toUpperCase()}]]) {
     const r=await callSplit(split,name,args,host,undefined,media);
     assert.ok(!r.isError,JSON.stringify(r));
     if(name==="get_image")assert.deepEqual(Buffer.from(r.content[0].data,"base64"),png);
@@ -36,10 +36,11 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
 });
 
 test("only original output requests qualify, never inputs, transforms or other routes",()=>{
-  for(const path of ["/view?filename=a.wav&type=output","/api/view?filename=a.mp4","/view?filename=a.png&utm_source=chat"])
+  for(const path of ["/view?filename=a.wav&type=output","/api/view?filename=a.mp4","/view?filename=a.png&utm_source=chat","/view?filename=a.GIF"])
     assert.ok(savedOutputRequest(new Request(host+path)));
   for(const path of ["/view?filename=a.wav&type=input","/view?filename=a.wav&type=temp","/view?filename=a.png&preview=webp",
-    "/view?filename=a.png&channel=rgb","/assets/a.js","/models/checkpoints"])
+    "/view?filename=a.png&channel=rgb","/assets/a.js","/models/checkpoints",
+    "/view?filename=scene.glb&type=output","/api/view?filename=vector.svg","/view?filename=a.bmp"])
     assert.equal(savedOutputRequest(new Request(host+path)),false);
 });
 
@@ -66,7 +67,7 @@ test("fixed media origin accepts read headers only and cannot leak credentials t
 test("OAuth tools and browser bytes use media CPU; discovery and the audio page start no container",async t=>{
   const team="https://saved-media-test.cloudflareaccess.com",origin="https://split.modal.run",delivery="https://media.modal.run";
   const cfg={TEAM_DOMAIN:team,POLICY_AUD:"browser",MODAL_KEY:"split-key",MODAL_SECRET:"split-secret",
-    MODAL_ORIGINS:JSON.stringify({"split.example.com":origin}),SPLIT_UI_ORIGIN:JSON.stringify({"split.example.com":origin}),
+    MODAL_ORIGINS:JSON.stringify({"split.example.com":origin}),
     SPLIT_REMOTE_MCP:JSON.stringify({hostname:"split.example.com",split_hostname:"split.example.com",origin,audience:"mcp",owner_email:"owner@example.com"}),
     SPLIT_MEDIA_ORIGIN:JSON.stringify({hostname:"split.example.com",origin:delivery})};
   const {privateKey,publicKey}=await generateKeyPair("RS256");
@@ -75,7 +76,9 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
   const keys=[{...await exportJWK(publicKey),kid:"k"}],hits=[];
   t.mock.method(globalThis,"fetch",async r=>{
     if(r===team+"/cdn-cgi/access/certs")return Response.json({keys});
-    hits.push(r);assert.equal(new URL(r.url).origin,delivery);
+    hits.push(r);
+    const extension=new URL(r.url).searchParams.get("filename")?.split(".").at(-1);
+    assert.equal(new URL(r.url).origin,["glb","svg","bmp"].includes(extension)?origin:delivery);
     assert.equal(r.headers.get("CF-Access-Jwt-Assertion"),null);
     assert.equal(r.headers.get("Cookie"),null);
     if(new URL(r.url).pathname.startsWith("/history/"))return Response.json({[id]:{status:{status_str:"success",completed:true},
@@ -96,4 +99,8 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
   assert.ok(!(await (await rpc("tools/call",{name:"get_audio",arguments:{prompt_id:id}})).json()).result.isError);
   assert.deepEqual(hits.map(r=>new URL(r.url).pathname),["/history/"+id,"/view"]);
   assert.deepEqual(Buffer.from(await (await worker.fetch(audioRequest(browser),cfg)).arrayBuffer()),audio);
+  for(const ext of ["gif","glb","svg","bmp"]){
+    const req=new Request(host+"/view?type=output&filename=out."+ext,{headers:{"CF-Access-Jwt-Assertion":browser}});
+    assert.equal((await worker.fetch(req,cfg)).status,200);
+  }
 });
