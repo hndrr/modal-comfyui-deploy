@@ -35,7 +35,7 @@ Comfy の Partner Node でクレジットを使う場合は、`COMFY_API_KEY` �
 ## 保存済みメディアの配信用 CPU
 
 1. 既存の split と同じ Modal プロファイル・環境で `scripts/modal.sh deploy mediaapp.py` を実行する。
-   既存の output / data Volume を使う。ComfyUI の再デプロイは不要。
+   既存の output / data / models Volume を参照する。モデルはファイル情報だけを読み、ロード・変更しない。ComfyUI の再デプロイは不要。
 2. Worker のテスト・型検査後、新しいコードをデプロイする。
 3. Worker の secret `SPLIT_MEDIA_ORIGIN` に以下を登録する。実値は Git に残さない。認証情報は既存 split の Proxy Auth を再利用し、追加登録しない。
 
@@ -44,7 +44,7 @@ Comfy の Partner Node でクレジットを使う場合は、`COMFY_API_KEY` �
    ```
 
 4. Modal の直接URLが未認証で拒否されることを確認する。管理APIから split CPU / GPU が0台であることを確認し、
-   MCP の出力一覧・画像・音声・動画を取得する。この間起動してよいのは配信用 CPU だけ。
+   MCP の出力一覧・画像・音声・動画、モデル保存一覧、ワークフロー一覧・元JSON、履歴を取得する。この間起動してよいのは参照用 CPU だけ。
    通常・途中・末尾の Range を検証し、取得停止後は配信用 CPU も0台へ戻ることを確認する。
 
 既存の `/view` と `/api/view` の元の output ファイルも同じ配信用 CPU を使う。

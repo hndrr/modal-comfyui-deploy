@@ -108,6 +108,25 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((code, h[b"retry-after"]), (503, b"2"))
         self.assertNotIn(self.content[:12], body)
 
+    async def test_catalog_routes_read_only_and_refresh_saved_files(self):
+        models = self.root / "models"
+        (models / "checkpoints").mkdir(parents=True)
+        (models / "checkpoints/example.safetensors").write_bytes(b"weight")
+        self.server.catalog.models = models
+        code, _, body, _ = await self.request(path="/catalog/models", query="category=checkpoints")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["models"], ["example.safetensors"])
+        self.reload.assert_awaited()
+        folder = self.data / "user/default/workflows/日本語"
+        folder.mkdir(parents=True)
+        (folder / "元.json").write_text('{"nodes":[],"links":[]}')
+        code, _, body, _ = await self.request(path="/catalog/workflows", query="action=get&filename=日本語/元.json&format=ui")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["workflow"], {"nodes": [], "links": []})
+        self.assertEqual((await self.request(path="/catalog/workflows", method="POST", query="action=delete"))[0], 405)
+        self.assertEqual((await self.request(path="/catalog/models", query="category=../secret"))[0], 400)
+        self.assertEqual((await self.request(path="/catalog/unknown", query=""))[0], 404)
+
     async def test_another_request_can_reload_between_streamed_chunks(self):
         interleaved = False
 

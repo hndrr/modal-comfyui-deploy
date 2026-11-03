@@ -1,5 +1,6 @@
 import {receiptLink} from "./job-review.ts";
 import {callSavedMedia, savedMediaTools} from "./saved-media.ts";
+import {callSavedCatalog, savedCatalogRequest} from "./saved-catalog.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -37,6 +38,10 @@ async function rejected(response: Response): Promise<CallToolResult> {
 
 // Only a tool invocation may call send(). No polling survives this invocation.
 export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string, mediaSend?:Send): Promise<CallToolResult> {
+  if (mediaSend && savedCatalogRequest(name,args)) {
+    const result=await callSavedCatalog(mediaSend,name,args);
+    if(result!==null)return result;
+  }
   if (mediaSend && savedMediaTools.has(name))
     return callSavedMedia(mediaSend,name,args,browserOrigin || "https://split.invalid");
   const deadline = Date.now() + 12_000;
@@ -129,7 +134,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>call("calculate",a));
   server.registerTool("search_custom_nodes",{description:"Find a node pack in the public Comfy Registry or read its release details. Does not install it.",annotations:{...read,openWorldHint:true},
     inputSchema:{action:z.enum(["search","details"]),query:z.string().max(150).optional(),id:z.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/).optional(),limit:z.number().int().min(1).max(50).optional(),page:z.number().int().positive().optional()}},a=>call("search_custom_nodes",a));
-  server.registerTool("get_workflow",{description:"List/get/analyze/query/strip/slice saved library workflows without generating. Use analyze for sections, query for matching nodes.",annotations:read,inputSchema:workflowInputs},a=>call("get_workflow",a));
+  server.registerTool("get_workflow",{description:"List/get/analyze/query/strip/slice saved library workflows without generating. List and get(format:ui) read storage only. Default get returns API JSON; converting a UI graph starts ComfyUI for current node definitions. Analyze/query/strip/slice use ComfyUI.",annotations:read,inputSchema:workflowInputs},a=>call("get_workflow",a));
   server.registerTool("save_workflow",{description:"Save a NEW named workflow in the ComfyUI library. Existing names are never overwritten. Converts API graphs for the editor when possible.",annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:false},
     inputSchema:{filename,workflow:graph}},a=>call("save_workflow",{...a,action:"save"}));
   server.registerTool("visualize_workflow",{description:"Use render to turn workflow JSON into Mermaid; mermaid parses flowchart text back to JSON. Also converts workflow DSL. Does not generate.",annotations:read,inputSchema:{action:z.enum(["render","render_hierarchical","mermaid","to_dsl","from_dsl"]),workflow:graph.optional(),mermaid:z.string().optional(),dsl:z.string().optional(),show_values:z.boolean().optional(),direction:z.enum(["LR","TB"]).optional(),view:z.enum(["overview","detail","list","summary"]).optional(),section:z.string().optional()}},a=>call("visualize_workflow",a));
@@ -140,7 +145,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
     _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>call("upload_media",a,undefined,blobHosts));
-  server.registerTool("list_models",{description:"List installed ComfyUI model categories, or filenames in one category. Supports paging and substring search; reads only.",annotations:read,inputSchema:modelInputs}, a=>call("list_models",a));
+  server.registerTool("list_models",{description:"List saved model categories or files with sizes and modification times, without starting ComfyUI. Storage files are not guaranteed to be recognized by ComfyUI. Use source:runtime to check its actual registered models. Supports paging and substring search.",annotations:read,inputSchema:modelInputs}, a=>call("list_models",a));
   server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe.",annotations:read,
     inputSchema:{prompt_id:z.uuid()}}, a=>call("get_job_progress",a));
   server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
@@ -155,7 +160,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>call("enqueue_workflow",a,browserOrigin));
   server.registerTool("queue",{description:"List jobs or check prompt_id status.",annotations:read,
     inputSchema:{action:z.enum(["list","status"]),prompt_id:z.string().optional()}},a=>call("queue",a));
-  server.registerTool("get_history",{description:"Get job history, including the output filename and subfolder.",annotations:read,
+  server.registerTool("get_history",{description:"Read saved job history, output filenames, errors and timing without starting ComfyUI. diagnose prefers a failed job in the recent history window. Saved records are not live progress; use get_job_progress for that.",annotations:read,
     inputSchema:{action:z.enum(["list","diagnose"]),prompt_id:z.string().optional(),limit:z.number().int().min(1).max(100).optional()}},
     a=>call("get_history",a));
   server.registerTool("get_image",{description:"Return a generated output image inline using its history filename.",annotations:read,

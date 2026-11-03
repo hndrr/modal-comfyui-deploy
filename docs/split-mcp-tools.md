@@ -27,14 +27,14 @@ artokun/comfyui-mcp 0.52.206 の全ツール（41件）とそのアクション�
 | `enqueue_workflow` | `run_url`、`template_schema`、`run_template` | 未提供 | 外部 URL や上流テンプレートの直接実行経路は未接続。保存グラフは投入できる。 |
 | `generate_image` | `image`、`audio`、`video`、`3d`、`controlnet`、`ip_adapter`、`regenerate`、`upscale`、`remove_background` | split で代替 | 該当ノード・モデルを持つグラフを明示的に enqueue_workflow。上流のワンクリック自動構築や有料プロバイダーの選択は含まない。 |
 | `get_defaults` | `get`、`set`、`get_ui`、`set_ui` | 未提供 | 上流のローカル設定／UI の個人設定はクライアント間で暗黙共有しない。 |
-| `get_history` | `list`、`diagnose` | 上流を使用 | 同名ツールを使用。 |
+| `get_history` | `list`、`diagnose` | split で代替 | 参照用 CPU が保存済み台帳・GPU 完了記録から出力・エラー・時間を返す。ライブ状態ではない。 |
 | `get_history` | `stats`、`suggest` | 未提供 | 上流の一時的なプロセス内の生成履歴 DB は split の永続ジョブ台帳とは異なる。 |
 | `get_image` | `get` | split で代替 | 配信用 CPU が共有 output の画像を返す。8 MiB超は認証付きリンク。ComfyUI は起動しない。 |
 | `get_image` | `list_outputs`、`list_assets`、`asset_metadata` | split で代替 | list_outputs は prompt_id 単位、list_inputs は入力置き場、inspect_media は寸法・音声など。上流の asset ID は使わない。 |
 | `get_image` | `view`、`convert`、`analyze_color` | 未提供 | 任意パスの閲覧・形式変換・色解析は公開していない。取得は get_image。 |
 | `get_system_stats` | `stats`、`health` | split で代替 | get_split_status は実際の GPU 台数と処理状態を返す。ハードウェア全項目を返すものではない。 |
 | `get_system_stats` | `logs` | 未提供 | CPU/GPU の運用ログは Modal 側。ジョブの失敗は get_history(diagnose)。 |
-| `get_workflow` | `list`、`get`、`analyze`、`query`、`slice`、`strip` | 上流を使用 | 保存ライブラリ内の相対名に限定。 |
+| `get_workflow` | `list`、`get`、`analyze`、`query`、`slice`、`strip` | 上流を使用 | 保存ライブラリ内の相対名に限定。一覧・元 JSON・保存済み API グラフの取得は参照用 CPU で代替。UI→API 変換と解析には上流と現在のノード定義を使う。 |
 | `get_workflow` | `from_image`、`prompt_director` | 未提供 | 画像内のグラフ抽出・プロンプト指示の抽出は未対応。既知の生成 ID は get_job_workflow。 |
 | `install_comfyui` | `environment` | split で代替 | get_split_status で実際の環境を照会。 |
 | `install_comfyui` | `install`、`update`、`update_all`、`panel`、`self_update`、`configure_manager` | 未提供 | 基盤イメージ・MCP・Manager の設定はデプロイで変更する。 |

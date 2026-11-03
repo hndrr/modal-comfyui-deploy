@@ -8,6 +8,10 @@ import {libraryName, libraryRequest} from './library.mjs';
 
 const actions=Object.fromEntries(Object.entries(policy).map(([name, rows]) =>
   [name, rows.filter(r=>r.mode==='direct').flatMap(r=>r.actions)]).filter(([,list])=>list.length));
+// Compatibility when the separate saved-data endpoint is not configured.
+// These remain server-side calls; clients only connect to HTTPS /mcp.
+actions.get_history=['list','diagnose'];
+actions.get_image=['get'];
 export async function invoke({name, arguments: args}, dir, origin = 'http://127.0.0.1:8000') {
   if (!Object.hasOwn(actions, name) || !actions[name].includes(args?.action ?? "(call)")) throw new Error('Unsupported action');
   if (name === 'get_workflow' && !libraryRequest(args)) throw new Error('Invalid workflow library request');

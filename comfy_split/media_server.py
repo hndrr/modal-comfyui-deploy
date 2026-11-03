@@ -123,8 +123,10 @@ def byte_range(value, size):
 
 
 class MediaServer:
-    def __init__(self, output, data, volumes=()):
+    def __init__(self, output, data, volumes=(), *, models=None):
+        from comfy_split.saved_catalog import SavedCatalog
         self.output, self.data, self.volumes = Path(output), Path(data), volumes
+        self.catalog = SavedCatalog(data, models)
         self.lock = asyncio.Lock()
 
     async def refresh(self):
@@ -170,6 +172,11 @@ class MediaServer:
             if any(len(v) != 1 for v in query.values()):
                 raise ValueError("Duplicate parameters")
             q = {k: v[0] for k, v in query.items()}
+            if path.startswith("/catalog/"):
+                async with self.lock:
+                    await self.refresh()
+                    result = await self.disk(self.catalog.read, path, q)
+                return await reply(200, result)
             if path.startswith("/history/") or path.startswith("/outputs/"):
                 prompt_id = path.split("/", 2)[2]
                 async with self.lock:
