@@ -11,7 +11,7 @@ import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, playerHtml } from "./video-player.ts";
-import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URI, audioPlayerHtml } from "./audio-player.ts";
+import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
@@ -166,9 +166,9 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     description:"Play saved audio. In chat, call with only prompt_id and optional index: show the player and include the returned authenticated link as a fallback. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
     _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI,"openai/widgetAccessible":true},
     annotations:read,inputSchema:audioInputs,outputSchema:audioOutput}, a=>callSplit(send,"get_audio",a,browserOrigin));
-  // A client may still hold the v1 tool descriptor until its next tools/list.
-  for (const uri of [AUDIO_PLAYER_URI,PREVIOUS_AUDIO_PLAYER_URI])
-    server.registerResource(uri===AUDIO_PLAYER_URI?"audio-player":"previous-audio-player",uri,{mimeType:PLAYER_MIME},async()=>({
+  // Clients with cached descriptors can still read the current player at their old URI.
+  for (const [index,uri] of [AUDIO_PLAYER_URI,...PREVIOUS_AUDIO_PLAYER_URIS].entries())
+    server.registerResource(index===0?"audio-player":"previous-audio-player-"+index,uri,{mimeType:PLAYER_MIME},async()=>({
       contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerHtml}],
     }));
   server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
