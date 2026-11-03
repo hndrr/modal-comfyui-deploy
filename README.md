@@ -82,8 +82,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 - [既知の不具合と注意点](docs/guides/known-issues.md)
 - [Cloudflare Access の設定](docs/operations/cloudflare-access.md)
 - [Modal プロファイルの運用](docs/operations/modal-profiles.md)
-- [CI 設定](docs/operations/ci.md)
-- [テスト実行方法](tests/README.md)
+- [テスト・CI ガイド](tests/README.md)
 
 ### 設計・検証記録
 <details>
@@ -154,7 +153,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 │
 ├── docs/                           # 各種ドキュメント
 │   ├── guides/                     # 各構成・機能の利用ガイド
-│   ├── operations/                 # Cloudflare Access・プロファイル・CI 運用
+│   ├── operations/                 # Cloudflare Access・Modal プロファイル運用
 │   ├── mcp/                        # MCP 利用・設定・ツール仕様
 │   └── design/                     # アーキテクチャ設計資料・技術検証記録
 │
