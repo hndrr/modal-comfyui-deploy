@@ -35,6 +35,7 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const audio=list.result.tools.find(t=>t.name==="get_audio"),
     part=list.result.tools.find(t=>t.name==="read_audio_part");
   assert.deepEqual(part._meta.ui.visibility,["app"]);
+  assert.ok(audio.outputSchema.properties.delivery && part.outputSchema.properties.size);
   const resource=await (await request(jwt,"resources/read",{uri:audio._meta.ui.resourceUri})).json();
   assert.match(resource.result.contents[0].mimeType,/profile=mcp-app/);
   assert.match(resource.result.contents[0].text,/<audio /);
