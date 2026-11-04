@@ -23,11 +23,15 @@ const ranged = (range) => {
   const end=Math.min(+b,mp4.length-1);
   return new Response(mp4.subarray(+a,end+1),{status:206,headers:{"Content-Range":`bytes ${a}-${end}/${mp4.length}`}});
 };
-test("completed job returns the original MP4, with a safely encoded browser URL", async () => {
+test("completed job gives the widget the original MP4 without a host attachment, and CLI downloads keep the bytes", async () => {
   const items = [{...src,type:"input"},{...src,filename:"../other.mp4"},
     {...src,subfolder:"../inputs"},{...src,filename:"file.png"},src];
   const r=await getVideo(upstream(job(items),ranged),origin,{prompt_id:id});
-  const {resource}=r.content[1];
+  assert.deepEqual(Buffer.from(r._meta["split/video"],"base64"),mp4);
+  assert.deepEqual(r.content.map(c=>c.type),["text"]);
+  assert.equal(new URL(r.structuredContent.url).searchParams.get("filename"),src.filename);
+  const download=await getVideo(upstream(job(items),ranged),origin,{prompt_id:id,byte_offset:0});
+  const {resource}=download.content[1];
   assert.equal(resource.mimeType,"video/mp4");
   assert.deepEqual(Buffer.from(resource.blob,"base64"),mp4);
   assert.equal(new URL(resource.uri).searchParams.get("filename"),src.filename);
