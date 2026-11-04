@@ -1,12 +1,12 @@
 // The browser handles Access cookies. The player never receives credentials.
-export const PLAYER_URI = "ui://split/video-player-v3.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v4.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
 export const playerHtml = (browserOrigin:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した動画</title>
 <style>
-:root{color-scheme:light dark;font:14px system-ui}body{margin:0}video{width:100%;max-height:65vh;background:#121212;border-radius:8px}
+:root{color-scheme:light dark;font:14px system-ui}body{margin:0}video{width:100%;max-height:420px;object-fit:contain;background:#121212;border-radius:8px}
 footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 4px}a{color:LinkText}
 </style>
 <video controls playsinline hidden aria-label="生成した動画"></video>
@@ -68,7 +68,7 @@ addEventListener("message", e => {
   } else if (m.method === "ui/notifications/tool-result") { render(m.params); }
   else if (m.method === "ui/resource-teardown") { clearVideo(); send({id:m.id,result:{}}); }
 });
-send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"3"},appCapabilities:{}}});
+send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"4"},appCapabilities:{}}});
 function resize() {
   const height = document.body.scrollHeight;
   if (initialized && height !== lastHeight) { lastHeight = height; send({method:"ui/notifications/size-changed",params:{height}}); }
