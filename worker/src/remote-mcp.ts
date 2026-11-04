@@ -12,7 +12,7 @@ import {filename, workflowInputs, production} from "./production-tools.ts";
 import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
-import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URI, playerHtml } from "./video-player.ts";
+import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
 import { IMAGE_VIEWER_URI, imageViewerHtml } from "./image-viewer.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
@@ -175,9 +175,11 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     description:"View a saved PNG, JPEG or WebP using its history filename. Shows an image viewer and always returns an authenticated link to open or save the image. Include that link in your reply; do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
-  for (const uri of [PLAYER_URI, PREVIOUS_PLAYER_URI])
-    server.registerResource(uri===PLAYER_URI?"video-player":"previous-video-player",uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml}],
+  const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin]}},
+    "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin]}};
+  for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())
+    server.registerResource(i===0?"video-player":"previous-video-player-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
+      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin),_meta:videoCsp}],
     }));
   server.registerTool("get_video",{title:"Retrieve a generated video",
     description:"Play a saved MP4. In chat call with prompt_id and optional index; include the returned signed-in playback link as a fallback. For binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
