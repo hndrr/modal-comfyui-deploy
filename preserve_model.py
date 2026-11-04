@@ -293,7 +293,7 @@ app.include(download_app)
 # GUI は隣にある preserve_model.py の関数と定数を読み込む。
 REMOTE_SOURCE_DIR: Final = "/root"
 
-GRADIO_VERSION: Final = "5.47.2"
+GRADIO_VERSION: Final = "6.16.0"
 MODAL_VERSION: Final = "1.1.4"
 
 PRESERVE_WEB_REQUIRES_PROXY_AUTH_ENV = "PRESERVE_WEB_REQUIRES_PROXY_AUTH"
@@ -404,6 +404,7 @@ def gui_image(extra_env: dict[str, str] | None = None):
         modal.Image.debian_slim(python_version="3.12")
         .pip_install(
             f"gradio=={GRADIO_VERSION}", f"modal=={MODAL_VERSION}",
+            "starlette==1.10.0",
             "brotli>=1.2.1", "certifi>=2026.10.19",
         )
         # コンテナ内で再 import されてもデプロイ時と同じ設定にする。
