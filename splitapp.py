@@ -72,7 +72,7 @@ image = (
         f"comfyui-frontend-package=={FRONTEND_VERSION}",
         f"comfyui-manager=={MANAGER_VERSION}",
         "modal==1.1.4",
-        "aiohttp==3.12.15",
+        "aiohttp==3.14.4",
     )
     .run_commands(
         *[
