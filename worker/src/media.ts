@@ -156,6 +156,8 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
     byte_offset:offset, byte_length:data.length, next_offset:next};
   const blob = base64(data);
   if (forPlayer) return {structuredContent:info, content:[], _meta:{"split/audioPart":blob}};
+  if (kind === "video" && !chunks) return {structuredContent:info, _meta:{"split/video":blob},
+    content:[{type:"text",text:filename + " — play in the video player or open after signing in: " + url}]};
   return {structuredContent:info, content:[
     {type:"text", text:JSON.stringify(info)},
     complete && kind === "audio" ? {type:"audio", mimeType:format.mime, data:blob} :

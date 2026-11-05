@@ -1,6 +1,6 @@
 import {browserReview} from "./job-review.ts";
 import { splitGui } from "./split-guis.ts";
-import { audioDocument } from "./audio-document.ts";
+import { mediaDocument } from "./media-document.ts";
 import { remoteMcp } from "./remote-mcp.ts";
 import {mediaSender, savedOutputRequest} from "./saved-media.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
@@ -596,7 +596,7 @@ export default {
     }
 
     if ((splitUiHost || mediaHost) && identity.kind === "browser") {
-      const page = audioDocument(request);
+      const page = mediaDocument(request);
       if (page) return page;
       if (env.SPLIT_MEDIA_ORIGIN && savedOutputRequest(request)) {
         try {

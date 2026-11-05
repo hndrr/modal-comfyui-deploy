@@ -38,6 +38,9 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const viewer=await (await request(jwt,'resources/read',{uri:image._meta.ui.resourceUri})).json();
   assert.match(viewer.result.contents[0].mimeType,/profile=mcp-app/);
   assert.match(viewer.result.contents[0].text,/<img hidden/);
+  const video=list.result.tools.find(t=>t.name==="get_video");
+  const playback=await (await request(jwt,"resources/read",{uri:video._meta.ui.resourceUri})).json();
+  assert.deepEqual(playback.result.contents[0]._meta.ui.csp,{connectDomains:[],resourceDomains:["https://"+split]});
   const audio=list.result.tools.find(t=>t.name==="get_audio"),
     part=list.result.tools.find(t=>t.name==="read_audio_part");
   assert.deepEqual(part._meta.ui.visibility,["app"]);
