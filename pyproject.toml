@@ -16,3 +16,7 @@ split-test = ["aiohttp>=3.12.15"]
 
 [tool.flake8]
 max-line-length = 100
+
+[tool.uv]
+# gradio caps pillow<13, but Pillow ships its critical security fixes only in 13.x.
+override-dependencies = ["pillow>=13,<14"]
