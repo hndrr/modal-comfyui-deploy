@@ -1,0 +1,556 @@
+{
+  "description": "Design only. Each valid response is an independent scenario, not a chronological transition from one terminal state to another. No generation or failure injection has been performed. IDs and node numbers are illustrative.",
+  "input_example": "generate-music.json#direct-vocal-create",
+  "schema": "../schemas/generate-music-response.schema.json",
+  "notes": [
+    "通常の受付・再送例は既存のdirect-vocal-create入力例（MiniMax M3、seed 42、上限30秒）に対応する。同じIDを使う障害例は別々の仮定である。",
+    "失敗理由・次の処理は説明用の外側の情報であり、MCP応答はresponseの内容のみ。",
+    "unknownにprompt_idはない。acceptedかつjob_status unknownには元のprompt_idがある。",
+    "進捗・履歴ツールの応答形式は変更しない。通信再試行の動作保証には実装後の障害注入が必要。"
+  ],
+  "valid": [
+    {
+      "name": "accepted-queued",
+      "explanation": "入力例 direct-vocal-create の初回受付。グラフ・seedと受付記録の永続化が完了した。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "queued",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "元のprompt_idでget_job_progressを参照する。"
+    },
+    {
+      "name": "replay-dispatching",
+      "explanation": "同じID・同じ入力の再送。GPU呼び出し意図は保存済み。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "dispatching",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "元のジョブを監視する。グラフ再構築・再spawnはしない。"
+    },
+    {
+      "name": "progress-disconnected-replay",
+      "explanation": "MCPまたは進捗WebSocketの切断後、同じ入力を再照合した。履歴読み取りの一時障害もこの受付済みジョブを維持する。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "running",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "同じprompt_idの進捗・履歴を参照する。読み取りだけを既存締切内で再試行する。"
+    },
+    {
+      "name": "dispatch-or-prompt-outcome-unknown",
+      "explanation": "受付は永続化済みだが、GPU呼び出しまたはPOST /promptの成否を確認できない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "unknown",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "同じprompt_idの開始・完了記録、キュー・履歴を照合する。POST /promptを再送しない。"
+    },
+    {
+      "name": "restart-or-retired-completed-replay",
+      "explanation": "CPU再起動・履歴退避後の再送。退避記録に元の終端状態と応答情報が残っている。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "completed",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "既存のlist_outputs・get_audioで成果物を取得する。保存期限切れなら再生成で補わない。"
+    },
+    {
+      "name": "failed-replay",
+      "explanation": "ノード例外・OOM・プロセス終了などで実行失敗した後の同じ依頼。受付状態はacceptedのまま。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "failed",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "get_historyまたはget_job_progressで実行理由を確認する。再生成は新しいrequest_idの別依頼とする。"
+    },
+    {
+      "name": "cancelled-replay",
+      "explanation": "取消完了後の同じID・同じ入力。取消要求だけを終端状態とは扱わない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "cancelled",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "元の取消済みジョブを返す。再送で新規生成しない。"
+    },
+    {
+      "name": "compatible-node-update",
+      "explanation": "ノード更新後、新規依頼のCPU事前検査がすべて合格した。以前のノード版との一致は要求しない。",
+      "response": {
+        "request_id": "example-compatible-update",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000002",
+        "job_status": "queued",
+        "number": 1,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "通常の投入へ進む。ノード更新だけを理由に再度の実生成検証を要求しない。"
+    },
+    {
+      "name": "missing-node",
+      "explanation": "追加依存が欠落。class名を他のノードへ自動置換しない。",
+      "response": {
+        "request_id": "example-direct-extend",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。",
+          "issues": [
+            {
+              "node_id": "12",
+              "node_type": "ACEStep15XLExtendAudio",
+              "input": null,
+              "code": "missing_node_type",
+              "message": "必要なノードが現在のsplit環境で読み込まれていません。"
+            }
+          ]
+        }
+      },
+      "next_action": "対象の入力・環境・テンプレートを修正してから再依頼する。GPU呼び出しなし。"
+    },
+    {
+      "name": "incompatible-updated-link",
+      "explanation": "ノード更新により接続が不整合になった場合の説明例。現在の実装にこの不具合があるという意味ではない。",
+      "response": {
+        "request_id": "example-direct-timbre-reference",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。",
+          "issues": [
+            {
+              "node_id": "30",
+              "node_type": "SaveAudio",
+              "input": "audio",
+              "code": "return_type_mismatch",
+              "message": "接続元はLATENTを返しますが、この入力はAUDIOを要求します。"
+            }
+          ]
+        }
+      },
+      "next_action": "対象の入力・環境・テンプレートを修正してから再依頼する。GPU呼び出しなし。"
+    },
+    {
+      "name": "invalid-adapter-value",
+      "explanation": "MusicSpecとAdapterをCPU評価し、リンク型だけでは分からない値の不整合を検出する。",
+      "response": {
+        "request_id": "example-invalid-ace-language",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。",
+          "issues": [
+            {
+              "node_id": "20",
+              "node_type": "TextEncodeAceStepAudio1.5",
+              "input": "language",
+              "code": "value_not_in_list",
+              "message": "Adapterが返した言語値mixedは接続先の選択肢にありません。"
+            }
+          ]
+        }
+      },
+      "next_action": "対象の入力・環境・テンプレートを修正してから再依頼する。GPU呼び出しなし。"
+    },
+    {
+      "name": "partial-output-validation",
+      "explanation": "別の出力は有効で、本体の成功フラグがtrueでも拒否する。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。",
+          "issues": [
+            {
+              "node_id": "30",
+              "node_type": "SaveAudio",
+              "input": "audio",
+              "code": "required_output_not_validated",
+              "message": "予定した音声保存ノード30が検証済み出力リストに含まれていません。"
+            }
+          ]
+        }
+      },
+      "next_action": "対象の入力・環境・テンプレートを修正してから再依頼する。GPU呼び出しなし。"
+    },
+    {
+      "name": "model-not-recognized",
+      "explanation": "ファイルがあるだけでは受付せず、ローダー認識を確認する。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。",
+          "issues": [
+            {
+              "node_id": "10",
+              "node_type": "UNETLoader",
+              "input": "unet_name",
+              "code": "model_not_in_loader",
+              "message": "指定モデルが現在のローダーの選択肢にありません。"
+            }
+          ]
+        }
+      },
+      "next_action": "対象の入力・環境・テンプレートを修正してから再依頼する。GPU呼び出しなし。"
+    },
+    {
+      "name": "node-not-permitted",
+      "explanation": "ノードがインストール済みでも、パック全体の暗黙の許可はしない。",
+      "response": {
+        "request_id": "example-direct-extend",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。",
+          "issues": [
+            {
+              "node_id": "12",
+              "node_type": "ACEStep15XLExtendAudio",
+              "input": null,
+              "code": "node_not_permitted",
+              "message": "このノードと実装元の組み合わせはMCP許可対象にありません。"
+            }
+          ]
+        }
+      },
+      "next_action": "対象の入力・環境・テンプレートを修正してから再依頼する。GPU呼び出しなし。"
+    },
+    {
+      "name": "same-id-different-input",
+      "explanation": "受付済みのIDで歌詞などを変更した再送。今回の引数だけを拒否し、元のジョブは維持する。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "rejected",
+        "error": {
+          "code": "idempotency_conflict",
+          "message": "request_idは異なる入力で既に使用されています。同じ依頼の再照合には元の入力を使用してください。"
+        }
+      },
+      "next_action": "元の依頼を追跡するなら同じID・元の入力を送る。別生成を意図する場合だけ新しいIDを使う。"
+    },
+    {
+      "name": "preflight-unavailable",
+      "explanation": "未受付であることは確認できたが、CPU検証への通信が失敗した。受付保存には進んでいない。",
+      "response": {
+        "request_id": "example-preflight-unavailable",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_unavailable",
+          "message": "CPU事前検証を完了できませんでした。ジョブは作成していません。"
+        }
+      },
+      "next_action": "検査経路の復旧後に再依頼する。検査を省略して投入しない。"
+    },
+    {
+      "name": "acceptance-receipt-lost",
+      "explanation": "受付応答が途中で失われた場合に、応答可能なMCP側が返す形。完全切断ではこのJSONも届かない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "unknown",
+        "error": {
+          "code": "submission_unknown",
+          "message": "受付結果を確認できません。同じrequest_id・同じ入力で再照合してください。"
+        }
+      },
+      "next_action": "新しいIDを発行せず同じID・同じ入力で再照合する。受付記録が確認できれば元のprompt_idを返す。"
+    },
+    {
+      "name": "acceptance-persistence-unknown",
+      "explanation": "保存・永続化の途中で失敗したか、台帳の読み取りができず、受付有無を断定できない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "unknown",
+        "error": {
+          "code": "submission_unknown",
+          "message": "受付記録の永続化を確認できません。未受付とは断定できません。"
+        }
+      },
+      "next_action": "新しいIDを発行せず同じID・同じ入力で再照合する。受付記録が確認できれば元のprompt_idを返す。"
+    },
+    {
+      "name": "invalid-request",
+      "explanation": "有効なrequest_idはあるが、入力経路を混在させた呼び出し。ジョブ照合・作成前の入力エラー。",
+      "response": {
+        "request_id": "example-mixed-input",
+        "submission_status": "rejected",
+        "error": {
+          "code": "invalid_request",
+          "message": "inputはdirectまたはmusic_specの片方だけを指定してください。"
+        }
+      },
+      "next_action": "入力schemaに合わせて修正する。"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "accepted-without-prompt-id",
+      "reason": "受付済みには永続化済みprompt_idが必須。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "job_status": "queued",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "accepted-without-job-status",
+      "reason": "受付済みには既存ジョブ状態が必須。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "accepted-without-seed",
+      "reason": "再送・退避後にも確定したseedを返す。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "queued",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "accepted-with-submission-error",
+      "reason": "受付エラーと実行エラーを混在させない。実行失敗はjob_statusと既存履歴で扱う。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "failed",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": [],
+        "error": {
+          "code": "submission_unknown",
+          "message": "実行失敗"
+        }
+      }
+    },
+    {
+      "name": "unknown-with-invented-prompt-id",
+      "reason": "受付不明では仮のprompt_idを返さない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "unknown",
+        "error": {
+          "code": "submission_unknown",
+          "message": "受付結果を確認できません。同じrequest_id・同じ入力で再照合してください。"
+        },
+        "prompt_id": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "name": "unknown-with-job-state",
+      "reason": "受付不明と受付済みジョブのunknownを混在させない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "unknown",
+        "error": {
+          "code": "submission_unknown",
+          "message": "受付結果を確認できません。同じrequest_id・同じ入力で再照合してください。"
+        },
+        "job_status": "unknown"
+      }
+    },
+    {
+      "name": "unknown-with-rejection-code",
+      "reason": "受付不明のコードはsubmission_unknown。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "unknown",
+        "error": {
+          "code": "preflight_failed",
+          "message": "受付結果を確認できません。同じrequest_id・同じ入力で再照合してください。"
+        }
+      }
+    },
+    {
+      "name": "rejected-without-error",
+      "reason": "拒否には理由が必須。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "rejected"
+      }
+    },
+    {
+      "name": "preflight-without-node-details",
+      "reason": "検証不整合にはノード・入力・理由を示すissuesが必須。",
+      "response": {
+        "request_id": "example-direct-extend",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "事前検証で不整合が見つかりました。ジョブは作成していません。"
+        }
+      }
+    },
+    {
+      "name": "invalid-job-status",
+      "reason": "新しいジョブ状態retryingは追加しない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "retrying",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "m3-as-guaranteed-target-length",
+      "reason": "M3は生成時間の上限。指定時間での終曲として表現しない。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "queued",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "target_length"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "missing-request-id",
+      "reason": "業務応答では元の有効なrequest_idを必ず返す。",
+      "response": {
+        "submission_status": "unknown",
+        "error": {
+          "code": "submission_unknown",
+          "message": "受付結果を確認できません。同じrequest_id・同じ入力で再照合してください。"
+        }
+      }
+    }
+  ]
+}
