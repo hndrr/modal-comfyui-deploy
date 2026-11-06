@@ -78,7 +78,7 @@ CLI の転送は、`upload_id + filename` で開始・再開位置を確認し�
 
 | ツール | 主な引数・アクション | できること・返るもの | 実行先・保存への影響 |
 | --- | --- | --- | --- |
-| `enqueue_workflow` | `request_id`、API形式の `workflow`、任意の `gpu`（`auto`＝料金優先、`auto-speed`＝速度優先、または `L4`・`L40S`・`RTX-PRO-6000`、明示試行用の `CPU`） | 選択結果の `gpu` と優先設定を含む理由の `gpu_reason` を返す。`prompt_id`、または外部送信の `approval_required` と本人用確認リンク | ComfyUI CPUで受付。対応済みAPI・軽い入出力だけならCPU、それ以外はGPUを起動。CPU指定でもMCPの拒否・承認条件は維持。外部送信は対応版の承認機能を適用して利用する |
+| `enqueue_workflow` | `request_id`、API形式の `workflow`、任意の `gpu`（`auto`＝料金優先、`auto-speed`＝速度優先、または `L4`・`L40S`・`RTX-PRO-6000`、明示試行用の `CPU`） | 選択結果の `gpu` と優先設定を含む理由の `gpu_reason` を返す。`prompt_id`、または外部送信の `approval_required` と本人用確認リンク | ComfyUI CPUで受付。対応済みAPI・軽い入出力だけならCPU、それ以外はGPUを起動。明示的な `CPU` 指定ならCPU対応未登録でもCPUで試行する。CPU指定でもMCPの拒否・承認条件は維持。外部送信は対応版の承認機能を適用して利用する |
 | `queue` | `action: list / status`。個別確認は `prompt_id` | ジョブ一覧、または指定したジョブの現在の状態 | ComfyUI CPU。新規ジョブを作らない |
 | `get_job_progress` | `prompt_id` | 現在のノード、報告されたステップ、CPU/GPUと選択理由、エラー、各種時間。未報告の値は `null` | ComfyUI CPU。GPUを新規起動しない |
 | `get_history` | `action: list / diagnose`、任意で `prompt_id`・`limit` | 保存済みの状態・出力・エラー・実行時間。`live: false`。IDなしの `diagnose` は直近の対象件数内の失敗を優先 | 配信用 CPU。ライブ進捗ではない |

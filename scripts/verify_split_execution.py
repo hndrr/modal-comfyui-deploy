@@ -11,9 +11,13 @@ from comfy_split.gpu import deployed_gpu_count
 
 
 async def main():
-    """Check CPU media, queue cancellation, GPU mode switching, and scale-down."""
+    """Check CPU media, GPU mode switching, and scale-down."""
     origin = "http://127.0.0.1:8000"
-    assert await deployed_gpu_count() == 0, "Start with GPU pools stopped"
+    deadline = time.monotonic() + 120
+    while await deployed_gpu_count():
+        if time.monotonic() >= deadline:
+            raise AssertionError("GPU pools did not stop before CPU verification")
+        await asyncio.sleep(2)
     async with aiohttp.ClientSession() as client:
         async def request(method, path, **kwargs):
             async with client.request(method, origin + path, **kwargs) as response:
@@ -37,15 +41,11 @@ async def main():
                     "2": {"class_type": "SaveImage", "inputs": {
                         "images": ["1", 0], "filename_prefix": "split-verification/smoke"}}
                 }}
-                first, second = await asyncio.gather(*[
-                    request("POST", "/api/prompt", json=body) for _ in range(2)])
-                assert first["gpu"] == second["gpu"] == "CPU", (first, second)
-                assert first["prompt_id"] != second["prompt_id"]
-                pending = (await request("GET", "/api/queue"))["queue_pending"]
-                assert pending, "Expected at least one pending prompt during CPU worker startup"
-                cancelled = pending[-1][1]
-                await request("POST", "/api/queue", json={"delete": [cancelled]})
-                remaining = ({first["prompt_id"], second["prompt_id"]} - {cancelled}).pop()
+                receipt = await request("POST", "/api/prompt", json=body)
+                assert receipt["gpu"] == "CPU", receipt
+                remaining = receipt["prompt_id"]
+                # Pending cancellation is covered by the synchronized gateway
+                # HTTP test; a warm CPU may finish this tiny graph immediately.
                 deadline = time.monotonic() + 600
                 while time.monotonic() < deadline:
                     assert await deployed_gpu_count() == 0, "CPU job started a GPU"
@@ -61,12 +61,11 @@ async def main():
                 async with client.get(origin + "/api/view", params=params) as response:
                     assert response.status == 200
                     assert len(await response.read()) > 0
-                assert not await request("GET", "/api/history/" + cancelled)
                 assert await deployed_gpu_count() == 0
                 assert any(e.get("type") == "executing" and
                            e.get("data", {}).get("prompt_id") == remaining for e in events), events
                 print(json.dumps({"event": "generation_verified", "job": remaining,
-                                  "cancelled": cancelled, "seconds": time.monotonic() - started,
+                                  "seconds": time.monotonic() - started,
                                   "events": sorted({e["type"] for e in events})}), flush=True)
             finally:
                 reader.cancel()

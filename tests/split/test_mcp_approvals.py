@@ -14,6 +14,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from PIL import Image
 
+from comfy_split import gpu
 from comfy_split import mcp_approvals as approvals
 from comfy_split import mcp_policy as policy
 from comfy_split.gateway import Controller
@@ -42,6 +43,8 @@ DEFS = {
 
 class ApprovalTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # Simulate a verified API entry to test precedence and pinned approval.
+        self.enterContext(patch.dict(gpu.CPU_API_NODES, {"comfy_api_nodes.nodes_gemini": {"GeminiNode"}}))
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.input = root / "input"
         self.input.mkdir()
@@ -100,6 +103,15 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             {"EmptyImage": {"python_module": "custom_nodes.other"}}
         )
         self.assertEqual((await self.send("spoof", disguised)).status, 409)
+
+    async def test_unregistered_api_still_needs_approval_for_gpu_or_cpu_trial(self):
+        with patch.dict(gpu.CPU_API_NODES, {}, clear=True):
+            for key, choice, expected in (("auto-api", "auto", gpu.DEFAULT),
+                                          ("manual-api", "L40S", "L40S"),
+                                          ("trial-api", "CPU", "CPU")):
+                path, csrf, html = await self.pending(key, PAID, gpu=choice)
+                self.assertIn(f"実行先：<strong>{expected}", html)
+                self.assertFalse(self.control.journal.data["jobs"])
 
     async def test_gpu_selection_is_pinned_across_browser_mcp_review_and_replay(self):
         browser = await (await self.client.post("/api/prompt", json={"prompt": PAID})).json()
@@ -227,6 +239,12 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         browser = await (await self.client.post("/api/prompt", json={"prompt": PAID},
             headers={"Cookie": "split_gpu=retired-choice"})).json()
         self.assertEqual(browser["gpu"], "CPU")
+        local = {"1": {"class_type": "MiniMaxMusic3TextEncode", "inputs": {}}}
+        browser = await (await self.client.post("/api/prompt", json={"prompt": local},
+            headers={"Cookie": "split_gpu=CPU"})).json()
+        self.assertEqual(browser["gpu"], gpu.DEFAULT)
+        response = await self.client.post("/api/prompt", json={"prompt": local, "gpu": "CPU"})
+        self.assertEqual(response.status, 409)
         response = await self.client.post("/api/prompt", json={"prompt": PAID, "gpu": "retired-choice"})
         self.assertEqual(response.status, 409)
 

@@ -1,7 +1,7 @@
 """CPU-only ComfyUI smoke check; read-only production volumes, no provider calls.
 
 scripts/modal.sh run -m scripts.verify_split_cpu
-API imports are checked here; provider execution still needs an approved workflow.
+Provider execution needs a separately approved workflow.
 """
 
 import asyncio
@@ -31,7 +31,6 @@ app = modal.App("split-cpu-verification")
                        for k in ("environment", "data", "models")})
 async def verify():
     from aiohttp import ClientSession
-    from comfy_split.gpu import CPU_API_NODES
     from comfy_split.runtime import ComfyProcess
 
     version = json.loads(Path("/split-data/state/controller.json").read_text())["environment"]
@@ -59,9 +58,6 @@ async def verify():
             stats = await get("/system_stats")
             assert all(d["type"] == "cpu" for d in stats["devices"]), stats
             assert not (await get("/_split/catalog"))["cpu_guard"]
-            definitions = await get("/object_info")
-            api_imported = sorted(name for names in CPU_API_NODES.values() for name in names if name in definitions)
-            api_missing = sorted(name for names in CPU_API_NODES.values() for name in names if name not in definitions)
             graph = {
                 "1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 1, "color": 3368601}},
                 "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "cpu-check"}},
@@ -89,7 +85,7 @@ async def verify():
                        "2": {"class_type": "SaveVideo", "inputs": {"video": ["1", 0], "filename_prefix": "cpu-check",
                                                                     "format": "auto", "codec": "auto"}}})
             return {"device": "cpu", "guard": False, "image_audio_video_io": "passed",
-                    "api_imported": api_imported, "api_missing": api_missing, "provider_calls": 0}
+                    "provider_calls": 0}
     finally:
         await process.stop()
 

@@ -10,23 +10,8 @@ CHOICES = ("auto", "auto-speed", "CPU", *WORKERS)
 
 # CPU execution eligibility, independent of MCP's disclosure/approval policy.
 # Add nodes here only after the CPU checks in docs/guides/split-gpu.md.
-CPU_API_NODES = {
-    "comfy_api_nodes.nodes_openai": {"OpenAIChatNode", "OpenAIGPTImage1", "OpenAIGPTImageNodeV2"},
-    "comfy_api_nodes.nodes_openrouter": {"OpenRouterLLMNode", "OpenRouterImageNode"},
-    "comfy_api_nodes.nodes_gemini": {
-        "GeminiNode", "GeminiNodeV2", "GeminiNodeV3", "GeminiImageNode", "GeminiImage2Node",
-        "GeminiNanoBanana2", "GeminiNanoBanana2V2",
-    },
-    "comfy_api_nodes.nodes_sora": {"OpenAIVideoSora2"},
-    "comfy_api_nodes.nodes_comfy_cloud": {
-        "ComfyCloudMiniMaxMusic3TextToAudioNode", "ComfyCloudMiniMaxH3TextToVideoNode",
-        "ComfyCloudMiniMaxH3FirstLastFrameToVideoNode", "ComfyCloudMiniMaxH3ImageToVideoNode",
-        "ComfyCloudFlux2TextToImageNode", "ComfyCloudZImageTurboNode", "ComfyCloudMageFlowTextToImageNode",
-        "ComfyCloudMageFlowTurboTextToImageNode",
-    },
-    "custom_nodes.comfyui-geminitools": {"GeminiToolsLLM", "GeminiToolsImageGeneration", "GeminiToolsMusicGeneration"},
-    "custom_nodes.comfyui-jev": {"OpenRouterText"},
-}
+# Provider calls and result handling have not yet been verified on CPU.
+CPU_API_NODES: dict[str, set[str]] = {}
 
 # These nodes load or encode media without local model inference.
 MEDIA_NODES = {
@@ -34,7 +19,6 @@ MEDIA_NODES = {
     "comfy_extras.nodes_images": {"EmptyImage"},
     "comfy_extras.nodes_audio": {"LoadAudio", "SaveAudio", "SaveAudioMP3", "SaveAudioOpus", "PreviewAudio"},
     "comfy_extras.nodes_video": {"LoadVideo", "SaveVideo"},
-    "custom_nodes.comfyui-geminitools": {"GeminiToolsSaveAudio"},
 }
 
 
@@ -122,19 +106,26 @@ def measured_still_gpu(graph, definitions):
 
 
 def select_gpu(requested, graph, definitions):
+    """Route verified, currently CPU-importable graphs before applying GPU preferences."""
     if requested == "CPU":
-        return {"gpu": "CPU", "gpu_reason": "明示的なCPU指定（CPU対応未登録でも実行）"}
+        return {"gpu": "CPU", "gpu_reason": "明示的なCPU指定"}
     speed = requested == "auto-speed"
     priority = "速度優先" if speed else "料金優先"
-    unsupported = set()
+    unsupported, unavailable, cpu_missing = set(), set(), set()
     has_provider = False
     for node in graph.values():
         if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) or not isinstance(node.get("inputs"), dict):
-            unsupported.add("ノード定義・入力を確認できません")
+            unavailable.add("不正なノード入力")
             continue
         name = node["class_type"]
         info = definitions.get(name, {})
         module = info.get("python_module", "").lower()
+        if not module:
+            unavailable.add(name)
+            continue
+        if info.get("_split_cpu_imported") is False:
+            cpu_missing.add(name)
+            continue
         if name in MEDIA_NODES.get(module, ()):
             if name == "EmptyImage":
                 inputs = node["inputs"]
@@ -148,10 +139,18 @@ def select_gpu(requested, graph, definitions):
             has_provider = True
         else:
             unsupported.add(name)
-    if graph and not unsupported:
+    if graph and not (unsupported or unavailable or cpu_missing):
         reason = "外部APIと素材の入出力のみ" if has_provider else "素材の入出力のみ"
         return {"gpu": "CPU", "gpu_reason": f"{reason}：CPUで実行（GPU指定より優先）"}
-    detail = "CPU対応未登録または対象条件外：" + ", ".join(sorted(unsupported))
+    reasons = []
+    for label, names in (("CPU判定に必要なノード定義・入力を確認できません", unavailable),
+                         ("CPUで読み込めないノード", cpu_missing),
+                         ("CPU対応未登録または対象条件外", unsupported)):
+        if names:
+            shown = ", ".join(name[:80] for name in sorted(names)[:5])
+            rest = f"、ほか{len(names) - 5}件" if len(names) > 5 else ""
+            reasons.append(f"{label}：{shown}{rest}")
+    detail = "。".join(reasons) or "実行対象のノードを確認できません"
     if requested in WORKERS:
         return {"gpu": requested, "gpu_reason": "ジョブの機種指定。" + detail}
     if not speed:

@@ -2,8 +2,9 @@ import copy
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from comfy_split.gpu import DEFAULT, select_gpu
+from comfy_split.gpu import CPU_API_NODES, DEFAULT, select_gpu
 from comfy_split.mcp_policy import executable_graph
 
 
@@ -45,6 +46,7 @@ class MeasuredRoutingTests(unittest.TestCase):
         graph["3"] = {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}}
         self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], DEFAULT)
 
+    @patch.dict(CPU_API_NODES, {"comfy_api_nodes.nodes_gemini": {"GeminiNode"}})
     def test_cpu_precedes_manual_gpu_but_requires_separate_registration(self):
         graph = {"1": {"class_type": "GeminiNode", "inputs": {"prompt": "hello"}}}
         defs = {"GeminiNode": {"python_module": "comfy_api_nodes.nodes_gemini", "api_node": True}}
@@ -59,3 +61,24 @@ class MeasuredRoutingTests(unittest.TestCase):
             self.assertIn(name, selected["gpu_reason"])
             self.assertEqual(select_gpu("CPU", unregistered, definitions)["gpu"], "CPU")
             self.assertEqual(select_gpu("L40S", unregistered, definitions)["gpu"], "L40S")
+
+        for metadata in ({}, {"api_node": False}, {"api_node": 1}):
+            definitions = {"GeminiNode": {"python_module": "comfy_api_nodes.nodes_gemini", **metadata}}
+            self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], DEFAULT)
+
+    def test_unverified_providers_stay_on_gpu_until_cpu_registration(self):
+        graph = {"1": {"class_type": "GeminiNode", "inputs": {}}}
+        defs = {"GeminiNode": {"python_module": "comfy_api_nodes.nodes_gemini", "api_node": True}}
+        self.assertEqual(select_gpu("auto", graph, defs)["gpu"], DEFAULT)
+        self.assertEqual(select_gpu("L40S", graph, defs)["gpu"], "L40S")
+        self.assertEqual(select_gpu("CPU", graph, defs)["gpu"], "CPU")
+
+    def test_missing_definitions_and_bounded_unsupported_reasons(self):
+        graph = {str(i): {"class_type": f"Node{i}", "inputs": {}} for i in range(25)}
+        reason = select_gpu("auto", graph, {})["gpu_reason"]
+        self.assertIn("ノード定義・入力を確認できません", reason)
+        self.assertNotIn("CPU対応未登録", reason)
+        defs = {n["class_type"]: {"python_module": "custom_nodes.test"} for n in graph.values()}
+        reason = select_gpu("auto", graph, defs)["gpu_reason"]
+        self.assertIn("ほか20件", reason)
+        self.assertLess(len(reason), 250)

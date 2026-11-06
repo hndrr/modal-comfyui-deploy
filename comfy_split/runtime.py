@@ -267,6 +267,7 @@ class ComfyProcess:
                 *command, cwd=self.root, env=environment, stdout=log,
                 stderr=asyncio.subprocess.STDOUT, start_new_session=True)
         started = time.monotonic()
+        startup_error = None
         async with ClientSession() as client:
             while time.monotonic() - started < 300:
                 if self.process.returncode is not None:
@@ -289,12 +290,14 @@ class ComfyProcess:
                             return
                 except (OSError, ClientError, asyncio.TimeoutError):
                     pass
-                except RuntimeError:
+                except RuntimeError as error:
+                    startup_error = error
                     break
                 await asyncio.sleep(1)
         tail = self.log.read_text(errors="replace")[-6000:]
         await self.stop()
-        raise RuntimeError("ComfyUI startup failed: " + tail)
+        reason = f"{startup_error}\n" if startup_error else ""
+        raise RuntimeError("ComfyUI startup failed: " + reason + tail) from startup_error
 
     async def catalog(self, client):
         async with client.get(self.url + "/object_info") as response:
