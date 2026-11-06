@@ -3,6 +3,7 @@
 import importlib.metadata
 import argparse
 import subprocess
+import runpy
 import sys
 from pathlib import Path
 
@@ -65,6 +66,7 @@ def kitchen_report(constraints, version=importlib.metadata.version, kitchen=None
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--requirements", type=Path)
+    parser.add_argument("--bridge", action="store_true", help="Check upstream split contracts on the build CPU")
     args = parser.parse_args()
     constraints = Path("/opt/split-constraints.txt").read_text()
     subprocess.run([sys.executable, "-m", "pip", "check"], check=True)
@@ -74,3 +76,15 @@ if __name__ == "__main__":
     report = kitchen_report(constraints)["comfy-kitchen"]
     if not report["expected"] or report["missingApis"]:
         raise RuntimeError(f"Missing comfy-kitchen pin or APIs: {report}")
+    if args.bridge:
+        sys.path.insert(0, "/opt/comfy-template")
+        from comfy.cli_args import args as comfy_args
+        comfy_args.cpu = True
+        guard = runpy.run_path("/opt/comfy-extensions/ComfyUI-Modal-Bridge/cpu_guard.py")
+        guard["install_cpu_guard"]()
+        from comfy_execution.jobs import JobStatus, get_all_jobs, get_job
+        queue = [(0, "split-build-check", {}, {"create_time": 1}, [])]
+        jobs, total = get_all_jobs([], queue, {}, status_filter=[JobStatus.PENDING],
+                                  workflow_id=None, sort_by="created_at", sort_order="desc", limit=1, offset=0)
+        if total != 1 or jobs[0]["id"] != queue[0][1] or get_job(queue[0][1], [], queue, {})["id"] != queue[0][1]:
+            raise RuntimeError("Unsupported ComfyUI job serialization; review the Modal bridge")
