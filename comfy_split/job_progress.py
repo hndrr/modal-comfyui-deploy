@@ -52,6 +52,7 @@ def snapshot(job, now=None):
     elapsed_end = job.get("finished_at") if terminal else now
     return {
         "prompt_id": job["id"], "status": job["status"],
+        "gpu": job.get("gpu"), "gpu_reason": job.get("gpu_reason"),
         "cancel_requested": bool(job.get("cancel_requested")),
         "progress": job.get("live_progress") if job["status"] == "running" else None,
         "elapsed_seconds": round(max(0, elapsed_end-job["created_at"]), 3) if number(elapsed_end) and number(job.get("created_at")) else None,

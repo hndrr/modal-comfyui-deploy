@@ -273,6 +273,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ConnectionError):
                 await self.control.read_result({"id": "missing-test-result", "call_id": "fc-test"})
 
+    async def test_pool_switch_waits_without_dispatch_intent_or_blocking_cancellation(self):
+        other = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-l4")),
+                                get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0)))
+        self.control.workers["L4"] = other
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job.update(gpu="L4", gpu_reason="ジョブの機種指定")
+        await self.control.spawn(job, "generate")
+        other.spawn.aio.assert_not_awaited()
+        self.assertEqual(job["status"], "queued")
+        state = await self.control.gpu_status()
+        self.assertEqual(state["containers"], 1)
+        self.assertEqual(state["latest_selection"]["gpu"], "L4")
+        await self.control.cancel([job["id"]])
+        self.assertEqual(job["status"], "cancelled")
+
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job["gpu"] = "L4"
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+        await self.control.spawn(job, "generate")
+        other.spawn.aio.assert_awaited_once()
+        self.assertEqual(job["call_id"], "fc-l4")
+
     async def test_spawn_failure_keeps_dispatch_intent_and_prevents_second_job(self):
         job = self.control.journal.enqueue({"prompt": {"1": {}}})
         self.worker.spawn.aio.side_effect = RuntimeError("connection lost after send")
@@ -352,6 +375,9 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_uses_same_gpu_function_and_hides_token(self):
         response = await self.client.post("/split/mode", json={"mode": "legacy"})
         self.assertEqual(response.status, 202)
+        session = self.control.journal.data["session"]
+        self.assertEqual(session["status"], "queued")
+        await self.control.spawn(session, "legacy")
         self.worker.spawn.aio.assert_awaited_once()
         spec = self.worker.spawn.aio.call_args.args[0]
         self.assertEqual(spec["operation"], "legacy")

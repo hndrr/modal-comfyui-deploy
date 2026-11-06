@@ -17,6 +17,7 @@ from aiohttp import web
 from comfy_split import input_media
 from comfy_split import mcp_policy as policy
 from comfy_split.config import DEPLOYMENT_ENV
+from comfy_split import gpu
 from comfy_split.state import body_digest
 from comfy_split.media_server import byte_range, version as file_version
 from comfy_split.storage import MOUNTS
@@ -59,6 +60,7 @@ def reply(row):
         {
             "status": "approval_required",
             "approval_path": PUBLIC + row["id"],
+            **{k: row[k] for k in ("gpu", "gpu_reason") if k in row},
             "expires_at": row["expires"],
         },
         status=202,
@@ -67,7 +69,7 @@ def reply(row):
 
 async def submit(c, body, key):
     # Caller holds the journal lock. Only the trusted Worker marks a machine submission.
-    if not isinstance(body, dict) or body.keys() - {"prompt", "client_id", "front", "extra_data"}:
+    if not isinstance(body, dict) or body.keys() - {"prompt", "client_id", "front", "extra_data", "gpu"}:
         raise ValueError("MCP cannot supply credentials, hidden metadata or partial execution targets.")
     if len(json.dumps(body, ensure_ascii=False).encode()) > MAX_BODY:
         raise ValueError("Workflow exceeds the review size limit.")
@@ -82,7 +84,9 @@ async def submit(c, body, key):
     ):
         raise ValueError("MCP does not accept credentials or hidden metadata.")
     client_id = "comfyui-mcp" if key.startswith("stdio:") else "remote-mcp"
+    requested = gpu.request_gpu(body.get("gpu", "auto"))
     body = dict(
+        **({"gpu": requested} if requested != "auto" else {}),
         prompt=body.get("prompt"),
         client_id=client_id,
         **({"front": True} if body.get("front") is True else {}),
@@ -108,8 +112,9 @@ async def submit(c, body, key):
     definitions = json.loads((await c.objects("/object_info")).body)
     graph = prepared["prompt"] = policy.executable_graph(graph, definitions)
     calls, loaders = policy.plan(graph, definitions)
+    selection = gpu.select_gpu(requested, graph, definitions)
     if not calls:
-        job = c.admit_prompt(prepared, key)
+        job = c.admit_prompt(prepared, key, selection)
         job.update(mcp_guard=policy.execution_guard(prepared, [], []), mcp_digest=digest)
         await c.commit_prompt()
         await c.status()
@@ -126,6 +131,7 @@ async def submit(c, body, key):
     token = ".".join(secrets.token_hex(4) for _ in range(4))
     row = rows[token] = {
         "id": token,
+        **selection,
         "key": key,
         "digest": digest,
         "body": prepared,
@@ -168,6 +174,8 @@ def page(row, message=""):
             + "</code>"
         )
     elif row["status"] == "pending":
+        if "gpu" in row:
+            chunks.append(f"<p>予定GPU：<strong>{esc(row['gpu'])}</strong>（{esc(row['gpu_reason'])}）</p>")
         chunks.append(
             "<p>まだ送信していません。以下の内容をこのジョブで送信します。実行料金はモデル・入力・提供元の料金体系により変わり、金額は未確定です。</p>"
         )
@@ -378,7 +386,8 @@ async def review(c, request, path):
         elif missing_credentials(row):
             return page(row, "API キーが未設定です。実行していません。")
         else:
-            job = c.admit_prompt(row["body"], row["key"])
+            job = c.admit_prompt(row["body"], row["key"],
+                                 {k: row[k] for k in ("gpu", "gpu_reason") if k in row})
             job.update(mcp_guard=policy.execution_guard(row["body"], row["calls"], row["assets"]),
                        mcp_digest=row["digest"])
             row["receipt"] = c.receipt(job)
