@@ -2,6 +2,8 @@
 
 splitは任意拡張なしで動作します。ComfyUI標準のワークフロー作成・編集・保存・読み込みも利用できます。キュー、GPU実行、履歴、個別キャンセル、Manager、CPU復元、自動停止はsplit本体が担当します。
 
+[拡張カタログ](../../comfy_split/extension_catalog.toml)には非公開リポジトリも含まれます。掲載されていても、すべての利用者が取得できるとは限りません。以下の既定設定では任意拡張を取得・読み込みせず、GitHub Secretも不要です。非公開リポジトリへのアクセス権がない場合は、その拡張を有効にしないでください。
+
 ## 設定
 
 以下の既定値は`COMFYUI_AMBIENT_MODE`を指定していない場合の値です。この変数を使っている場合は[設定の優先順位](#設定の優先順位と保存済みデータ)を参照してください。
@@ -38,7 +40,7 @@ SPLIT_AGENT_BRIDGE=off
 
 ## Secret
 
-非公開パッケージの取得には、`GITHUB_SECRET_NAME`で指定するModal Secret（既定`github-secret`）内の`GITHUB_TOKEN`を使います。トークンには選択したrepoのContents読み取り権限が必要です。イメージ作成だけで取得が完了する構成では、実行中のCPU/GPUへ渡しません。追加ノードを選択した場合は起動時の取得のためCPUへ渡しますが、GPUへは渡しません。
+非公開パッケージの取得には、`GITHUB_SECRET_NAME`で指定するModal Secret（既定`github-secret`）内の`GITHUB_TOKEN`を使います。トークンには選択したrepoのContents読み取り権限が必要です。トークンを作成するだけでは非公開リポジトリへのアクセス権は得られず、権限のない拡張を有効にすると取得時にエラーになります。イメージ作成だけで取得が完了する構成では、実行中のCPU/GPUへ渡しません。追加ノードを選択した場合は起動時の取得のためCPUへ渡しますが、GPUへは渡しません。
 
 Secret名が`github-secret`なら、`.env`への追記は不要です。別の名前を使う場合だけ`GITHUB_SECRET_NAME=<Secret名>`を追加します。
 
