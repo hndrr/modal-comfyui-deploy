@@ -24,6 +24,32 @@ ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_gpu_verification_uses_dotenv_revision_without_overriding_shell(self):
+        script = '''
+import os, runpy, sys
+from io import StringIO
+from unittest.mock import patch
+from dotenv import load_dotenv
+from comfy_split.release import REVISION_ENV
+with (
+    patch('dotenv.load_dotenv', side_effect=lambda path, **kwargs:
+          load_dotenv(stream=StringIO(f'{REVISION_ENV}={"a" * 40}'), **kwargs)),
+    patch('comfy_split.release.github_json', side_effect=AssertionError('Unexpected GitHub lookup')),
+):
+    runpy.run_path('scripts/verify_split_gpus.py')
+    import splitapp
+    assert splitapp.COMFY_REVISION == sys.argv[1]
+'''
+        for shell_sha in (None, "b" * 40):
+            with self.subTest(shell_sha=shell_sha):
+                env = {**os.environ, **PLAIN}
+                env.pop(REVISION_ENV, None)
+                if shell_sha is not None:
+                    env[REVISION_ENV] = shell_sha
+                result = subprocess.run([sys.executable, "-c", script, shell_sha or "a" * 40],
+                    cwd=ROOT, env=env, text=True, capture_output=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_plain_deployment_never_imports_or_bundles_extensions_or_requests_secrets(self):
         script = '''
 import importlib.abc, json, runpy, sys
