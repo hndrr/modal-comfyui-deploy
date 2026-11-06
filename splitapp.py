@@ -11,8 +11,9 @@ import uuid
 
 import modal
 
-from comfy_split import node_packs
+from comfy_split import gpu, node_packs
 from comfy_split.config import Settings, DEPLOYMENT_ENV
+from comfy_split.model_import import import_model as import_model_file
 from comfy_split.extension_sources import enabled_sources
 from comfy_split.release import REVISION_ENV, comfy_revision
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
@@ -21,7 +22,8 @@ from comfyapp import (
     GPU_PROFILE,
     PREBUILT_WHEEL_DIR,
     SAGE_ATTENTION_ENABLED,
-    base_image,
+    build_sage_wheel,
+    torch_image,
 )
 
 APP_NAME = "comfyui-split"
@@ -56,8 +58,17 @@ volumes = {
 events = modal.Queue.from_name(APP_NAME + "-events", create_if_missing=True)
 commands = modal.Queue.from_name(APP_NAME + "-commands", create_if_missing=True)
 
+# Preserve the configured GPU for legacy sessions and environment validation.
+session_gpu = os.environ.get("SPLIT_SESSION_GPU", str(GPU_PROFILE["modal_gpu"]))
+architectures = ["8.9", "12.0"]
+if session_gpu in {"H100", "A100-80GB"}:
+    architectures.append({"H100": "9.0", "A100-80GB": "8.0"}[session_gpu])
+cuda_arches = ";".join(architectures)
 image = (
-    base_image.add_local_file("comfy_split/build_constraints.py", "/opt/build_constraints.py", copy=True)
+    build_sage_wheel(torch_image.env({
+        "TORCH_CUDA_ARCH_LIST": cuda_arches, "SAGEATTENTION_CUDA_ARCH_LIST": cuda_arches,
+    }))
+    .add_local_file("comfy_split/build_constraints.py", "/opt/build_constraints.py", copy=True)
     .run_commands(
         "git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfy-template",
         f"git -C /opt/comfy-template checkout {COMFY_REVISION}",
@@ -73,7 +84,7 @@ image = (
     .pip_install(
         f"comfyui-manager=={MANAGER_VERSION}",
         "modal==1.1.4",
-        "aiohttp==3.12.15",
+        "aiohttp==3.14.4",
     )
     .run_commands(
         *[
@@ -123,11 +134,6 @@ image = (
         copy=True,
         ignore=["**/__pycache__/**", "**/*.pyc"],
     )
-    .add_local_file(
-        "vendor/sol_attn_minimax_v5.py",
-        "/opt/comfy-extensions/sol_attn_minimax_v5.py",
-        copy=True,
-    )
     .add_local_dir(
         "comfy_split",
         "/opt/split/comfy_split",
@@ -155,7 +161,7 @@ for name, source in enabled_sources(settings):
 # core packages from the image, without changing any shared node environment.
 image = image.run_commands(
     "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
-    "comfyui-frontend-package comfy-kitchen",
+    f"comfyui-frontend-package comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
 ).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
     "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
 )
@@ -174,24 +180,45 @@ def remote_mcp_image(base):
     for filename in ("package.json", "package-lock.json", ".npmrc"):
         cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
     cpu = cpu.run_commands("cd /opt/split-mcp && npm ci --ignore-scripts --no-audit")
-    for filename in ("remote-call.mjs", "remote-env.mjs"):
+    for filename in ("remote-call.mjs", "remote-env.mjs", "library.mjs", "surface.json"):
         cpu = cpu.add_local_file("mcp/" + filename, "/opt/split-mcp/" + filename, copy=True)
     return cpu
 
 
 # Apply the same deployment identity after all reusable CPU and GPU layers.
-cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID})
-image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID})
+billing_secret = os.environ.get("SPLIT_COMFY_BILLING_SECRET", "").strip()
+billing_label = os.environ.get("SPLIT_COMFY_BILLING_LABEL","").strip() or billing_secret
+billing_config = {"SPLIT_COMFY_BILLING_SECRET": billing_secret, "SPLIT_COMFY_BILLING_LABEL": billing_label,
+    "SPLIT_GEMINI_BILLING_LABEL": os.environ.get("SPLIT_GEMINI_BILLING_LABEL", "").strip() or secret_names.get("GEMINI_SECRET_NAME", ""),
+    "SPLIT_OPENROUTER_BILLING_LABEL": os.environ.get("SPLIT_OPENROUTER_BILLING_LABEL", "").strip() or secret_names.get("OPENROUTER_SECRET_NAME", "")}
+
+cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", "SPLIT_SESSION_GPU": session_gpu, DEPLOYMENT_ENV: DEPLOYMENT_ID,
+    **billing_config,
+    "SPLIT_COMFY_BILLING_ENABLED": "1" if billing_secret else "0",
+    "SPLIT_IMAGE_NODE_NAMES": ",".join(repo.split("/")[-1] for repo in NODE_REVISIONS)})
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID, "SPLIT_SESSION_GPU": session_gpu, **billing_config})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 
     prepare()
 
 
-@app.function(
+# Model downloads have no GPU, web endpoint or access to the node environment.
+model_image = (modal.Image.debian_slim(python_version="3.12").pip_install("huggingface_hub==0.35.1")
+               .add_local_python_source("comfy_split"))
+model_secret = os.environ.get("SPLIT_MODEL_HF_SECRET")
+
+import_model = app.function(image=model_image, min_containers=0, max_containers=1, scaledown_window=30,
+    timeout=14400, retries=0, volumes={MOUNTS["models"]: volumes["models"]},
+    secrets=[modal.Secret.from_name(model_secret, required_keys=["HF_TOKEN"])] if model_secret else []
+)(import_model_file)
+
+
+# All three pools run the same code and mount the same versioned environment.
+worker_options = dict(
     image=image,
-    gpu=str(GPU_PROFILE["modal_gpu"]),
-    secrets=provider_secrets,
+    secrets=provider_secrets + ([modal.Secret.from_name(billing_secret, required_keys=["COMFY_API_KEY"])]
+                               if billing_secret else []),
     min_containers=0,
     max_containers=1,
     scaledown_window=30,
@@ -199,10 +226,33 @@ if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     retries=0,
     volumes={MOUNTS[key]: value for key, value in volumes.items()},
 )
-async def gpu_worker(spec):
+
+
+async def run_gpu(spec):
     from comfy_split.worker import run_worker
 
     return await run_worker(spec, events, commands, volumes)
+
+
+@app.function(gpu=session_gpu, **worker_options)
+async def gpu_worker(spec):
+    return await run_gpu(spec)
+
+
+if session_gpu != gpu.DEFAULT:
+    @app.function(gpu=gpu.DEFAULT, **worker_options)
+    async def gpu_worker_rtx(spec):
+        return await run_gpu(spec)
+
+
+@app.function(gpu="L4", **worker_options)
+async def gpu_worker_l4(spec):
+    return await run_gpu(spec)
+
+
+@app.function(gpu="L40S", **worker_options)
+async def gpu_worker_l40s(spec):
+    return await run_gpu(spec)
 
 
 @app.function(
@@ -221,11 +271,15 @@ async def gpu_worker(spec):
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app(requires_proxy_auth=True)
 def ui():
+    import secrets
     from modal._runtime.asgi import wait_for_web_server
 
     from comfy_split.cpu_snapshot import resume
     from comfy_split.modal_proxy import web_server_proxy
+    from comfy_split.gateway_access import ENV
 
+    gateway_token = secrets.token_urlsafe(32)
+    os.environ[ENV] = gateway_token
     gateway = resume()
 
     def monitor():
@@ -242,4 +296,4 @@ def ui():
 
     threading.Thread(target=monitor, daemon=True).start()
     wait_for_web_server("127.0.0.1", 8000, timeout=600)
-    return web_server_proxy("127.0.0.1", 8000)
+    return web_server_proxy("127.0.0.1", 8000, gateway_token=gateway_token)

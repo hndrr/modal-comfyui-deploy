@@ -101,10 +101,12 @@ print(json.dumps({'standalone': True}))
         import comfyapp
 
         image_env = {}
+        image_updates = []
         original = modal.Image.env
 
         def capture(image, values):
             image_env.update(values)
+            image_updates.append(values)
             return original(image, values)
 
         settings = {**Settings(node_packs=tuple(NODE_PACKS), integrations=tuple(INTEGRATIONS)).environment(),
@@ -123,6 +125,11 @@ print(json.dumps({'standalone': True}))
         self.assertEqual(image_env[REVISION_ENV], commits[0])
         self.assertNotIn("must-not-be-baked", json.dumps(image_env))
         self.assertNotIn("also-private", json.dumps(image_env))
+        for field, expected in (("SPLIT_GEMINI_BILLING_LABEL", "provider-a"),
+                                ("SPLIT_OPENROUTER_BILLING_LABEL", "provider-b")):
+            # Both CPU and GPU image layers must carry the same billing label.
+            labels = [values[field] for values in image_updates if field in values]
+            self.assertEqual(labels, [expected, expected])
         # A container has image env + injected credentials, but no local .env.
         # Import as a GPU container; the CPU snapshot additionally preloads its gateway.
         image_env.pop("SPLIT_CPU_MEMORY_SNAPSHOT", None)

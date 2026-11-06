@@ -27,7 +27,7 @@ jobs:
       worker: ${{ steps.filter.outputs.worker }}
     steps:
       # PRs use the files API; main pushes compare against the previous push.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name == 'push'
         with:
           fetch-depth: 0
@@ -49,6 +49,7 @@ jobs:
               - 'comfy_split/extension_catalog.toml'
               - 'extensions/**/web/**'
               - 'scripts/modal.sh'
+              - 'scripts/setup.sh'
             web:
               - '.node-version'
               - '.github/workflows/tests.yml'
@@ -77,10 +78,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.11.26"
           python-version: "3.12"
@@ -103,10 +104,10 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: npm
@@ -128,10 +129,10 @@ jobs:
       run:
         working-directory: worker
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: npm
@@ -139,7 +140,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
-      - name: Test the split MCP server over stdio
+      - name: Test the server-side MCP package and remote upload client
         working-directory: mcp
         run: |
           npm ci --ignore-scripts

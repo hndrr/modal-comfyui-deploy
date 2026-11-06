@@ -11,14 +11,18 @@ CALL_TIMEOUT = 55
 _slots = asyncio.Semaphore(4)
 
 
-async def call(request, *, mode):
+def authorize(request, mode):
     # Only the remote Worker adds this marker, after authentication. The UI
     # Worker strips it and the Modal origin itself requires Proxy Auth.
     if (request.method != "POST" or request.headers.get("X-Split-Remote-Tool") != "1"
             or request.headers.get("X-Modal-Execution-Mode") != "split"):
         raise web.HTTPForbidden()
     if mode != "split":
-        return web.json_response({"error": "This client requires split mode."}, status=409)
+        raise web.HTTPConflict(text='{"error":"This client requires split mode."}', content_type="application/json")
+
+
+async def call(request, *, mode):
+    authorize(request, mode)
     payload = await request.json()
     if not isinstance(payload, dict) or not isinstance(payload.get("arguments"), dict):
         raise web.HTTPBadRequest()
@@ -52,3 +56,22 @@ async def run_tool(payload):
             except ProcessLookupError:
                 pass
             await proc.wait()
+
+
+async def operations(control, request):
+    from comfy_split import production, split_admin
+    authorize(request, control.journal.data["mode"])
+    try:
+        body = await request.json()
+        if not isinstance(body, dict) or not isinstance(body.get("arguments"), dict) or not isinstance(body.get("name"), str):
+            raise web.HTTPBadRequest(text="Expected operation and arguments")
+        name, args = body["name"], body["arguments"]
+        if name in ("get_job_workflow", "list_outputs", "reuse_output", "list_inputs", "inspect_media"):
+            result = await production.handle(control, name, args)
+        else:
+            result = await split_admin.handle(control, name, args)
+        return web.json_response(result)
+    except web.HTTPException as exc:
+        return web.json_response({"error":exc.text},status=exc.status)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error":"Invalid operation arguments or state"},status=400)

@@ -1,0 +1,247 @@
+# Modal のアカウントを 2 つ以上使う場合
+
+Modal アカウントが 1 つなら、このページは不要です。`uv run modal deploy comfyapp.py` がそのまま動きます。
+
+アカウントが 2 つあると困るのは、**どのコマンドがどっちのアカウントに行くのか分からなくなる**ことです。Volume（モデルや出力）はアカウントごとに完全に別物なので、間違えると「昨日まであったモデルが消えた」ように見えます。
+
+このリポジトリは `scripts/modal.sh` で、**このフォルダで使うアカウントを 1 回決めておく**方式にしています。
+
+## 手順
+
+以下に出てくる `personal` と `work` は**例のアカウント名**なので、自分の環境の名前に読み替えてください。実際の名前は手順 1 で確認できます。
+
+### 1. 2 つ目のアカウントを Modal CLI に教える（1 回だけ）
+
+Modal ダッシュボード → Settings → API Tokens でトークンを発行してから実行します。
+
+```console
+$ uv run modal token set --token-id ak-xxxx --token-secret as-xxxx --no-activate
+```
+
+`--no-activate` を必ず付けてください。付けないと、今使っているアカウントが新しい方に置き換わります。
+
+登録できたか確認します。
+
+```console
+$ ./scripts/modal.sh --list
+pinned profile: (なし: ~/.modal.toml の既定を使用)
+┏━━━┳━━━━━━━━━━┳━━━━━━━━━━━┓
+┃   ┃ Profile  ┃ Workspace ┃
+┡━━━╇━━━━━━━━━━╇━━━━━━━━━━━┩
+│ • │ personal │ personal  │
+│   │ work     │ work-team │
+└───┴──────────┴───────────┘
+```
+
+**`Profile` 列がアカウントの呼び名です。** 次の手順でこの文字列を使います。
+
+この名前は登録時に決まります。`token set` に `--profile` を付けなければ Modal のワークスペース名がそのまま入り、`--profile <好きな名前>` を付ければ自分で決められます（上の例の `work` は、ワークスペース名 `work-team` に対して自分で付けた名前です）。
+
+### 2. このフォルダで使うアカウントを決める（1 回だけ）
+
+`work` の部分に、手順 1 の `Profile` 列で見た名前を入れます。
+
+```console
+$ ./scripts/modal.sh use work
+pinned: work
+```
+
+登録していない名前を入れた場合は、そこで止まって登録済みの一覧が出ます。
+
+### 3. 以降は `uv run modal` の代わりに `./scripts/modal.sh` を使う
+
+```console
+$ ./scripts/modal.sh deploy comfyapp.py
+modal: using profile 'work' (.modal-profile)
+...
+```
+
+毎回アカウント名を打つ必要はありません。手順 2 で決めた `work` に固定されています。
+
+管理画面 (`web/`) も同じアカウントを見るので、いつもどおり `npm start` で構いません。
+
+## 確認したいとき
+
+```console
+$ ./scripts/modal.sh --list
+pinned profile: work
+```
+
+管理画面は、画面上部に接続先が出ます。
+
+```
+Modal ComfyUI Asset Manager  [ workspace: work-team ]
+```
+
+## 変えたいとき
+
+```console
+$ ./scripts/modal.sh use personal    # このフォルダを personal に変更
+$ ./scripts/modal.sh use --clear     # 決めるのをやめる（Modal CLI の既定に戻る）
+```
+
+管理画面を起動したまま変えても切り替わりません。`npm start` をやり直してください。
+
+1 コマンドだけ別アカウントで叩きたいときは、決めた内容を変えずに済ませられます。
+
+```console
+$ ./scripts/modal.sh --profile personal volume ls comfy-model /
+modal: using profile 'personal' (--profile)
+```
+
+## どのコマンドが固定先を使うか
+
+| 起動するもの | 固定先を使うか |
+| --- | --- |
+| `./scripts/modal.sh <modal のコマンド>` | 使う |
+| `cd web && npm start`（資産管理画面） | 使う |
+| `uv run preserve_model_gui.py`（モデル保存 GUI） | 使う |
+| `uv run python scripts/rename_volume.py ...` / `scripts/move_volume_file.py ...` | 使う |
+| `uv run modal ...` を素で打つ | **使わない**（Modal CLI の既定） |
+
+`uv run python ...` で起動するスクリプトは、`import modal` の前に固定先を `MODAL_PROFILE` へ反映しています。素の `uv run modal` だけは Modal CLI が先にプロファイルを確定してしまうため、後から差し込めません。
+
+つまり `uv run modal` で始まるコマンドは、すべて `./scripts/modal.sh` に置き換えます。引数はそのままで構いません。
+
+```bash
+uv run modal deploy comfyapp.py                 → ./scripts/modal.sh deploy comfyapp.py
+uv run modal run preserve_model.py::preserve_model ...
+                                                → ./scripts/modal.sh run preserve_model.py::preserve_model ...
+uv run modal volume ls comfy-model /            → ./scripts/modal.sh volume ls comfy-model /
+```
+
+GUI やサーバーは置き換え不要です。その起動だけ別アカウントにしたいときだけ、環境変数で上書きします。`<MODAL_PROFILE>` は `./scripts/modal.sh --list` の `Profile` 列に表示される名前に置き換えてください。
+
+```bash
+MODAL_PROFILE="<MODAL_PROFILE>" uv run preserve_model_gui.py
+MODAL_PROFILE="<MODAL_PROFILE>" npm start
+```
+
+## 資産管理画面（`web/`）の場合
+
+サーバーは `modal volume` CLI と `asset_rpc.py`（Modal SDK）を子プロセスとして起動し、どちらにも固定先を渡します。起動方法はいつもどおりで、ラッパーは要りません。
+
+```bash
+cd web
+npm start                              # 固定先（無ければ Modal CLI の既定）
+MODAL_PROFILE="<MODAL_PROFILE>" npm start      # この起動だけ別アカウント
+```
+
+**固定先を変えたらサーバーを再起動してください。** Modal SDK を抱えたワーカーが常駐しているため、起動したまま `.modal-profile` を書き換えても切り替わりません。
+
+接続先は画面ヘッダのバッジに出ます。ホバーするとプロファイル名と、どの設定から来たかが表示されます。
+
+```text
+Modal ComfyUI Asset Manager  [ workspace: work-team ]
+```
+
+`/api/health` でも同じ情報を返します。
+
+```bash
+curl -s 127.0.0.1:7860/api/health
+# {"status":"ok","modal":{"profile":"work","workspace":"work-team","source":"repo"}}
+```
+
+`source` は設定の出どころで、`env`（シェルの `MODAL_PROFILE`）/ `repo`（`.modal-profile`）/ `active`（`~/.modal.toml` の既定）のいずれかです。意図した経路で切り替わっているかはここで分かります。
+
+Volume はアカウントごとに別物なので、切り替えると一覧の中身も丸ごと変わります。空に見えるときはまずバッジを確認してください。
+
+## Cloudflare Access を使っている場合
+
+1 つの Worker から複数の Modal ワークスペースへ転送できます。ただし、Proxy Auth トークンはワークスペース単位なので、転送先 URL と、そのワークスペースで発行したキーを対応させる必要があります。
+
+| secret | 切り替え・追加時の扱い |
+| --- | --- |
+| `MODAL_ORIGINS` | 基本の転送先一覧。公開ホスト名に対応する Modal URL を更新します |
+| `MODAL_ADDITIONAL_ORIGINS` | 既存の転送先一覧を残したまま、別の公開ホストを追加できます。既存ホストの上書きはできません |
+| `MODAL_KEY` / `MODAL_SECRET` | 特定の 1 ワークスペースの既定ペアです。接続先別の指定がない URL に使われます。更新すると、それらすべての接続先に影響します |
+| `MODAL_PROXY_CREDENTIALS` | 別ワークスペースの接続先には、その Modal オリジンをキーとして、そのワークスペースの `key` / `secret` を指定します。既定ペアより優先されます |
+
+例えば既定ペアをワークスペース A 用のままにして、B を追加する場合、転送先一覧は次の形になります。山括弧付きの値は、次の取得元で確認した値に置き換えます。
+
+| 表記 | 設定する値・取得元 |
+| --- | --- |
+| `<COMFYUI_PUBLIC_HOST>` / `<SPLIT_PUBLIC_HOST>` | 各アプリ用に Worker の Custom Domain へ登録する公開ホスト名。`https://` やパスは含めない |
+| `<COMFYUI_MODAL_ORIGIN_A>` | A で `comfyapp.py` をデプロイした出力にある `ui` の Web URL |
+| `<SPLIT_MODAL_ORIGIN_B>` | B で `splitapp.py` をデプロイした出力にある `ui` の Web URL |
+| `<WORKSPACE_B_PROXY_KEY>` / `<WORKSPACE_B_PROXY_SECRET>` | B の Settings → Proxy Auth Tokens で発行する Token ID / Secret |
+
+Modal の URL は `https://` を含め、パスと末尾の `/` を除いてコピーします。
+
+```json
+{
+  "<COMFYUI_PUBLIC_HOST>": "<COMFYUI_MODAL_ORIGIN_A>",
+  "<SPLIT_PUBLIC_HOST>": "<SPLIT_MODAL_ORIGIN_B>"
+}
+```
+
+これに加えて `MODAL_PROXY_CREDENTIALS` に B のキーを登録します。
+
+```json
+{
+  "<SPLIT_MODAL_ORIGIN_B>": {
+    "key": "<WORKSPACE_B_PROXY_KEY>",
+    "secret": "<WORKSPACE_B_PROXY_SECRET>"
+  }
+}
+```
+
+A への接続には既定の `MODAL_KEY` / `MODAL_SECRET`、B への接続にはこの表のペアが使われます。B の登録を省くと A のキーが送られ、認証に失敗します。指定はワークスペース名ではなく Modal オリジン単位です。B の別 app も公開する場合は、そのオリジンにもキーを登録してください。同じワークスペースの app 同士には同じペアを使えます。
+
+公開ホストを追加するときは、Cloudflare Access の保護対象に追加したうえで、Worker の Custom Domain を割り当てます。トークンの実値は Cloudflare の secret に保存し、ドキュメントやリポジトリには書きません。
+
+設定手順そのものは [cloudflare-access.md](cloudflare-access.md) を参照してください。
+
+## つまずきやすいところ
+
+**`uv run modal ...` を素で打つと、決めた内容が無視される**
+
+手順 2 で決めた内容は Modal CLI 本体の機能ではないため、`scripts/modal.sh` を通さないと効きません。素で打った場合は Modal CLI の既定アカウント（`uv run modal profile current` で分かります）に行きます。デプロイなら別アカウントに出てしまい、`modal run preserve_model.py::preserve_model` なら別アカウントの Volume にモデルが保存されます。
+
+**`.env` に `MODAL_PROFILE=work` と書いても効かない**
+
+書いても無視されます。デプロイ時にエラーで止まるようにしてあるので、気付かず間違ったアカウントに出ることはありません。アカウントの指定は手順 2 で行います。
+
+**管理画面のバッジが「workspace 不明」になる**
+
+決めたアカウント名が Modal CLI に登録されていない（打ち間違いなど）か、Modal CLI にログインできていない状態です。`./scripts/modal.sh --list` で名前を確認してください。
+
+**アカウントを変えたらモデルが空になった**
+
+正常な挙動です。Volume はアカウントごとに別物で、共有されません。以下も同様にアカウントごとに用意が必要です。
+
+- Volume（`comfy-model` / `comfy-inputs` / `comfy-outputs`）
+- Secret（`huggingface-secret`）。無いと `preserve_model` のデプロイと実行が失敗します
+- Modal の Proxy Auth トークン
+- Dict（`preserve-model-progress`。モデル保存 GUI の進捗表示用、初回に自動作成されます）
+
+アカウントを変えてデプロイし直したら、出力に表示された Web URL をコピーしてください。Cloudflare Access を使っている場合は Worker の転送先一覧と、そのワークスペースの認証キーも更新します（[Cloudflare Access](cloudflare-access.md)）。URL の形式を推測して組み立てる必要はありません。
+
+## 補足
+
+**profile と Environment は別物**
+
+Modal の "Environment" は 1 アカウントの中を dev / prod に分ける機能で、別アカウントの使い分けには使えません。ここで扱っているのは profile（アカウントごとの資格情報、`~/.modal.toml`）の方です。
+
+**どこに何が保存されるか**
+
+| 場所 | 中身 | commit されるか |
+| --- | --- | --- |
+| `~/.modal.toml` | 各アカウントのトークンと、Modal CLI 全体の既定 | されない（ホーム配下） |
+| `.modal-profile` | このフォルダで使うアカウント名 1 行 | されない（gitignore 済み） |
+
+**優先順位**
+
+CLI も管理画面も同じ順で決まります。
+
+1. 環境変数 `MODAL_PROFILE`（`./scripts/modal.sh --profile` はこれを使います）
+2. `.modal-profile`（`./scripts/modal.sh use` で書かれます）
+3. `~/.modal.toml` の既定（`uv run modal profile activate` で変わります）
+
+**CI の場合**
+
+プロファイルを作らず、トークンを環境変数で直接渡すのが簡単です。
+
+```bash
+MODAL_TOKEN_ID=ak-xxxx MODAL_TOKEN_SECRET=as-xxxx uv run modal deploy comfyapp.py
+```

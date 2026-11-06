@@ -6,7 +6,8 @@ from aiohttp import WSMsgType, web
 
 HOP = {"host", "connection", "upgrade", "transfer-encoding", "content-length",
        "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions",
-       "sec-websocket-accept", "origin", "authorization", "modal-key", "modal-secret"}
+       "sec-websocket-accept", "origin", "authorization", "modal-key", "modal-secret",
+       "x-split-gateway-token"}
 
 
 async def proxy(request, client, origin, token=None, body=None, before_response=None,

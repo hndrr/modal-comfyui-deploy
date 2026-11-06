@@ -42,12 +42,23 @@ def wheel_pins(roots, lookup=distribution):
 
 
 def core_pins(requirements):
-    for name in ("comfy-kitchen", "comfyui-frontend-package"):
-        pin = next((line.strip() for line in requirements.splitlines()
-                    if line.strip().startswith(name + "==")), None)
-        if pin is None:
+    names = ("comfy-kitchen", "comfyui-frontend-package")
+    pins = {}
+    for line in requirements.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        req = Requirement(line)
+        name = canonicalize_name(req.name)
+        if name not in names or (req.marker and not req.marker.evaluate()):
+            continue
+        specs = list(req.specifier)
+        if len(specs) == 1 and specs[0].operator == "==" and "*" not in specs[0].version:
+            pins[name] = f"{name}=={specs[0].version}"
+    for name in names:
+        if name not in pins:
             raise RuntimeError(f"Upstream ComfyUI must pin {name}; review its requirements")
-        yield pin
+        yield pins[name]
 
 
 def build_constraints(requirements, manager):

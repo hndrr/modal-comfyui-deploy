@@ -207,7 +207,7 @@ def _reject_dotenv_modal_profile(dotenv_path: Path, shell_value: str | None) -> 
 
     modal は `import modal` の時点で使用プロファイルを確定するため、その後に走る
     `load_dotenv()` の値は無視される。放置すると意図しない Modal アカウントへ
-    黙ってデプロイされるので、ここで止める。詳細は docs/modal-profiles.md。
+    黙ってデプロイされるので、ここで止める。詳細は docs/operations/modal-profiles.md。
     """
     if not dotenv_path.exists():
         return
@@ -450,7 +450,7 @@ if COMFYUI_REVISION:
     ]
 
 # イメージファイルの作成
-base_image = (
+torch_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install(
         "git",
@@ -491,7 +491,11 @@ base_image = (
         "python3 -m pip install --no-cache-dir -U pip setuptools wheel build uv packaging ninja; "
         f'python3 -m pip install --no-cache-dir "{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" "{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}" "{FLASH_ATTN_WHEEL_URL}"'
     )
-    .run_commands(
+)
+
+
+def build_sage_wheel(image):
+    return image.run_commands(
         # SageAttention は先に wheel build して退避しておく
         "set -eux; "
         f"{SAGE_ATTENTION_BUILD_PREFIX}"
@@ -504,7 +508,9 @@ base_image = (
         f'cp dist/*.whl "{PREBUILT_WHEEL_DIR}/"; '
         "rm -rf /tmp/SageAttention"
     )
-)
+
+
+base_image = build_sage_wheel(torch_image)
 
 image = (
     base_image

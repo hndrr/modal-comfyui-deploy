@@ -11,12 +11,12 @@ import time
 import uuid
 
 import aiohttp
-import modal
+
+from comfy_split.gpu import deployed_gpu_count
 
 
 async def main():
     origin = "http://127.0.0.1:8000"
-    gpu = modal.Function.from_name("comfyui-split", "gpu_worker")
     started = time.monotonic()
     checks = 0
     png = base64.b64decode(
@@ -30,8 +30,8 @@ async def main():
             reader = asyncio.create_task(drain())
             try:
                 while True:
-                    stats = await gpu.get_current_stats.aio()
-                    assert stats.num_total_runners == 0, str(stats)
+                    count = await deployed_gpu_count()
+                    assert count == 0, count
                     for route in ("/", "/api/object_info", "/api/extensions", "/api/queue",
                                   "/api/history", "/api/system_stats", "/api/models/checkpoints"):
                         async with client.get(origin + route) as response:
@@ -62,7 +62,7 @@ async def main():
                     checks += 1
                     elapsed = time.monotonic() - started
                     print(json.dumps({"elapsed_seconds": round(elapsed, 1),
-                                      "iterations": checks, "gpu_runners": stats.num_total_runners}), flush=True)
+                                      "iterations": checks, "gpu_runners": count}), flush=True)
                     if elapsed >= 600:
                         print(json.dumps({"event": "idle_verified", "elapsed_seconds": elapsed,
                                           "iterations": checks}), flush=True)

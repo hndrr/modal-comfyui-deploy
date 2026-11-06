@@ -11,7 +11,7 @@
 # global active profile in ~/.modal.toml is never touched. Precedence matches
 # the asset manager: MODAL_PROFILE > .modal-profile > active profile.
 #
-# See docs/modal-profiles.md.
+# See docs/operations/modal-profiles.md.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -82,7 +82,7 @@ case "$1" in
       exit 0
     fi
     require_known_profile "$1"
-    printf '# このリポジトリで使う Modal プロファイル（docs/modal-profiles.md）\n%s\n' "$1" \
+    printf '# このリポジトリで使う Modal プロファイル（docs/operations/modal-profiles.md）\n%s\n' "$1" \
       >"$PROFILE_FILE"
     echo "pinned: $1" >&2
     exit 0

@@ -1,6 +1,8 @@
 # Cloudflare Access + Worker の設計
 
-手順は [../cloudflare-access.md](../cloudflare-access.md) を参照。
+`<COMFYUI_PUBLIC_HOST>` は Worker に割り当てる公開ホスト名、`<COMFYUI_MODAL_ORIGIN>` は `comfyapp.py` のデプロイ出力にある `ui` の Web URL です。実際の値の取得・登録は[運用手順](../operations/cloudflare-access.md)を参照してください。
+
+手順は [Cloudflare Access の運用手順](../operations/cloudflare-access.md) を参照。
 
 ## 目的
 
@@ -12,7 +14,7 @@ Cloudflare Access を ComfyUI の手前に置き、許可したメールアド�
 
 ```text
 ブラウザ
-  ↓ https://comfy.example.com
+  ↓ https://<COMFYUI_PUBLIC_HOST>
 Cloudflare Access
   ├─ One-time PIN（メールに届く6桁コード）
   ├─ Google ログイン
@@ -34,7 +36,7 @@ Modal はすでにインターネットへ公開されているため、自宅�
 Cloudflare Access を付けただけでは、元の
 
 ```text
-https://<workspace>--comfyui-ui.modal.run
+<COMFYUI_MODAL_ORIGIN>
 ```
 
 を直接開くことで Cloudflare を迂回できてしまう。そのため次の二重構成にする。
@@ -81,7 +83,7 @@ Cloudflare のドキュメントは、オリジンがすでに公開されてい
 
 あわせて次の 3 つを落とす。
 
-- `Host`: 受け取った値（`comfy.example.com`）を持ち越すと Modal がルーティングできないため、転送先 URL から runtime に決めさせる
+- `Host`: 受け取った値（`<COMFYUI_PUBLIC_HOST>`）を持ち越すと Modal がルーティングできないため、転送先 URL から runtime に決めさせる
 - `Cf-Access-Jwt-Assertion`: 検証済みでこの先は使わないため、ComfyUI へ渡さない
 - `Cookie` の `CF_Authorization`: **Access の JWT はクッキーでも届くため、ヘッダーだけ消しても素通りする。** `CF_Authorization` だけを取り除き、他のクッキーはそのまま残す（`stripAccessCookie`）。残り 0 個になった場合は `Cookie` ヘッダーごと削除する
 

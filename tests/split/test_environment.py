@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from comfy_split import runtime
-from comfy_split.build_constraints import build_constraints, wheel_pins, wheel_roots
+from comfy_split.build_constraints import build_constraints, core_pins, wheel_pins, wheel_roots
 from comfy_split.check_environment import check_core_requirements, check_pins
 
 
@@ -35,6 +35,24 @@ class EnvironmentTests(unittest.TestCase):
                 self.assertEqual(set(build_constraints(requirements, "4.2.2")),
                                  {*pins, f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
                                   "comfyui-manager==4.2.2"})
+
+    def test_core_pins_accept_requirement_spelling_comments_and_active_markers(self):
+        requirements = """
+            # Core requirements may use any normalized package spelling.
+            Comfy_Kitchen == 1.0 ; python_version >= '3'  # pinned kitchen
+            comfy.kitchen == 0.9 ; python_version < '3'
+            ComfyUI_frontend_package == 1.57.4  # matching frontend
+        """
+        self.assertEqual(list(core_pins(requirements)),
+                         ["comfy-kitchen==1.0", "comfyui-frontend-package==1.57.4"])
+        installed = {"comfy-kitchen": "1.0", "comfyui-frontend-package": "1.57.4"}
+        check_core_requirements(requirements, installed.__getitem__)
+
+    def test_core_pins_require_an_active_exact_version(self):
+        for spec in (">=1.0", "==1.*", "@ https://example.invalid/kitchen.whl",
+                     "==1.0 ; python_version < '3'"):
+            with self.subTest(spec=spec), self.assertRaisesRegex(RuntimeError, "must pin comfy-kitchen"):
+                list(core_pins(f"comfy-kitchen {spec}\ncomfyui-frontend-package==1.57.4"))
 
     def test_core_upgrade_rejects_a_stale_frontend_even_if_internal_constraints_match(self):
         requirements = "comfyui-frontend-package==1.57.4\ncomfy-kitchen==1.0"

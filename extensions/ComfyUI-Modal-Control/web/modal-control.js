@@ -37,6 +37,25 @@ app.registerExtension({
     description.className = "modal-hint";
     const gpuDescription = document.createElement("p");
     gpuDescription.setAttribute("role", "status");
+    const gpuLabel = document.createElement("label");
+    gpuLabel.textContent = "次の生成に使うGPU";
+    const choice = document.createElement("select");
+    for (const [value, title] of [["auto", "自動（料金優先）"], ["auto-speed", "自動（速度優先）"],
+      ["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]]) {
+      choice.add(new Option(title, value));
+    }
+    const savedGpu = () => document.cookie.split("; ").find(c => c.startsWith("split_gpu="))?.slice(10);
+    const syncChoice = () => {
+      const value = savedGpu();
+      choice.value = [...choice.options].some(o => o.value === value) ? value : "auto";
+    };
+    syncChoice();
+    choice.onchange = () => {
+      document.cookie = `split_gpu=${choice.value}; Path=/; SameSite=Strict; Max-Age=31536000`;
+    };
+    gpuLabel.append(choice);
+    const selection = document.createElement("p");
+    selection.setAttribute("role", "status");
     let updateIndicator = () => {};
     const showGpu = (gpu) => {
       const labels = { stopped: "停止中", starting: "起動待ち", active: "使用中",
@@ -78,6 +97,10 @@ app.registerExtension({
     const refresh = async () => {
       state = await request("status");
       showGpu(state.gpu);
+      syncChoice();
+      gpuLabel.hidden = state.mode !== "split";
+      const latest = state.gpu?.latest_selection;
+      selection.textContent = latest ? `直近の受付：${latest.gpu}（${latest.gpu_reason}）` : "";
       description.textContent = state.mode === "legacy"
         ? "常時起動：生成していない間もGPUを使います。"
         : "生成時だけ起動：生成が終わると自動で停止します。CPU・ストレージ等の料金は別途発生します。";
@@ -124,7 +147,7 @@ app.registerExtension({
     });
     updates.append(apply, discard);
     advanced.append(updates);
-    panel.append(heading, button, gpuDescription, description, error, advanced);
+    panel.append(heading, button, gpuDescription, description, gpuLabel, selection, error, advanced);
     registerGpuSidebar((element) => element.replaceChildren(panel));
     updateIndicator = registerGpuIndicator();
     const poll = async () => {
