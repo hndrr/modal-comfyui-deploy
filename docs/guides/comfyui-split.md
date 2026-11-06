@@ -127,7 +127,7 @@ MCPで外部APIの承認が必要な場合は、承認待ちの間にGPUが停�
 
 速度優先の判断に使った、同じ1024pxグラフのモデル読み込み済みでのComfyUI実行時間はL4が2.79秒、L40Sが0.91秒、RTX PRO 6000が0.67秒です。各機種1回の測定で、初回起動を含む上表とは計測区間が異なります。
 
-同じ[検証用グラフ](../../scripts/verify_split_gpu_workflow.json)を3機種で再計測するには `SPLIT_COMFYUI_REVISION=<DEPLOYED_COMFYUI_SHA> scripts/modal.sh run -m scripts.verify_split_gpus` を使います。SHA の指定は必須で、結果にも実際の SHA を記録します。`--gpu L4 --size 1024` のように対象を絞れます。モデルVolumeは読み取り専用で、検証用PNGは一時領域に保存します。イメージは現在のチェックアウトから構築するため、本番との比較には同じリポジトリのコミットとデプロイ設定も使用してください。
+同じ[検証用グラフ](../../scripts/verify_split_gpu_workflow.json)を3機種で再計測するには `SPLIT_COMFYUI_REVISION=<DEPLOYED_COMFYUI_SHA> scripts/modal.sh run -m scripts.verify_split_gpus` を使います。SHA の指定は必須で、`.env` からも読み込みます（シェルでの指定を優先）。結果にも実際の SHA を記録します。`--gpu L4 --size 1024` のように対象を絞れます。モデルVolumeは読み取り専用で、検証用PNGは一時領域に保存します。イメージは現在のチェックアウトから構築するため、本番との比較には同じリポジトリのコミットとデプロイ設定も使用してください。
 
 #### L40Sでの音楽生成の実測
 

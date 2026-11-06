@@ -17,6 +17,8 @@ from comfy_split.storage import VOLUME_NAMES
 from comfy_split.release import REVISION_ENV
 
 if modal.is_local():
+    import comfyapp  # Load shared .env settings before checking the required SHA.
+
     if not os.environ.get(REVISION_ENV, "").strip():
         raise ValueError(f"Set {REVISION_ENV} to the deployed ComfyUI SHA before GPU verification")
     from splitapp import image
