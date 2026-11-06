@@ -32,6 +32,7 @@ options = dict(image=image, volumes={"/models": model_volume}, timeout=900, max_
 
 
 def verify(graph, size):
+    """Exercise attention kernels and ComfyUI generation, reporting the actual checkout SHA."""
     import requests
     import torch
     from flash_attn import flash_attn_func

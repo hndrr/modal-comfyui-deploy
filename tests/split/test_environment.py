@@ -10,6 +10,7 @@ from comfy_split.check_environment import check_core_requirements, check_pins
 
 class EnvironmentTests(unittest.TestCase):
     def test_discovers_new_remote_and_local_wheels_without_a_package_list(self):
+        """Discover wheel roots from origin metadata while excluding ordinary and editable installs."""
         def installed(name, origin):
             return Mock(metadata={"Name": name}, read_text=Mock(return_value=origin))
         packages = [
@@ -21,6 +22,7 @@ class EnvironmentTests(unittest.TestCase):
             self.assertEqual(set(wheel_roots()), {"remote", "local"})
 
     def test_base_wheels_protect_transitive_runtime_and_requested_extras(self):
+        """Preserve active dependency versions and combine them with release-specific pins."""
         base = {"new-kernel": Mock(version="1", requires=["torch", "cuda[driver]", "uninstalled; python_version<'3'"]),
                 "torch": Mock(version="2.10.0+cu130", requires=["triton", "cuda"]),
                 "cuda": Mock(version="13", requires=["nv-lib; extra=='driver'", "optional; extra=='dev'"]),
@@ -38,6 +40,7 @@ class EnvironmentTests(unittest.TestCase):
                                       f"comfyui-manager=={manager}"})
 
     def test_core_pins_accept_requirement_spelling_comments_and_active_markers(self):
+        """Accept equivalent package spellings and ignore comments and inactive markers."""
         requirements = """
             # Core requirements may use any normalized package spelling.
             Comfy_Kitchen == 1.0 ; python_version >= '3'  # pinned kitchen
@@ -50,6 +53,7 @@ class EnvironmentTests(unittest.TestCase):
         check_core_requirements(requirements, installed.__getitem__)
 
     def test_core_pins_leave_pip_directives_and_unrelated_sources_to_pip(self):
+        """Parse protected pins without interpreting unrelated pip syntax or source locations."""
         requirements = (
             "--extra-index-url https://example.invalid/simple\n"
             "-r optional.txt\n-e git+https://example.invalid/node.git#egg=node\n"
@@ -62,6 +66,7 @@ class EnvironmentTests(unittest.TestCase):
             list(core_pins("comfyui_manager>=5", ("comfyui-manager",)))
 
     def test_core_pins_require_an_active_exact_version(self):
+        """Reject ranges, wildcards, URLs, and inactive markers for protected packages."""
         for spec in (">=1.0", "==1.*", "@ https://example.invalid/kitchen.whl",
                      "==1.0 ; python_version < '3'"):
             with self.subTest(spec=spec), self.assertRaisesRegex(RuntimeError, "must pin comfy-kitchen"):

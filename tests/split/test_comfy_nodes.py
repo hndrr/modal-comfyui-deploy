@@ -49,6 +49,7 @@ class BridgeTests(unittest.TestCase):
             guard.install_cpu_guard()
 
     def test_image_validation_rejects_an_incompatible_upstream_job_contract(self):
+        """Ensure build validation accepts the expected job API and rejects an incompatible response."""
         class Queue:
             def put(self, item):
                 pass

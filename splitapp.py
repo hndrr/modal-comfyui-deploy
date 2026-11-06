@@ -160,7 +160,7 @@ for name, source in enabled_sources(settings):
 # core packages from the image, without changing any shared node environment.
 image = image.run_commands(
     "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
-    f"comfyui-frontend-package comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
+    f"comfyui-frontend-package comfyui-manager comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
 ).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
     "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt --bridge"
 )

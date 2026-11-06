@@ -26,6 +26,7 @@ KITCHEN_APIS = ("sol_attn", "sol_attn_chunked", "sol_attn_is_available", "int8_l
 
 
 def check_core_requirements(requirements, version=importlib.metadata.version):
+    """Reject core package versions that differ from the selected ComfyUI requirements."""
     for pin in core_pins(requirements):
         check_pins(pin, version)
 

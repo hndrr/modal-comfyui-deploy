@@ -12,6 +12,7 @@ API = "https://api.github.com/repos/Comfy-Org/ComfyUI"
 
 
 def github_json(path):
+    """Read ComfyUI repository metadata using an optional local GitHub token."""
     headers = {"Accept": "application/vnd.github+json"}
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
@@ -22,6 +23,7 @@ def github_json(path):
 
 
 def comfy_revision(*, local):
+    """Validate the selected SHA; only a local deployment without one resolves Latest."""
     sha = os.environ.get(REVISION_ENV, "").strip()
     if local and not sha:
         try:
