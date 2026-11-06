@@ -6,7 +6,7 @@ splitは任意拡張なしで動作します。ComfyUI標準のワークフロ�
 
 ## 設定
 
-以下の既定値は`COMFYUI_AMBIENT_MODE`を指定していない場合の値です。この変数を使っている場合は[設定の優先順位](#設定の優先順位と保存済みデータ)を参照してください。
+未指定の機能は無効です。利用する拡張・追加ノード・中継をそれぞれ明示してください。
 
 | 変数 | 既定 | 内容 |
 | --- | --- | --- |
@@ -22,6 +22,8 @@ SPLIT_AGENT_BRIDGE=off
 ```
 
 各設定は独立しています。ノード選択や拡張の有効化だけではモデルを取得しません。
+
+Ambient拡張は`SPLIT_EXTENSIONS=ambient`で有効にできます。必要な追加ノードは`SPLIT_NODE_PACKS`で選択し、AgentBridge中継を使う場合は`SPLIT_AGENT_BRIDGE=on`を指定してください。
 
 ## 取得と更新
 
@@ -55,11 +57,9 @@ Secret名が`github-secret`なら、`.env`への追記は不要です。別の�
 
 未使用機能にはSecret依存を付けません。AgentBridgeの中継用Secretは`SPLIT_AGENT_BRIDGE=on`の場合だけ渡し、ノードを選択しただけでは渡しません。
 
-## 設定の優先順位と保存済みデータ
+## 設定と保存済みデータ
 
-`SPLIT_EXTENSIONS`、`SPLIT_NODE_PACKS`、`SPLIT_AGENT_BRIDGE`は、それぞれ明示した値を使います。空文字列による拡張・追加ノードの無効化と、`off`による中継の無効化も優先します。
-
-`COMFYUI_AMBIENT_MODE=on`を設定している場合に限り、未指定の項目を補います。`SPLIT_EXTENSIONS`は`ambient`、`SPLIT_NODE_PACKS`はカタログ内の全追加ノード、`SPLIT_AGENT_BRIDGE`は`on`として扱います。これらの変数をいずれも設定していなければ、拡張・追加ノード・中継はすべて無効です。
+有効化には`SPLIT_EXTENSIONS`、`SPLIT_NODE_PACKS`、`SPLIT_AGENT_BRIDGE`を使います。拡張・追加ノードは未指定または空文字列で、中継は未指定または`off`で無効になります。廃止した`COMFYUI_AMBIENT_MODE`が残っている場合は、移行先の設定名を示すエラーで停止します。`.env`やシェル設定から旧変数を削除し、以前この変数で有効にしていた機能を新しい設定で明示してください。
 
 拡張の選択解除だけでは、保存済みデータやJournal内の拡張状態を削除しません。
 
