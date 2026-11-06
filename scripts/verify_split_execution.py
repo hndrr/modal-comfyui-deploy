@@ -6,12 +6,12 @@ import time
 import uuid
 
 import aiohttp
-import modal
+
+from comfy_split.gpu import deployed_gpu_count
 
 
 async def main():
     origin = "http://127.0.0.1:8000"
-    gpu = modal.Function.from_name("comfyui-split", "gpu_worker")
     async with aiohttp.ClientSession() as client:
         async def request(method, path, **kwargs):
             async with client.request(method, origin + path, **kwargs) as response:
@@ -81,9 +81,9 @@ async def main():
             print(json.dumps({"event": "mode_verified", "mode": mode, "device": device}), flush=True)
         started = time.monotonic()
         while time.monotonic() - started < 120:
-            stats = await gpu.get_current_stats.aio()
-            assert stats.num_total_runners <= 1, stats
-            if stats.num_total_runners == 0:
+            count = await deployed_gpu_count()
+            assert count in (0, 1), count
+            if count == 0:
                 print(json.dumps({"event": "gpu_zero", "seconds_after_return": time.monotonic() - started}), flush=True)
                 return
             await asyncio.sleep(2)
