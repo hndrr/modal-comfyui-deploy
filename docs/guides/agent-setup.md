@@ -167,7 +167,7 @@ COMFYUI_REQUIRES_PROXY_AUTH=on
 
 - **認証と画面**: 未ログインのブラウザではAccessのログインが必要で、認証後にComfyUIの画面を操作できること。WebSocketが接続し、状態を受信できること。
 - **直URLの保護**: Modalの `ui` URLへの認証なしリクエストが `401` になること。Accessを経由した画面は引き続き操作できること。
-- **Splitの実行**: `EmptyImage`（64×64）→ `SaveImage` を1件実行し、出力を取得できること。[既存のスモーク用JSON](../../mcp/smoke-workflow.json)を参照できます。追加の確認が必要なら[Splitの検証手順](comfyui-split.md#実機検証観点と検証スクリプト)を使います。
+- **Splitの実行**: `EmptyImage`（64×64）→ `SaveImage` を1件実行し、出力を取得できること。[既存のスモーク用JSON](../../mcp/smoke-workflow.json)を参照できます。追加の確認が必要なら[Splitの検証手順](split-internals.md#実機検証観点と検証スクリプト)を使います。
 - **Splitの停止**: 分離モードで処理後にGPUが0台へ戻ること。確認後はUIや接続を閉じ、CPUもアイドル停止することをModalの管理画面などで確認します。停止待ちにアプリの状態APIを繰り返し呼び出さないでください。
 - **MCPを選んだ場合**: 未認証ではOAuthチャレンジが返り、別AccessアプリのJWTが拒否されること。本人のOAuthでツール一覧を取得し、スモーク用JSONを1件実行して出力を取得できること。再試行は同じ `request_id` を使い、二重投入を避けます。
 
