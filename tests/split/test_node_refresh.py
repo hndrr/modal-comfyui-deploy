@@ -198,6 +198,14 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
         with patch("comfy_split.gateway.environment_path", return_value=root):
             current = await self.control.objects("/object_info")
             self.assertEqual(set(json.loads(current.text)), {"CurrentManagedNode", "GPUOnly"})
+            self.control.client.get.reset_mock()
+            selected = await self.control.objects("/object_info", graph={
+                "1": {"class_type": "CurrentManagedNode"}, "2": {"class_type": "CurrentManagedNode"}})
+            self.assertEqual(set(json.loads(selected.text)), {"CurrentManagedNode"})
+            self.control.client.get.assert_called_once_with(self.control.cpu.url + "/object_info/CurrentManagedNode")
             response.json.return_value = {}
+            selected = await self.control.objects("/object_info", graph={
+                "1": {"class_type": "GPUOnly"}, "2": {"class_type": "RemovedManagedNode"}})
+            self.assertEqual(set(json.loads(selected.text)), {"GPUOnly"})
             disabled = await self.control.objects("/object_info")
             self.assertEqual(set(json.loads(disabled.text)), {"GPUOnly"})

@@ -6,6 +6,7 @@ from collections import defaultdict
 
 DEFAULT = "RTX-PRO-6000"
 WORKERS = {DEFAULT: "gpu_worker_rtx", "L4": "gpu_worker_l4", "L40S": "gpu_worker_l40s"}
+CHOICES = ("auto", "auto-speed", *WORKERS)
 
 # These nodes load or encode media without local model inference.
 MEDIA_NODES = {
@@ -21,6 +22,11 @@ def deployed_workers(app_name, session_gpu):
     import modal
 
     names = {**WORKERS, session_gpu: "gpu_worker"}
+    if session_gpu in {"L4", "L40S"}:
+        # The named pool can still own a container from the previous deployment.
+        # Keep it visible even when new jobs route through the session worker.
+        name = WORKERS[session_gpu]
+        names[name] = name
     return {device: modal.Function.from_name(app_name, name) for device, name in names.items()}
 
 
@@ -35,7 +41,7 @@ async def deployed_gpu_count():
 
 
 def request_gpu(value):
-    if not isinstance(value, str) or value not in ("auto", "auto-speed", *WORKERS):
+    if not isinstance(value, str) or value not in CHOICES:
         raise ValueError("gpu must be auto, auto-speed, L4, L40S or RTX-PRO-6000")
     return value
 
@@ -92,8 +98,6 @@ def measured_still_gpu(graph, definitions):
     if type(size) is not int or size not in KLEIN_SECONDS:
         return None
     timings = KLEIN_SECONDS[size]
-    if timings.keys() != GPU_USD_PER_SECOND.keys():
-        return None
     return min(timings, key=lambda device: timings[device] * GPU_USD_PER_SECOND[device])
 
 
