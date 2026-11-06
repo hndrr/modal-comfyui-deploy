@@ -1,0 +1,548 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Proposed split generate_music input",
+  "description": "Design only; generate_music is not registered. Shape validation does not establish runtime availability. See ../split-music-mcp.md for semantic validation and model/node prerequisites.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "model",
+    "operation",
+    "input"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{1,96}$",
+      "description": "Keep the same ID and unchanged arguments for retries. Use a new ID for a new render."
+    },
+    "model": {
+      "enum": [
+        "ace-step-1.5-xl-turbo",
+        "ace-step-1.5-xl-base",
+        "ace-step-1.5-xl-sft",
+        "yue2-3b",
+        "stable-audio-3-medium",
+        "stable-audio-3-small-music",
+        "minimax-music-3"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "create",
+        "reference",
+        "cover",
+        "extend",
+        "repaint"
+      ]
+    },
+    "input": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/directInput"
+        },
+        {
+          "$ref": "#/$defs/musicSpecInput"
+        }
+      ]
+    },
+    "source_audio": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "Loader-visible relative audio filename returned by upload_media or reuse_output; no URL, absolute path or output index.",
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^/"
+          },
+          {
+            "pattern": "\\\\"
+          },
+          {
+            "pattern": "(^|/)\\.\\.(/|$)"
+          },
+          {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          },
+          {
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"
+          }
+        ]
+      }
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "If omitted: integer value of the first 13 hex digits of SHA-256(UTF-8('generate_music:' + request_id))."
+    },
+    "extend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "continue_at",
+        "duration_seconds"
+      ],
+      "properties": {
+        "continue_at": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Keep the source prefix [0, continue_at), then generate a new tail. Must not exceed source duration."
+        },
+        "duration_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Additional tail length, not total duration. Total is continue_at + duration_seconds."
+        }
+      }
+    },
+    "repaint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_seconds",
+        "end_seconds"
+      ],
+      "properties": {
+        "start_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Must be greater than start_seconds and at most the source duration; checked semantically."
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "operation": {
+          "const": "create"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "source_audio"
+            ]
+          },
+          {
+            "required": [
+              "extend"
+            ]
+          },
+          {
+            "required": [
+              "repaint"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "operation": {
+          "const": "reference"
+        },
+        "model": {
+          "enum": [
+            "ace-step-1.5-xl-turbo",
+            "ace-step-1.5-xl-base",
+            "ace-step-1.5-xl-sft"
+          ]
+        }
+      },
+      "required": [
+        "source_audio"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "extend"
+            ]
+          },
+          {
+            "required": [
+              "repaint"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "operation": {
+          "const": "cover"
+        },
+        "model": {
+          "const": "yue2-3b"
+        }
+      },
+      "required": [
+        "source_audio"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "extend"
+            ]
+          },
+          {
+            "required": [
+              "repaint"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "operation": {
+          "const": "extend"
+        },
+        "model": {
+          "enum": [
+            "ace-step-1.5-xl-turbo",
+            "ace-step-1.5-xl-base",
+            "ace-step-1.5-xl-sft"
+          ]
+        }
+      },
+      "required": [
+        "source_audio",
+        "extend"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "repaint"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "operation": {
+          "const": "repaint"
+        },
+        "model": {
+          "enum": [
+            "ace-step-1.5-xl-turbo",
+            "ace-step-1.5-xl-base",
+            "ace-step-1.5-xl-sft"
+          ]
+        }
+      },
+      "required": [
+        "source_audio",
+        "repaint"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "extend"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": [
+              "extend",
+              "repaint"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "duration_seconds": false,
+              "spec": {
+                "properties": {
+                  "duration_seconds": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "const": "minimax-music-3"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "duration_seconds": {
+                "maximum": 360
+              },
+              "spec": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 360
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "const": "yue2-3b"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "duration_seconds": {
+                "maximum": 900
+              },
+              "spec": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 900
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "const": "stable-audio-3-medium"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "duration_seconds": {
+                "maximum": 285
+              },
+              "spec": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 285
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "const": "stable-audio-3-small-music"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "duration_seconds": {
+                "maximum": 120
+              },
+              "spec": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 120
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "model": {
+            "enum": [
+              "stable-audio-3-medium",
+              "stable-audio-3-small-music"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "instrumental": {
+                "const": true
+              },
+              "spec": {
+                "properties": {
+                  "vocal_mode": {
+                    "const": "instrumental"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "directInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "style",
+        "instrumental"
+      ],
+      "properties": {
+        "mode": {
+          "const": "direct"
+        },
+        "style": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Model-facing musical direction; no automatic lyric writing."
+        },
+        "lyrics": {
+          "type": "string"
+        },
+        "instrumental": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "Target length for ACE/Stable; upper bound for M3/YuE2. Omitted means 30 for create/reference/cover. Forbidden for extend/repaint."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "instrumental": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lyrics": {
+                "maxLength": 0
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "lyrics"
+            ],
+            "properties": {
+              "lyrics": {
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "musicSpecInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "spec"
+      ],
+      "properties": {
+        "mode": {
+          "const": "music_spec"
+        },
+        "spec": {
+          "$ref": "https://raw.githubusercontent.com/hndrr/ComfyUI-MusicPromptBuilder/064a6bb4eb1a425bbb4b57cd8b8c34bf6cd4b5ec/schemas/music-spec-0.1.schema.json"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "spec": {
+                "properties": {
+                  "vocal_mode": {
+                    "const": "instrumental"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "spec": {
+                "properties": {
+                  "lyrics": {
+                    "maxLength": 0
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "spec": {
+                "properties": {
+                  "lyrics": {
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
