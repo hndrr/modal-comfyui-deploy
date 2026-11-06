@@ -3,7 +3,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from comfy_split import node_packs, runtime
 from comfy_split.gateway_access import ENV as GATEWAY_TOKEN_ENV
@@ -37,7 +38,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             for mode in ("on", "off", "gemini"):
                 packs = tuple(NODE_PACKS) if mode == "on" else (("gemini",) if mode == "gemini" else ())
                 selection = Settings(node_packs=packs).environment()
-                for role in ("cpu", "gpu"):
+                for role in ("cpu", "candidate", "gpu", "cpu_worker"):
                     process = runtime.ComfyProcess(role, 8187)
                     process.root = root / f"{mode}-{role}"
                     process.temp_root = process.root / "temporary"
@@ -52,8 +53,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                                                 **provider_keys}), \
                          patch.object(runtime.asyncio, "create_subprocess_exec", launch), \
                          self.assertRaisesRegex(RuntimeError, "captured launch"):
-                        await process.start("env-snapshot", cpu=role == "cpu")
+                        await process.start("env-snapshot", cpu=role != "gpu")
                     command = launch.call_args.args
+                    self.assertEqual("--cpu" in command, role != "gpu")
+                    self.assertEqual(launch.call_args.kwargs["env"]["SPLIT_CPU"],
+                                     "1" if role in {"cpu", "candidate"} else "0")
                     self.assertNotIn(node_packs.TOKEN_ENV, launch.call_args.kwargs["env"])
                     self.assertNotIn(GATEWAY_TOKEN_ENV, launch.call_args.kwargs["env"])
                     self.assertEqual({key: launch.call_args.kwargs["env"][key] for key in provider_keys},
@@ -69,3 +73,32 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                                              (source / node_packs.DIRECTORY / name).resolve())
                     else:
                         self.assertEqual(config.name, "extension_paths.yaml")
+
+                    if mode == "off" and role in {"candidate", "cpu_worker"}:
+                        for guard in (False, True):
+                            with self.subTest(role=role, guard=guard):
+                                process.version = None
+                                process.process = None
+                                response = AsyncMock()
+                                response.__aenter__.return_value = SimpleNamespace(
+                                    status=200, json=AsyncMock(return_value={"cpu_guard": guard}))
+                                client = AsyncMock()
+                                client.__aenter__.return_value = client
+                                client.get = Mock(return_value=response)
+                                with (patch.object(runtime, "ENVIRONMENTS", environments),
+                                      patch.object(runtime, "TEMPLATE", template),
+                                      patch.object(runtime, "USER", user),
+                                      patch.object(runtime, "Path", side_effect=local_path),
+                                      patch.dict(os.environ, selection),
+                                      patch.object(runtime.asyncio, "create_subprocess_exec",
+                                                   AsyncMock(return_value=SimpleNamespace(returncode=None))),
+                                      patch.object(runtime, "ClientSession", return_value=client),
+                                      patch.object(process, "stop", AsyncMock())):
+                                    if guard == (role == "candidate"):
+                                        await process.start("env-snapshot", cpu=True)
+                                        self.assertEqual(process.version, "env-snapshot")
+                                    else:
+                                        expected = ("CPU execution guard did not load" if role == "candidate"
+                                                    else "Execution worker unexpectedly has the CPU guard")
+                                        with self.assertRaisesRegex(RuntimeError, expected):
+                                            await process.start("env-snapshot", cpu=True)

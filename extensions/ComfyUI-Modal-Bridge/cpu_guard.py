@@ -20,7 +20,7 @@ def install_cpu_guard():
         raise RuntimeError("Unsupported ComfyUI PromptQueue.put signature; CPU guard cannot be installed")
 
     def deny_put(self, item):
-        raise RuntimeError("Generation is owned by the split GPU dispatcher")
+        raise RuntimeError("Generation is owned by the split dispatcher")
 
     deny_put._modal_cpu_guard = True
     execution.PromptQueue.put = deny_put

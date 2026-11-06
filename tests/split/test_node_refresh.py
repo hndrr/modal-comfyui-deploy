@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from comfy_split import node_packs
+from comfy_split import gpu, node_packs
 from comfy_split.config import NODE_PACKS, Settings
 from comfy_split.gateway import Controller
 from comfy_split.state import Journal, write_json
@@ -209,3 +209,12 @@ class ManagedStartupTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(json.loads(selected.text)), {"GPUOnly"})
             disabled = await self.control.objects("/object_info")
             self.assertEqual(set(json.loads(disabled.text)), {"GPUOnly"})
+            graph = {"1": {"class_type": "GPUOnly", "inputs": {}}}
+            with patch.dict(gpu.CPU_API_NODES, {"custom_nodes.user-node": {"GPUOnly"}}):
+                definitions = json.loads((await self.control.objects("/object_info", graph=graph)).text)
+                selected = gpu.select_gpu("auto", graph, definitions)
+                self.assertEqual(selected["gpu"], gpu.DEFAULT)
+                self.assertIn("CPUで読み込めないノード：GPUOnly", selected["gpu_reason"])
+                response.json.return_value = {"GPUOnly": {"python_module": "custom_nodes.user-node"}}
+                definitions = json.loads((await self.control.objects("/object_info", graph=graph)).text)
+                self.assertEqual(gpu.select_gpu("auto", graph, definitions)["gpu"], "CPU")

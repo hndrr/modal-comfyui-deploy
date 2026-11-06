@@ -119,8 +119,7 @@ async def submit(c, body, key):
         await c.commit_prompt()
         await c.status()
         return web.json_response(c.receipt(job))
-    # Owner approval can outlast a warm container. Pin the graph-based choice
-    # instead of charging for a larger GPU that may be cold by approval time.
+    # Pin the CPU/GPU choice at admission, including across owner approval.
     selection = gpu.select_gpu(requested, graph, definitions)
     if sum(r["status"] == "pending" for r in rows.values()) >= 64:
         raise ValueError("Too many pending reviews; decline one or wait for expiry.")
@@ -178,7 +177,7 @@ def page(row, message=""):
         )
     elif row["status"] == "pending":
         if "gpu" in row:
-            chunks.append(f"<p>予定GPU：<strong>{esc(row['gpu'])}</strong>（{esc(row['gpu_reason'])}）</p>")
+            chunks.append(f"<p>実行先：<strong>{esc(row['gpu'])}</strong>（{esc(row['gpu_reason'])}）</p>")
         chunks.append(
             "<p>まだ送信していません。以下の内容をこのジョブで送信します。実行料金はモデル・入力・提供元の料金体系により変わり、金額は未確定です。</p>"
         )
