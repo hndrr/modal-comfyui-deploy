@@ -11,7 +11,7 @@ web_directory = "web"
 web_name = "ComfyUI-Ambient"
 guarded_routes = ["/ambient/workflows", "/ambient/executions", "/ambient/library"]
 
-# Read compatibility for existing deployments; never rewrite or delete data.
+# Read saved nodes from the old directory and manifest; never rewrite or delete data.
 [legacy]
 node_directory = "ambient_nodes"
 node_manifest = "ambient-nodes.json"
