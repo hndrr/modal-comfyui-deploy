@@ -98,6 +98,25 @@ UI の操作および状態表示は、独立した拡張機能 [ComfyUI-Modal-C
 
 同じ[検証用グラフ](../../scripts/verify_split_gpu_workflow.json)を3機種で再計測するには `scripts/modal.sh run -m scripts.verify_split_gpus` を使います。`--gpu L4 --size 1024` のように対象を絞れます。モデルVolumeは読み取り専用で、検証用PNGは一時領域に保存します。
 
+#### L40Sでの音楽生成の実測
+
+2026-11-06に、保存済みの成功ワークフローを基に、バッチ1・SageAttention有効で各条件を1回実行しました。モデルは既存Volumeから読み取り、ケースごとにGPUを停止してから次を起動しています。以下の4件はすべて生成とMP3保存に成功しました。
+
+| モデル | 音声の長さ | ComfyUI実行時間 | ComfyUI起動から保存まで | 観測最大VRAM |
+| --- | --- | --- | --- | --- |
+| ACE-Step 1.5 XL Turbo bf16 | 30秒 | 22.83秒 | 41.43秒 | 16.0 GiB |
+| ACE-Step 1.5 XL Turbo bf16 | 180秒 | 27.70秒 | 40.00秒 | 29.7 GiB |
+| YuE2 3B bf16 | 30秒 | 32.75秒 | 48.08秒 | 9.0 GiB |
+| Stable Audio 3 Medium | 30秒 | 10.74秒 | 26.17秒 | 6.6 GiB |
+
+- ACE-StepはQwen 0.6B＋1.7BのエンコーダーとACE 1.5 VAEを使用。音声コード生成あり、Euler/simple・8ステップ・CFG 1です。
+- YuE2はfullモード、dpm_2/sgm_uniform・32ステップ・CFG 1、タイルVAEデコードです。
+- Stable AudioはT5Gemmaエンコーダー、lcm/simple・8ステップ・CFG 1です。
+
+VRAMは生成中に約250ms間隔で取得したデバイス全体の使用量です。MP3のデコード、指定時間との一致、有限値かつ無音でない音声データ、各試行後のGPU 0台復帰も確認しました。実行時間はモデル読み込みを含み、GPUの割り当て待ち・コンテナ初期化は表の時間に含みません。
+
+この条件ではL40Sを直接指定して生成できます。音楽についてはL4・RTX PRO 6000との同条件の料金比較が残っており、自動選択はRTX PRO 6000を使います。
+
 ### ComfyUI Manager によるノード追加・更新
 
 - **候補環境へのインストール**:
