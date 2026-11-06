@@ -1,4 +1,4 @@
-"""One Modal function owns every GPU operation, including legacy sessions."""
+"""Shared generation, validation and legacy execution for split GPU workers."""
 
 import asyncio
 import hmac
@@ -139,6 +139,7 @@ async def generate_with_extensions(spec, client, control, emit):
 async def generate(spec, client, control, emit):
     job_id = spec["id"]
     body = dict(spec["body"], prompt_id=job_id, client_id=job_id)
+    body.pop("gpu", None)
     if spec.get("mcp_guard"):
         from comfy_split.mcp_policy import COMFY
 

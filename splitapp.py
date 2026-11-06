@@ -11,7 +11,7 @@ import uuid
 
 import modal
 
-from comfy_split import node_packs
+from comfy_split import gpu, node_packs
 from comfy_split.config import Settings, DEPLOYMENT_ENV
 from comfy_split.model_import import import_model as import_model_file
 from comfy_split.extension_sources import enabled_sources
@@ -26,7 +26,8 @@ from comfyapp import (
     TORCHAUDIO_WHEEL_URL,
     TORCHVISION_WHEEL_URL,
     XFORMERS_WHEEL_URL,
-    base_image,
+    build_sage_wheel,
+    torch_image,
 )
 
 APP_NAME = "comfyui-split"
@@ -62,8 +63,16 @@ volumes = {
 events = modal.Queue.from_name(APP_NAME + "-events", create_if_missing=True)
 commands = modal.Queue.from_name(APP_NAME + "-commands", create_if_missing=True)
 
+# Preserve the configured GPU for legacy sessions and environment validation.
+session_gpu = os.environ.get("SPLIT_SESSION_GPU", str(GPU_PROFILE["modal_gpu"]))
+architectures = ["8.9", "12.0"]
+if session_gpu in {"H100", "A100-80GB"}:
+    architectures.append({"H100": "9.0", "A100-80GB": "8.0"}[session_gpu])
+cuda_arches = ";".join(architectures)
 image = (
-    base_image.run_commands(
+    build_sage_wheel(torch_image.env({
+        "TORCH_CUDA_ARCH_LIST": cuda_arches, "SAGEATTENTION_CUDA_ARCH_LIST": cuda_arches,
+    })).run_commands(
         "git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfy-template",
         f"git -C /opt/comfy-template checkout {COMFY_REVISION}",
         "python -m pip install -r /opt/comfy-template/requirements.txt",
@@ -154,7 +163,7 @@ for name, source in enabled_sources(settings):
 # core packages from the image, without changing any shared node environment.
 image = image.run_commands(
     "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
-    "comfyui-frontend-package comfy-kitchen",
+    f"comfyui-frontend-package comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
 ).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
     "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
 )
@@ -185,11 +194,11 @@ billing_config = {"SPLIT_COMFY_BILLING_SECRET": billing_secret, "SPLIT_COMFY_BIL
     "SPLIT_GEMINI_BILLING_LABEL": os.environ.get("SPLIT_GEMINI_BILLING_LABEL", "").strip() or secret_names.get("GEMINI_SECRET_NAME", ""),
     "SPLIT_OPENROUTER_BILLING_LABEL": os.environ.get("SPLIT_OPENROUTER_BILLING_LABEL", "").strip() or secret_names.get("OPENROUTER_SECRET_NAME", "")}
 
-cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", DEPLOYMENT_ENV: DEPLOYMENT_ID,
+cpu_image = remote_mcp_image(image).env({"SPLIT_CPU_MEMORY_SNAPSHOT": "1", "SPLIT_SESSION_GPU": session_gpu, DEPLOYMENT_ENV: DEPLOYMENT_ID,
     **billing_config,
     "SPLIT_COMFY_BILLING_ENABLED": "1" if billing_secret else "0",
     "SPLIT_IMAGE_NODE_NAMES": ",".join(repo.split("/")[-1] for repo in NODE_REVISIONS)})
-image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID, **billing_config})
+image = image.env({DEPLOYMENT_ENV: DEPLOYMENT_ID, "SPLIT_SESSION_GPU": session_gpu, **billing_config})
 if not modal.is_local() and os.environ.get("SPLIT_CPU_MEMORY_SNAPSHOT") == "1":
     from comfy_split.cpu_snapshot import prepare
 
@@ -207,9 +216,9 @@ import_model = app.function(image=model_image, min_containers=0, max_containers=
 )(import_model_file)
 
 
-@app.function(
+# All three pools run the same code and mount the same versioned environment.
+worker_options = dict(
     image=image,
-    gpu=str(GPU_PROFILE["modal_gpu"]),
     secrets=provider_secrets + ([modal.Secret.from_name(billing_secret, required_keys=["COMFY_API_KEY"])]
                                if billing_secret else []),
     min_containers=0,
@@ -219,10 +228,33 @@ import_model = app.function(image=model_image, min_containers=0, max_containers=
     retries=0,
     volumes={MOUNTS[key]: value for key, value in volumes.items()},
 )
-async def gpu_worker(spec):
+
+
+async def run_gpu(spec):
     from comfy_split.worker import run_worker
 
     return await run_worker(spec, events, commands, volumes)
+
+
+@app.function(gpu=session_gpu, **worker_options)
+async def gpu_worker(spec):
+    return await run_gpu(spec)
+
+
+if session_gpu != gpu.DEFAULT:
+    @app.function(gpu=gpu.DEFAULT, **worker_options)
+    async def gpu_worker_rtx(spec):
+        return await run_gpu(spec)
+
+
+@app.function(gpu="L4", **worker_options)
+async def gpu_worker_l4(spec):
+    return await run_gpu(spec)
+
+
+@app.function(gpu="L40S", **worker_options)
+async def gpu_worker_l40s(spec):
+    return await run_gpu(spec)
 
 
 @app.function(

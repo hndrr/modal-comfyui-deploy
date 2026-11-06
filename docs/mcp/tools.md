@@ -77,15 +77,15 @@ CLI の転送は、`upload_id + filename` で開始・再開位置を確認し�
 
 | ツール | 主な引数・アクション | できること・返るもの | 実行先・保存への影響 |
 | --- | --- | --- | --- |
-| `enqueue_workflow` | `request_id`、API形式の `workflow` | 1件の生成を受付。`prompt_id`、または外部送信の `approval_required` と本人用確認リンク | ComfyUI CPUで受付。ジョブ実行時にGPUを起動。外部送信は対応版の承認機能を適用して利用する |
+| `enqueue_workflow` | `request_id`、API形式の `workflow`、任意の `gpu`（`auto`＝料金優先、`auto-speed`＝速度優先、または `L4`・`L40S`・`RTX-PRO-6000` の直接指定） | 選択結果の `gpu` と優先設定を含む理由の `gpu_reason` を返す。`prompt_id`、または外部送信の `approval_required` と本人用確認リンク | ComfyUI CPUで受付。ジョブ実行時にGPUを起動。外部送信は対応版の承認機能を適用して利用する |
 | `queue` | `action: list / status`。個別確認は `prompt_id` | ジョブ一覧、または指定したジョブの現在の状態 | ComfyUI CPU。新規ジョブを作らない |
-| `get_job_progress` | `prompt_id` | 現在のノード、報告されたステップ、エラー、各種時間。未報告の値は `null` | ComfyUI CPU。GPUを新規起動しない |
+| `get_job_progress` | `prompt_id` | 現在のノード、報告されたステップ、GPUと選択理由、エラー、各種時間。未報告の値は `null` | ComfyUI CPU。GPUを新規起動しない |
 | `get_history` | `action: list / diagnose`、任意で `prompt_id`・`limit` | 保存済みの状態・出力・エラー・実行時間。`live: false`。IDなしの `diagnose` は直近の対象件数内の失敗を優先 | 配信用 CPU。ライブ進捗ではない |
 | `cancel_job` | `prompt_id` | その1件だけを取消。待機中は `cancelled`、実行中は `cancel_requested`。不明なIDはエラー | ComfyUI CPU。実行中の対象に停止を要求。完了済みの出力は維持 |
 
 `cancel_requested` は「停止要求を受け付けた」という意味で、停止完了ではありません。同じ `prompt_id` を `queue` または `get_job_progress` で確認します。キュー全消去や全GPUへの割り込みツールはありません。
 
-`enqueue_workflow` の受付で通信が切れた場合や、本人が外部送信を承認した後の結果を取得する場合は、同じ `request_id` と同じ `workflow` を再送します。承認待ちの段階ではジョブも GPU 呼び出しもありません。承認は1つのグラフと素材にだけ有効で、内容を変更した場合は新しい `request_id` を使います。[利用者が行う承認操作](usage.md#外部サービスを使うときの承認)も参照してください。
+`enqueue_workflow` の受付で通信が切れた場合や、本人が外部送信を承認した後の結果を取得する場合は、同じ `request_id`、同じ `workflow`、同じGPU指定で再送します。省略と `auto` は同じ料金優先の指定です。料金優先と速度優先を変更する場合も、新しい `request_id` を使います。承認待ちの段階ではジョブも GPU 呼び出しもありません。承認は1つのグラフと素材にだけ有効で、内容を変更した場合は新しい `request_id` を使います。[利用者が行う承認操作](usage.md#外部サービスを使うときの承認)も参照してください。
 
 | 時間の項目 | 意味 |
 | --- | --- |

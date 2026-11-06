@@ -91,21 +91,21 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
         const r = await send(submit ? "/_remote_mcp/submit" : "/_remote_mcp/call",{
           method:"POST",signal:AbortSignal.timeout(50_000),
           headers: submit ? {"X-Split-Remote-Tool":"1","Idempotency-Key":"remote-mcp:"+args.request_id} : {"X-Split-Remote-Tool":"1"},
-          body:JSON.stringify(submit ? {prompt:args.workflow,client_id:"remote-mcp"} : {name,arguments:args}),
+          body:JSON.stringify(submit ? {prompt:args.workflow,client_id:"remote-mcp",gpu:args.gpu} : {name,arguments:args}),
         });
         if (r.status === 409) return await rejected(r);
         if (!r.ok) return failure("Split tool returned HTTP "+r.status+
           (submit ? ". If retrying this submission, reuse the same request_id and workflow." : "."));
         if (submit) {
           if (r.status===202) {
-            const pending=await r.json<{status:string;approval_path:string;expires_at:number}>();
+            const pending=await r.json<{status:string;approval_path:string;expires_at:number;gpu?:string;gpu_reason?:string}>();
             return {content:[{type:"text",text:JSON.stringify({status:"approval_required",request_id:args.request_id,
-              approval_url:receiptLink(pending,browserOrigin),expires_at:pending.expires_at,
+              approval_url:receiptLink(pending,browserOrigin),expires_at:pending.expires_at,gpu:pending.gpu,gpu_reason:pending.gpu_reason,
               instructions:"Give this link to the owner. Do not open or approve it on their behalf. No job has started."})}]};
           }
-          const job = await r.json<{prompt_id:string;number:number}>();
+          const job = await r.json<{prompt_id:string;number:number;gpu?:string;gpu_reason?:string}>();
           if (!job.prompt_id) throw new Error("Missing receipt");
-          return {content:[{type:"text",text:JSON.stringify({request_id:args.request_id,prompt_id:job.prompt_id,number:job.number})}]};
+          return {content:[{type:"text",text:JSON.stringify({request_id:args.request_id,prompt_id:job.prompt_id,number:job.number,gpu:job.gpu,gpu_reason:job.gpu_reason})}]};
         }
         return await r.json<CallToolResult>();
       }
@@ -151,7 +151,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
     _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>call("upload_media",a,undefined,blobHosts));
   server.registerTool("list_models",{description:"List saved model categories or files with sizes and modification times, without starting ComfyUI. Storage files are not guaranteed to be recognized by ComfyUI. Use source:runtime to check its actual registered models. Supports paging and substring search.",annotations:read,inputSchema:modelInputs}, a=>call("list_models",a));
-  server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe.",annotations:read,
+  server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, selected GPU and reason, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe.",annotations:read,
     inputSchema:{prompt_id:z.uuid()}}, a=>call("get_job_progress",a));
   server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
     annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false},
@@ -160,9 +160,10 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:read,inputSchema:{action:z.enum(["node_info","create","modify","validate"]),node_type:z.string().optional(),
       template:z.string().optional(),params:graph.optional(),workflow:graph.optional(),operations:z.array(graph).optional(),
       health:z.boolean().optional(),verbose:z.boolean().optional(),refresh:z.boolean().optional(),raw:z.boolean().optional()}}, a=>call("create_workflow",a));
-  server.registerTool("enqueue_workflow",{description:"Generate once. Choose a unique request_id for each new render; preserve it and the identical graph across retries, disconnects and agents. Local generation returns prompt_id immediately. External providers return an owner review URL; only the owner may approve sending the displayed data and incurring charges.",
+  server.registerTool("enqueue_workflow",{description:"Generate once. Choose a unique request_id for each new render; preserve it, the GPU choice and the identical graph across retries, disconnects and agents. Local generation returns prompt_id immediately. External providers return an owner review URL; only the owner may approve sending the displayed data and incurring charges.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
-    inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph}},a=>call("enqueue_workflow",a,browserOrigin));
+    inputSchema:{request_id:z.string().regex(/^[a-zA-Z0-9_-]{1,96}$/),workflow:graph,
+      gpu:z.enum(["auto","auto-speed","L4","L40S","RTX-PRO-6000"]).optional().describe("auto (default) prioritizes cost. Use auto-speed when the user prioritizes speed or near-real-time local generation: local inference uses RTX-PRO-6000; external-API-only work requiring owner approval uses L4 regardless of currently running GPUs. Lightweight I/O without approval can reuse an already running GPU, otherwise L4. Cold starts and GPU allocation add latency. Explicit L4 (24 GB), L40S (48 GB) or RTX-PRO-6000 (96 GB) overrides automatic selection. Preserve the same choice on retries.")}},a=>call("enqueue_workflow",a,browserOrigin));
   server.registerTool("queue",{description:"List jobs or check prompt_id status.",annotations:read,
     inputSchema:{action:z.enum(["list","status"]),prompt_id:z.string().optional()}},a=>call("queue",a));
   server.registerTool("get_history",{description:"Read saved job history, output filenames, errors and timing without starting ComfyUI. diagnose prefers a failed job in the recent history window. Saved records are not live progress; use get_job_progress for that.",annotations:read,
