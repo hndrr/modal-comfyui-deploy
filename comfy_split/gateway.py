@@ -809,7 +809,7 @@ class Controller:
         selection = gpu.select_gpu(requested, graph, definitions)
         if requested != "auto-speed" or selection["gpu"] != "L4":
             return selection
-        # Pin the observed warm GPU at admission, including pending approvals.
+        # Immediate admissions can reuse a GPU observed running at admission.
         # Speed-priority API/I/O jobs need no model-specific GPU memory.
         try:
             stats = await gpu.pool_stats(self.workers.values())
