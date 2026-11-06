@@ -810,6 +810,24 @@ class Controller:
         check_requirements(body)
         return body
 
+    async def select_gpu(self, requested, graph, definitions):
+        """Reuse a running GPU for immediate speed-priority API/I/O admissions."""
+        selection = gpu.select_gpu(requested, graph, definitions)
+        if requested != "auto-speed" or selection["gpu"] not in {"CPU", "L4"}:
+            return selection
+        try:
+            stats = await gpu.pool_stats(self.workers.values())
+        except Exception:
+            log.warning("Could not check for a warm GPU; using graph selection", exc_info=True)
+            return selection
+        running = [device for device, stat in zip(self.workers, stats) if stat.num_total_runners]
+        if len(running) == 1 and running[0] in gpu.WORKERS:
+            reason = "速度優先：起動済みGPUで外部API・素材入出力を実行"
+            if selection["gpu"] == "L4":
+                reason += "。" + selection["gpu_reason"]
+            return {"gpu": running[0], "gpu_reason": reason}
+        return selection
+
     def admit_prompt(self, body, request_id, selection=None):
         existing = request_id and any(
             j.get("request_id") == request_id
@@ -990,7 +1008,7 @@ class Controller:
                         definitions = {}
                     if requested != "auto":
                         body["gpu"] = requested
-                    selection = gpu.select_gpu(requested, graph, definitions)
+                    selection = await self.select_gpu(requested, graph, definitions)
                     job = self.admit_prompt(body, request_id, selection)
                     await self.commit_prompt()
                 await self.status()

@@ -113,7 +113,7 @@ async def submit(c, body, key):
     graph = prepared["prompt"] = policy.executable_graph(graph, definitions)
     calls, loaders = policy.plan(graph, definitions)
     if not calls:
-        selection = gpu.select_gpu(requested, graph, definitions)
+        selection = await c.select_gpu(requested, graph, definitions)
         job = c.admit_prompt(prepared, key, selection)
         job.update(mcp_guard=policy.execution_guard(prepared, [], []), mcp_digest=digest)
         await c.commit_prompt()

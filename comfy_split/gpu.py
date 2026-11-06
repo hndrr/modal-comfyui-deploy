@@ -153,6 +153,30 @@ def select_gpu(requested, graph, definitions):
     detail = "。".join(reasons) or "実行対象のノードを確認できません"
     if requested in WORKERS:
         return {"gpu": requested, "gpu_reason": "ジョブの機種指定。" + detail}
+    # Preserve the existing GPU choice while CPU verification is pending.
+    # MCP classification selects a GPU tier here; it never grants CPU eligibility.
+    from comfy_split.mcp_policy import classification
+
+    if graph and not unavailable:
+        for node in graph.values():
+            name = node["class_type"]
+            info = definitions[name]
+            module = info["python_module"].lower()
+            if name in MEDIA_NODES.get(module, ()) or (
+                module == "custom_nodes.comfyui-geminitools" and name == "GeminiToolsSaveAudio"
+            ):
+                if name == "EmptyImage":
+                    dims = [node["inputs"].get(k) for k in ("width", "height", "batch_size")]
+                    if not all(type(n) is int and n > 0 for n in dims) or dims[0] * dims[1] * dims[2] > 4096**2:
+                        break
+                continue
+            try:
+                if not classification(name, info, node["inputs"]):
+                    break
+            except ValueError:
+                break
+        else:
+            return {"gpu": "L4", "gpu_reason": f"{priority}：外部API・軽い素材入出力の従来GPUを選択。{detail}"}
     if not speed:
         measured = measured_still_gpu(graph, definitions)
         if measured is not None:

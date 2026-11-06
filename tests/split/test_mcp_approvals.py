@@ -106,12 +106,20 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unregistered_api_still_needs_approval_for_gpu_or_cpu_trial(self):
         with patch.dict(gpu.CPU_API_NODES, {}, clear=True):
-            for key, choice, expected in (("auto-api", "auto", gpu.DEFAULT),
+            for key, choice, expected in (("auto-api", "auto", "L4"),
+                                          ("speed-api", "auto-speed", "L4"),
                                           ("manual-api", "L40S", "L40S"),
                                           ("trial-api", "CPU", "CPU")):
                 path, csrf, html = await self.pending(key, PAID, gpu=choice)
                 self.assertIn(f"実行先：<strong>{expected}", html)
                 self.assertFalse(self.control.journal.data["jobs"])
+            for choice in ("auto", "auto-speed"):
+                receipt = await (await self.client.post("/api/prompt", json={"prompt": PAID, "gpu": choice})).json()
+                self.assertEqual(receipt["gpu"], "L4")
+            path, csrf, _ = await self.pending("auto-api", PAID)
+            await self.decide(path, csrf, "approve")
+            receipt = await (await self.send("auto-api", PAID)).json()
+            self.assertEqual(receipt["gpu"], "L4")
 
     async def test_gpu_selection_is_pinned_across_browser_mcp_review_and_replay(self):
         browser = await (await self.client.post("/api/prompt", json={"prompt": PAID})).json()
@@ -198,20 +206,52 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CPU", receipt["gpu_reason"])
         self.assertEqual(await (await self.send("speed-review", PAID, gpu="auto-speed")).json(), receipt)
 
-    async def test_api_and_io_ignore_warm_gpu_and_stats_failure(self):
+    async def test_speed_reuses_warm_gpu_even_for_cpu_eligible_api_and_io(self):
         stats = self.control.worker.get_current_stats.aio
         stats.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
         browser = await (await self.client.post("/api/prompt", json={"prompt": PAID},
             headers={"Cookie": "split_gpu=auto-speed"})).json()
-        self.assertEqual(browser["gpu"], "CPU")
+        self.assertEqual(browser["gpu"], gpu.DEFAULT)
+        self.assertIn("起動済みGPU", browser["gpu_reason"])
         light = {"1": {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 1}}}
         immediate = await (await self.send("warm-io", light, gpu="auto-speed")).json()
-        self.assertEqual(immediate["gpu"], browser["gpu"])
-        stats.side_effect = TimeoutError("unavailable")
-        fallback = await (await self.send("stats-down", light, gpu="auto-speed")).json()
-        self.assertEqual(fallback["gpu"], "CPU")
+        self.assertEqual(immediate["gpu"], gpu.DEFAULT)
+        self.assertEqual(await (await self.send("warm-io", light, gpu="auto-speed")).json(), immediate)
+        stats.reset_mock()
+        for choice in ("auto", "CPU", "L40S"):
+            self.assertEqual((await (await self.send(choice, light, gpu=choice)).json())["gpu"], "CPU")
         stats.assert_not_awaited()
+        stats.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+        self.assertEqual((await (await self.send("cold-io", light, gpu="auto-speed")).json())["gpu"], "CPU")
+        stats.side_effect = TimeoutError("unavailable")
+        with self.assertLogs("comfy_split.gateway", level="WARNING"):
+            fallback = await (await self.send("stats-down", light, gpu="auto-speed")).json()
+        self.assertEqual(fallback["gpu"], "CPU")
         self.control.worker.spawn.aio.assert_not_awaited()
+
+    async def test_unregistered_api_reuses_warm_gpu_only_without_approval_wait(self):
+        stats = self.control.worker.get_current_stats.aio
+        stats.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
+        with patch.dict(gpu.CPU_API_NODES, {}, clear=True):
+            browser = await (await self.client.post("/api/prompt", json={"prompt": PAID, "gpu": "auto-speed"})).json()
+            self.assertEqual(browser["gpu"], gpu.DEFAULT)
+            self.assertIn("起動済みGPU", browser["gpu_reason"])
+            self.assertIn("CPU対応未登録", browser["gpu_reason"])
+            stats.reset_mock()
+            path, csrf, html = await self.pending("pending-unregistered", PAID, gpu="auto-speed")
+            self.assertIn("実行先：<strong>L4", html)
+            stats.assert_not_awaited()
+            stats.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+            await self.decide(path, csrf, "approve")
+            receipt = await (await self.send("pending-unregistered", PAID, gpu="auto-speed")).json()
+            self.assertEqual(receipt["gpu"], "L4")
+            stats.assert_not_awaited()
+            browser = await (await self.client.post("/api/prompt", json={"prompt": PAID, "gpu": "auto-speed"})).json()
+            self.assertEqual(browser["gpu"], "L4")
+            stats.side_effect = TimeoutError("unavailable")
+            with self.assertLogs("comfy_split.gateway", level="WARNING"):
+                browser = await (await self.client.post("/api/prompt", json={"prompt": PAID, "gpu": "auto-speed"})).json()
+            self.assertEqual(browser["gpu"], "L4")
 
     async def test_speed_external_approval_ignores_warm_gpu_and_preserves_graph_choice(self):
         stats = self.control.worker.get_current_stats.aio
