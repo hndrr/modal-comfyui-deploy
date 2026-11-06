@@ -34,7 +34,7 @@ Ambient拡張は`SPLIT_EXTENSIONS=ambient`で有効にできます。必要な�
 | `SPLIT_EXTENSIONS`の拡張、`SPLIT_AGENT_BRIDGE`の中継 | カタログの固定コミット | デプロイのイメージ作成時にPythonパッケージをインストールし、配布バージョンを確認 |
 | `SPLIT_NODE_PACKS`の追加ノード | `revision`があれば固定コミット、なければ既定ブランチのHEAD | デプロイ後、生成・候補環境・GPUセッションのない分離モードでのCPU起動時に更新を確認 |
 
-追加ノードに変更があれば、候補環境を作り、固定依存との整合性とCPUでのノード読み込みを検査してから採用します。この自動更新ではGPU検証を行いません。Managerで追加・更新した候補の反映はCPUとGPUで検証します。[Managerの操作](comfyui-split.md#操作)を参照してください。
+追加ノードに変更があれば、候補環境を作り、固定依存との整合性とCPUでのノード読み込みを検査してから採用します。この自動更新ではGPU検証を行いません。Managerで追加・更新した候補の反映はCPUとGPUで検証します。[Managerの操作](comfyui-split.md#comfyui-managerによるノード追加更新)を参照してください。
 
 `agent-bridge`ノードとAgentBridge中継は同じ配布元・固定コミットを共有します。ノードの組み合わせはカタログの`node_conflicts`でimportや採用の前に検査します。CPU/GPUは同じ環境版を使い、候補の検証に失敗した場合は更新前の有効環境を維持します。
 
