@@ -57,7 +57,7 @@ Secret名が`github-secret`なら、`.env`への追記は不要です。別の�
 
 ## 設定と保存済みデータ
 
-`SPLIT_EXTENSIONS`、`SPLIT_NODE_PACKS`、`SPLIT_AGENT_BRIDGE`だけを参照します。拡張・追加ノードは未指定または空文字列で、中継は未指定または`off`で無効になります。廃止した`COMFYUI_AMBIENT_MODE`は読み取りません。以前この変数で有効にしていた機能は、新しい設定で明示してください。
+有効化には`SPLIT_EXTENSIONS`、`SPLIT_NODE_PACKS`、`SPLIT_AGENT_BRIDGE`を使います。拡張・追加ノードは未指定または空文字列で、中継は未指定または`off`で無効になります。廃止した`COMFYUI_AMBIENT_MODE`が残っている場合は、移行先の設定名を示すエラーで停止します。`.env`やシェル設定から旧変数を削除し、以前この変数で有効にしていた機能を新しい設定で明示してください。
 
 拡張の選択解除だけでは、保存済みデータやJournal内の拡張状態を削除しません。
 

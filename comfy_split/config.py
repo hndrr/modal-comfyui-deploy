@@ -32,6 +32,8 @@ class Settings:
     @classmethod
     def read(cls, environ=None):
         environ = os.environ if environ is None else environ
+        if "COMFYUI_AMBIENT_MODE" in environ:
+            raise ValueError("COMFYUI_AMBIENT_MODE was removed; use SPLIT_EXTENSIONS, SPLIT_NODE_PACKS and SPLIT_AGENT_BRIDGE")
         return cls(
             selection(environ, "SPLIT_EXTENSIONS", EXTENSIONS),
             selection(environ, "SPLIT_NODE_PACKS", NODE_PACKS),
