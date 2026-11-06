@@ -43,7 +43,6 @@ if settings.node_packs or enabled_sources(settings):
     if settings.node_packs:
         github_secrets = [github_build_secret]
 COMFY_REVISION = comfy_revision(local=modal.is_local())
-MANAGER_VERSION = "4.2.2"
 NODE_REVISIONS = {
     "crystian/ComfyUI-Crystools": "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
     "Firetheft/ComfyUI_Local_Media_Manager": "5e74ce0cc708798ed25a77097d6059b6c796da87",
@@ -75,14 +74,14 @@ image = (
         # Capture the wheels SageAttention was built against before any resolver runs.
         f"python -m pip install --no-deps {PREBUILT_WHEEL_DIR}/*.whl",
         "python /opt/build_constraints.py /opt/comfy-template/requirements.txt "
-        f"{MANAGER_VERSION} > /opt/split-constraints.txt",
+        "/opt/comfy-template/manager_requirements.txt > /opt/split-constraints.txt",
     )
     .env({"PIP_CONSTRAINT": "/opt/split-constraints.txt", REVISION_ENV: COMFY_REVISION})
     .run_commands(
         "python -m pip install -r /opt/comfy-template/requirements.txt",
+        "python -m pip install -r /opt/comfy-template/manager_requirements.txt",
     )
     .pip_install(
-        f"comfyui-manager=={MANAGER_VERSION}",
         "modal==1.1.4",
         "aiohttp==3.14.4",
     )
@@ -163,7 +162,7 @@ image = image.run_commands(
     "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
     f"comfyui-frontend-package comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
 ).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
-    "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
+    "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt --bridge"
 )
 
 app = modal.App(APP_NAME)

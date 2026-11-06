@@ -1,6 +1,7 @@
 """Write pip constraints before installing upstream or custom-node requirements."""
 
 import json
+import re
 import sys
 from importlib.metadata import distribution, distributions
 from pathlib import Path
@@ -41,16 +42,18 @@ def wheel_pins(roots, lookup=distribution):
     return [f"{name}=={pins[name]}" for name in sorted(pins)]
 
 
-def core_pins(requirements):
-    names = ("comfy-kitchen", "comfyui-frontend-package")
+def core_pins(requirements, names=("comfy-kitchen", "comfyui-frontend-package")):
     pins = {}
-    for line in requirements.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line:
+    for line in re.sub(r"\\\r?\n", "", requirements).splitlines():
+        line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+        # Only inspect the protected packages. Other lines belong to pip and
+        # may be options, includes, editable installs, or archive paths/URLs.
+        match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line)
+        if not match or canonicalize_name(match[0]) not in names:
             continue
         req = Requirement(line)
         name = canonicalize_name(req.name)
-        if name not in names or (req.marker and not req.marker.evaluate()):
+        if req.marker and not req.marker.evaluate():
             continue
         specs = list(req.specifier)
         if len(specs) == 1 and specs[0].operator == "==" and "*" not in specs[0].version:
@@ -61,9 +64,10 @@ def core_pins(requirements):
         yield pins[name]
 
 
-def build_constraints(requirements, manager):
-    return [*wheel_pins(wheel_roots()), *core_pins(requirements), f"comfyui-manager=={manager}"]
+def build_constraints(requirements, manager_requirements):
+    return [*wheel_pins(wheel_roots()), *core_pins(requirements),
+            *core_pins(manager_requirements, ("comfyui-manager",))]
 
 
 if __name__ == "__main__":
-    print(*build_constraints(Path(sys.argv[1]).read_text(), sys.argv[2]), sep="\n")
+    print(*build_constraints(Path(sys.argv[1]).read_text(), Path(sys.argv[2]).read_text()), sep="\n")

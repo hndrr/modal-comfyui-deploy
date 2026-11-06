@@ -32,9 +32,10 @@ class EnvironmentTests(unittest.TestCase):
         with patch("comfy_split.build_constraints.wheel_pins", return_value=pins):
             for frontend in ("1.57.4", "2.0"):
                 requirements = f"torch>=2.11\ncomfyui-frontend-package=={frontend}\ncomfy-kitchen==1.0"
-                self.assertEqual(set(build_constraints(requirements, "4.2.2")),
-                                 {*pins, f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
-                                  "comfyui-manager==4.2.2"})
+                for manager in ("4.2.2", "5.0.0"):
+                    self.assertEqual(set(build_constraints(requirements, f"comfyui_manager == {manager}")),
+                                     {*pins, f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
+                                      f"comfyui-manager=={manager}"})
 
     def test_core_pins_accept_requirement_spelling_comments_and_active_markers(self):
         requirements = """
@@ -47,6 +48,18 @@ class EnvironmentTests(unittest.TestCase):
                          ["comfy-kitchen==1.0", "comfyui-frontend-package==1.57.4"])
         installed = {"comfy-kitchen": "1.0", "comfyui-frontend-package": "1.57.4"}
         check_core_requirements(requirements, installed.__getitem__)
+
+    def test_core_pins_leave_pip_directives_and_unrelated_sources_to_pip(self):
+        requirements = (
+            "--extra-index-url https://example.invalid/simple\n"
+            "-r optional.txt\n-e git+https://example.invalid/node.git#egg=node\n"
+            "./dist/node.whl\nhttps://example.invalid/node.whl\n"
+            "comfy-kitchen == \\\n 1.0\ncomfyui-frontend-package==1.57.4\n"
+        )
+        self.assertEqual(list(core_pins(requirements)),
+                         ["comfy-kitchen==1.0", "comfyui-frontend-package==1.57.4"])
+        with self.assertRaisesRegex(RuntimeError, "must pin comfyui-manager"):
+            list(core_pins("comfyui_manager>=5", ("comfyui-manager",)))
 
     def test_core_pins_require_an_active_exact_version(self):
         for spec in (">=1.0", "==1.*", "@ https://example.invalid/kitchen.whl",

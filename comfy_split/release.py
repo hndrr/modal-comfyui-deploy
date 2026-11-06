@@ -12,13 +12,18 @@ API = "https://api.github.com/repos/Comfy-Org/ComfyUI"
 
 
 def github_json(path):
-    request = Request(f"{API}/{path}", headers={"Accept": "application/vnd.github+json"})
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(f"{API}/{path}", headers=headers)
     with urlopen(request, timeout=15) as response:
         return json.load(response)
 
 
 def comfy_revision(*, local):
-    if local:
+    sha = os.environ.get(REVISION_ENV)
+    if local and sha is None:
         try:
             release = github_json("releases/latest")
             tag = release["tag_name"]
@@ -30,10 +35,8 @@ def comfy_revision(*, local):
             sha = github_json(f"commits/{ref}")["sha"]
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise RuntimeError("Cannot resolve the latest stable ComfyUI release; retry deployment") from exc
-    else:
-        sha = os.environ.get(REVISION_ENV)
     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Missing or invalid split ComfyUI commit SHA")
     if local:
-        print(f"Split ComfyUI release: {tag} ({sha})", flush=True)
+        print(f"Split ComfyUI revision: {sha}", flush=True)
     return sha
