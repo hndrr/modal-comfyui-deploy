@@ -35,8 +35,8 @@ async def deployed_gpu_count():
 
 
 def request_gpu(value):
-    if value != "auto" and (not isinstance(value, str) or value not in WORKERS):
-        raise ValueError("gpu must be auto, L4, L40S or RTX-PRO-6000")
+    if not isinstance(value, str) or value not in ("auto", "auto-speed", *WORKERS):
+        raise ValueError("gpu must be auto, auto-speed, L4, L40S or RTX-PRO-6000")
     return value
 
 
@@ -100,13 +100,18 @@ def measured_still_gpu(graph, definitions):
 def select_gpu(requested, graph, definitions):
     from comfy_split.mcp_policy import classification
 
-    if requested != "auto":
+    if requested in WORKERS:
         return {"gpu": requested, "gpu_reason": "ジョブの機種指定"}
-    fallback = {"gpu": DEFAULT, "gpu_reason": "必要メモリが未検証のため大容量GPUを選択"}
+    speed = requested == "auto-speed"
+    priority = "速度優先" if speed else "料金優先"
+    fallback = {"gpu": DEFAULT, "gpu_reason": "速度優先でローカル処理にRTX PRO 6000を選択" if speed
+                else "料金優先：必要メモリが未検証のため大容量GPUを選択"}
     if any(isinstance(n, dict) and n.get("class_type") == "UNETLoader" for n in graph.values()):
+        if speed:
+            return fallback
         measured = measured_still_gpu(graph, definitions)
         if measured is not None:
-            return {"gpu": measured, "gpu_reason": "FLUX.3 Kleinの実測時間とGPU単価から選択"}
+            return {"gpu": measured, "gpu_reason": "料金優先：FLUX.3 Kleinの実測時間とGPU単価から選択"}
         return fallback
     has_provider = False
     for node in graph.values():
@@ -129,4 +134,5 @@ def select_gpu(requested, graph, definitions):
         if not provider:
             return fallback
         has_provider = True
-    return {"gpu": "L4", "gpu_reason": "外部APIと素材の入出力のみ" if has_provider else "素材の入出力のみ"}
+    reason = "外部APIと素材の入出力のみ" if has_provider else "素材の入出力のみ"
+    return {"gpu": "L4", "gpu_reason": f"{priority}：{reason}"}

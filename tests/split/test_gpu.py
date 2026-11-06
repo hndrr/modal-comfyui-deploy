@@ -16,6 +16,7 @@ class MeasuredRoutingTests(unittest.TestCase):
         for size in (512, 1024):
             graph["6"]["inputs"].update(width=size, height=size)
             self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], "L4")
+            self.assertEqual(select_gpu("auto-speed", graph, definitions)["gpu"], DEFAULT)
         for node, field, value in [
             ("1", "unet_name", "other.safetensors"), ("6", "batch_size", 2),
             ("6", "width", ["other", 0]), ("7", "steps", 30),
@@ -31,5 +32,6 @@ class MeasuredRoutingTests(unittest.TestCase):
                  "3": {"class_type": "CustomVideoOutput", "inputs": {}}}
         defs = {node["class_type"]: {"python_module": "nodes", "output_node": key != "1"}
                 for key, node in graph.items()}
-        self.assertEqual(select_gpu("auto", executable_graph(graph, defs), defs)["gpu"], DEFAULT)
-        self.assertEqual(select_gpu("auto", executable_graph(graph, defs, ["2"]), defs)["gpu"], "L4")
+        for choice in ("auto", "auto-speed"):
+            self.assertEqual(select_gpu(choice, executable_graph(graph, defs), defs)["gpu"], DEFAULT)
+            self.assertEqual(select_gpu(choice, executable_graph(graph, defs, ["2"]), defs)["gpu"], "L4")

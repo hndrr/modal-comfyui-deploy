@@ -968,7 +968,7 @@ class Controller:
                     if not isinstance(graph, dict) or not graph:
                         raise ValueError("prompt must be a non-empty object")
                     definitions = {}
-                    if requested == "auto":
+                    if requested not in gpu.WORKERS:
                         definitions = json.loads((await self.objects("/object_info")).body)
                         try:
                             graph = mcp_policy.executable_graph(graph, definitions, body.get("partial_execution_targets"))

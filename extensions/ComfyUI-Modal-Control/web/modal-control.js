@@ -40,7 +40,8 @@ app.registerExtension({
     const gpuLabel = document.createElement("label");
     gpuLabel.textContent = "次の生成に使うGPU";
     const choice = document.createElement("select");
-    for (const [value, title] of [["auto", "自動"], ["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]]) {
+    for (const [value, title] of [["auto", "自動（料金優先）"], ["auto-speed", "自動（速度優先）"],
+      ["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]]) {
       choice.add(new Option(title, value));
     }
     const savedGpu = () => document.cookie.split("; ").find(c => c.startsWith("split_gpu="))?.slice(10);
