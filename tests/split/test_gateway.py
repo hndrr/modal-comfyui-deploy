@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from aiohttp import ClientSession, web
+from aiohttp import ClientConnectionError, ClientResponseError, ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from comfy_split import gpu, remote_mcp
@@ -53,6 +53,21 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed["phase"], "unknown")
         self.assertIsNone(failed["containers"])
         self.assertIsNone(failed["checked_at"])
+
+    async def test_definition_failure_preserves_manual_gpu_and_auto_is_retryable(self):
+        body = {"prompt": {"1": {"class_type": "Test", "inputs": {}}}}
+        for error in (ClientConnectionError("restarting"),
+                      ClientResponseError(None, (), status=503), asyncio.TimeoutError()):
+            with patch.object(self.control, "objects", AsyncMock(side_effect=error)):
+                response = await self.client.post("/api/prompt", json={**body, "gpu": "L40S"})
+                self.assertEqual(response.status, 200)
+                receipt = await response.json()
+                self.assertEqual(receipt["gpu"], "L40S")
+                self.assertIn("ノード定義・入力を確認できません", receipt["gpu_reason"])
+                count = len(self.control.journal.data["jobs"])
+                response = await self.client.post("/api/prompt", json=body)
+                self.assertEqual(response.status, 503)
+                self.assertEqual(len(self.control.journal.data["jobs"]), count)
 
     async def test_cpu_job_skips_gpu_wait_and_is_not_counted_as_gpu_work(self):
         cpu = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-cpu")),

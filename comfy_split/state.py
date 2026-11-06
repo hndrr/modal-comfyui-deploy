@@ -226,7 +226,7 @@ class Journal:
         for job in self.data["jobs"].values():
             if job["status"] == "dispatching" and not job["call_id"]:
                 job["status"] = "unknown"
-                job["error"] = "受付後のGPU呼び出し状態を確認できません。自動再実行はしません。"
+                job["error"] = "受付後の実行ワーカー呼び出し状態を確認できません。自動再実行はしません。"
 
     def assert_idle(self):
         if self.busy() or self.data["candidate"] or self.data["session"]:

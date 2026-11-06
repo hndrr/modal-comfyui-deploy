@@ -16,7 +16,9 @@ flowchart TD
   Read -->|"読む"| Store[("Modal Volume：出力・履歴・保存グラフ・モデル")]
   CPU -->|"必要な操作だけ呼ぶ"| Upstream["CPU内のartokun MCP：編集・解析・ノード照会など"]
   Upstream -->|"必要なAPIを呼ぶ"| API["CPU内のComfyUI API"]
-  CPU -->|"生成・候補環境の検証"| GPU["GPU：ComfyUIで実行"]
+  CPU -->|"CPU対象の生成・明示CPU試行"| RunCPU["CPU実行ワーカー：ComfyUIで実行"]
+  RunCPU -->|"出力と完了記録を保存"| Store
+  CPU -->|"CPU対象外の生成・候補環境の検証"| GPU["GPU：ComfyUIで実行"]
   GPU -->|"出力と完了記録を保存"| Store
   CPU -->|"入力・保存グラフ・ジョブを記録"| Working[("Modal Volume：入力・ユーザーデータ・状態")]
   CPU -->|"add_model"| Download["モデル取得CPU"]
@@ -33,7 +35,7 @@ artokun版はCPU内で必要な操作に使うライブラリです。HTTPSで�
 | --- | --- | --- |
 | 接続、ツール一覧、`ping`、プレイヤーHTML | Worker内で完結 | Modalを起こさない |
 | `get_image / get_audio / get_video / list_outputs` | 配信用CPU → 出力とジョブ記録 | 読み取りだけ |
-| `get_history / get_job_workflow` | 配信用CPU → ジョブ別の保存記録とGPUの完了記録 | 保存時点の情報。ライブ監視ではない |
+| `get_history / get_job_workflow` | 配信用CPU → ジョブ別の保存記録とCPU/GPU実行ワーカーの完了記録 | 保存時点の情報。ライブ監視ではない |
 | `get_workflow(list)`・元JSON・保存済みAPI形式 | 配信用CPU → 保存ライブラリ | 読み取りだけ |
 | `list_models` の既定の保存一覧 | 配信用CPU → モデルのファイル情報 | 重みを読んで動作試験はしない |
 | `get_workflow` の変換・解析、`create_workflow` | ComfyUI CPU → artokun → 必要なComfyUI API | 生成しない。編集結果は応答内のJSON |
@@ -41,7 +43,7 @@ artokun版はCPU内で必要な操作に使うライブラリです。HTTPSで�
 | `list_models(source:runtime) / list_nodes` | ComfyUI CPU → モデル選択肢・ノード登録情報 | 読み取りだけ |
 | `list_inputs / inspect_media / upload_media / reuse_output` | ComfyUI CPU → 入出力Volume | `upload_media / reuse_output` は入力を保存 |
 | `queue / get_job_progress / cancel_job` | ComfyUI CPU → ジョブ台帳・実行中ジョブの制御 | 取消は指定した1件だけ |
-| `enqueue_workflow` | ComfyUI CPUで受付 → GPUで実行 → Volumeへ保存 | 新しい生成。外部サービスは本人承認を挟む構成 |
+| `enqueue_workflow` | ComfyUI CPUで受付 → 受付時に選んだCPU/GPUで実行 → Volumeへ保存 | 新しい生成。外部サービスは本人承認を挟む構成 |
 | モデル・ノードの管理 | ComfyUI CPU → 操作に応じて候補環境・モデル取得CPU・GPU | 下の管理経路を参照 |
 
 配信用CPUの設定がある場合、保存データの読み取りは `/split/startup` を呼びません。ComfyUI CPUを使う経路は準備完了を確認してから操作を実行します。起動が間に合わなければ再試行可能な「起動中」、初期化に失敗した場合は「初期化失敗」を返します。準備前に生成を投入しません。

@@ -228,7 +228,7 @@ uv run --locked --extra split-test python scripts/test_standalone.py --suite spl
 
 | スクリプト | 実行場所 / 所要時間 | 検証内容 | 備考 |
 | :--- | :--- | :--- | :--- |
-| `scripts/verify_split_execution.py` | CPUコンテナ内<br>（短時間） | 2件の投入と待機キャンセル、画像保存・表示、WebSocketイベント、モード往復、GPU停止を確認するAPIスモークテスト | `EmptyImage` を使用するため、モデル推論やサンプリング中プレビューの検証は含みません |
+| `scripts/verify_split_execution.py` | CPUコンテナ内<br>（短時間） | CPUでの画像保存・表示、WebSocketイベント、モード往復、GPU停止を確認するAPIスモークテスト（待機取消は同期したローカルHTTPテストで確認） | `EmptyImage` を使用するため、モデル推論やサンプリング中プレビューの検証は含みません |
 | `scripts/verify_split_idle.py` | CPUコンテナ内<br>（約10分間） | WebSocketを維持しながら、画面配信、メタデータ取得、画像アップロード・表示、ワークフロー保存・読取を繰り返し、各回でGPU台数が常に0であることを確認 | 検証用ファイルは `split-verification` 名で保存されます |
 | `scripts/verify_image_browsing.py` | 修復後CPUコンテナ内 | Web拡張配信、一覧表示、アップロード、プレビュー、名前変更、削除、MiniMax生成結果参照を確認 | 出力Volumeの `split-verification/` に `minimax_real_` で始まる画像が存在することが前提です |
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import modal
-from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, WSMsgType, web
 
 from comfy_split.proxy import proxy
 from comfy_split import storage
@@ -810,9 +810,6 @@ class Controller:
         check_requirements(body)
         return body
 
-    async def select_gpu(self, requested, graph, definitions):
-        return gpu.select_gpu(requested, graph, definitions)
-
     def admit_prompt(self, body, request_id, selection=None):
         existing = request_id and any(
             j.get("request_id") == request_id
@@ -972,22 +969,28 @@ class Controller:
                     if not isinstance(body, dict):
                         raise ValueError("Prompt body must be an object")
                     saved_gpu = request.cookies.get("split_gpu", "auto")
-                    requested = gpu.request_gpu(body.pop("gpu", saved_gpu if saved_gpu in gpu.CHOICES else "auto"))
+                    requested = gpu.request_gpu(body.pop("gpu", saved_gpu if saved_gpu in gpu.CHOICES and saved_gpu != "CPU" else "auto"))
+                    if requested == "CPU":
+                        raise ValueError("CPU試行はMCPのenqueue_workflowで指定してください。")
                     body = self.prepare_prompt(body)
                     graph = body.get("prompt")
                     if not isinstance(graph, dict) or not graph:
                         raise ValueError("prompt must be a non-empty object")
                     definitions = {}
-                    if requested != "CPU":
+                    try:
                         definitions = json.loads((await self.objects("/object_info", graph=graph)).body)
-                        try:
-                            graph = mcp_policy.executable_graph(graph, definitions, body.get("partial_execution_targets"))
-                        except (TypeError, ValueError):
-                            # Native prompt validation handles incomplete UI graphs on the worker.
-                            definitions = {}
+                    except (ClientError, asyncio.TimeoutError):
+                        if requested not in gpu.WORKERS:
+                            return web.json_response({"error": "ノード定義を取得できません。CPUの準備完了後に再試行してください。"},
+                                                     status=503, headers={"Retry-After": "2"})
+                    try:
+                        graph = mcp_policy.executable_graph(graph, definitions, body.get("partial_execution_targets"))
+                    except (TypeError, ValueError):
+                        # Native prompt validation handles incomplete UI graphs on the worker.
+                        definitions = {}
                     if requested != "auto":
                         body["gpu"] = requested
-                    selection = await self.select_gpu(requested, graph, definitions)
+                    selection = gpu.select_gpu(requested, graph, definitions)
                     job = self.admit_prompt(body, request_id, selection)
                     await self.commit_prompt()
                 await self.status()
@@ -1085,6 +1088,11 @@ class Controller:
                         async with self.client.get(self.cpu.url + "/models/" + folder) as response:
                             if response.status == 200:
                                 catalog["objects"][name]["input"][section][field][0] = await response.json()
+            if names is not None:
+                # Only admission consumes this marker; GPU catalog entries are
+                # useful for graph validation but do not prove a CPU import.
+                catalog["objects"] = {name: {**definition, "_split_cpu_imported": False}
+                                      for name, definition in catalog["objects"].items()}
             objects = dict(catalog["objects"], **objects)
         if path != "/object_info":
             name = path.rsplit("/", 1)[-1]
