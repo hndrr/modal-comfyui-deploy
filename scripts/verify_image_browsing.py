@@ -11,13 +11,13 @@ import uuid
 from pathlib import Path
 
 import aiohttp
-import modal
 from PIL import Image
+
+from comfy_split.gpu import deployed_gpu_count
 
 
 async def main():
     origin = "http://127.0.0.1:8000"
-    gpu = modal.Function.from_name("comfyui-split", "gpu_worker")
     async with aiohttp.ClientSession() as client:
         async def get(path):
             async with client.get(origin + path) as response:
@@ -35,7 +35,7 @@ async def main():
         assert assets, extensions
         for path in assets:
             assert await get(path)
-        assert (await gpu.get_current_stats.aio()).num_total_runners == 0
+        assert await deployed_gpu_count() == 0
 
         async def mutate(method, path, **kwargs):
             async with client.request(method, origin + path, **kwargs) as response:
@@ -69,7 +69,7 @@ async def main():
         existing = json.loads(await get("/api/image-browsing/output/split-verification"))
         image = next(item for item in existing["data"] if item["name"].startswith("minimax_real_") and item["type"] == "image")
         assert await get("/api/image-browsing/output/split-verification/" + image["name"] + "?preview=1")
-        assert (await gpu.get_current_stats.aio()).num_total_runners == 0
+        assert await deployed_gpu_count() == 0
         print(json.dumps({"event": "image_browsing_verified", "environment": status["environment"],
                           "version": "2.3.0", "frontend_assets": assets,
                           "checks": ["listing", "upload", "preview", "rename", "delete", "generated_output"],

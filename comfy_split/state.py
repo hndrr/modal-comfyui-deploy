@@ -3,6 +3,7 @@
 import json
 import hashlib
 import os
+import re
 import time
 import uuid
 from copy import deepcopy
@@ -73,9 +74,88 @@ class Journal:
             "jobs": {}, "next_number": 0, "session": None,
         }
         self.data.setdefault("retired_jobs", {})
+        self._job_hashes = {}
+        self._removed_jobs = set()
+        self._review_hashes = {}
+        # Older journals kept complete approval payloads inline. Hydrate the
+        # separated form in memory; a missing payload must never be approved.
+        for key, row in self.data.get("mcp_reviews", {}).items():
+            if row.get("status") == "pending" and row.get("payload_file"):
+                row.pop("payload_file", None)
+                try:
+                    if not re.fullmatch(r"[0-9a-f]{8}(?:\.[0-9a-f]{8}){3}", key):
+                        raise ValueError("Invalid review ID")
+                    self._review_hashes[key] = None
+                    payload = self.path.parent / "review-payloads" / (key + ".json")
+                    with payload.open("rb") as stream:
+                        raw = stream.read(4 * 1024 * 1024 + 1)
+                    if len(raw) > 4 * 1024 * 1024:
+                        raise ValueError("Review payload exceeds limit")
+                    loaded = json.loads(raw)
+                    if set(loaded) != {"body", "calls", "assets"}:
+                        raise ValueError("Incomplete review payload")
+                    row.update(loaded)
+                    self._review_hashes[key] = body_digest(loaded)
+                except (OSError, ValueError, TypeError):
+                    row.update(status="invalidated")
+                    for field in ("body", "calls", "assets", "csrf"):
+                        row.pop(field, None)
 
     def save(self):
-        write_json(self.path, self.data)
+        """Commit per-job reads and approval bodies separately from the controller."""
+        root = self.path.parent
+        records = root / "saved-jobs"
+        records.mkdir(parents=True, exist_ok=True)
+        for key, job in self.data["jobs"].items():
+            if str(uuid.UUID(key)) != key:
+                raise ValueError("Invalid saved job ID")
+            value = {k: job[k] for k in ("id", "number", "status", "created_at", "finished_at",
+                "seconds", "error", "cancel_requested", "live_progress", "gpu", "gpu_reason") if k in job}
+            value["body"] = {"prompt": job.get("body", {}).get("prompt", {})}
+            history = job.get("history")
+            value["history"] = {k: history[k] for k in ("outputs", "status") if k in history} if history else None
+            digest = body_digest(value)
+            if self._job_hashes.get(key) != digest or not (records / (key + ".json")).exists():
+                write_json(records / (key + ".json"), value)
+                self._job_hashes[key] = digest
+        for key in self._removed_jobs | (self._job_hashes.keys() - self.data["jobs"].keys()):
+            (records / (key + ".json")).unlink(missing_ok=True)
+            self._job_hashes.pop(key, None)
+        self._removed_jobs.clear()
+        # One small record per line: history readers can select recent entries
+        # without loading all graphs, retired IDs or pending approvals.
+        index = root / "saved-jobs.jsonl"
+        temporary = index.with_suffix(".tmp")
+        with temporary.open("w") as stream:
+            stream.write(json.dumps({"version": 1}) + "\n")
+            for key, job in self.data["jobs"].items():
+                stream.write(json.dumps({"id": key, "status": job["status"],
+                    "created_at": job.get("created_at", 0)}) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(index)
+        stored = dict(self.data)
+        stored["mcp_reviews"] = {}
+        for key, row in self.data.get("mcp_reviews", {}).items():
+            if not re.fullmatch(r"[0-9a-f]{8}(?:\.[0-9a-f]{8}){3}", key):
+                raise ValueError("Invalid review ID")
+            target = root / "review-payloads" / (key + ".json")
+            record = dict(row)
+            if row["status"] == "pending":
+                payload = {k: record.pop(k) for k in ("body", "calls", "assets")}
+                digest = body_digest(payload)
+                if self._review_hashes.get(key) != digest or not target.exists():
+                    write_json(target, payload)
+                    self._review_hashes[key] = digest
+                record["payload_file"] = True
+            else:
+                record.pop("payload_file", None)
+            stored["mcp_reviews"][key] = record
+        write_json(self.path, stored)
+        for key in list(self._review_hashes):
+            if self.data.get("mcp_reviews", {}).get(key, {}).get("status") != "pending":
+                (root / "review-payloads" / (key + ".json")).unlink(missing_ok=True)
+                del self._review_hashes[key]
 
     def busy(self):
         return any(j["status"] in ACTIVE for j in self.data["jobs"].values())
@@ -119,8 +199,12 @@ class Journal:
             record = {"id": key, "number": job["number"], "status": job["status"]}
             if job.get("request_id"):
                 record.update(request_id=job["request_id"], body_digest=body_digest(job["body"]))
+                record.update({k: job[k] for k in ("gpu", "gpu_reason") if k in job})
+                if "mcp_digest" in job:
+                    record["mcp_digest"] = job["mcp_digest"]
             self.data["retired_jobs"][key] = record
             del self.data["jobs"][key]
+            self._removed_jobs.add(key)
 
     def queue(self):
         jobs = sorted(self.data["jobs"].values(), key=lambda j: j["number"])

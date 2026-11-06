@@ -1,4 +1,4 @@
-"""One Modal function owns every GPU operation, including legacy sessions."""
+"""Shared generation, validation and legacy execution for split GPU workers."""
 
 import asyncio
 import hmac
@@ -112,14 +112,44 @@ async def run_worker(spec, events, commands, volumes):
 
 
 async def generate_with_extensions(spec, client, control, emit):
-    host = SimpleNamespace(client=client, comfy_url=process.url, control=control,
-                           emit=emit, proxy=proxy, forward=modal.forward)
+    guard = spec.get("mcp_guard")
+    if guard is not None:
+        from comfy_split.mcp_policy import execution_guard, plan, verify_assets
+
+        async with client.get(process.url + "/object_info") as response:
+            response.raise_for_status()
+            definitions = await response.json()
+        calls, _ = plan(spec["body"]["prompt"], definitions)
+        if execution_guard(spec["body"], calls, guard["assets"]) != guard:
+            raise ValueError(
+                "Reviewed workflow or execution environment changed. No provider was called."
+            )
+        await asyncio.to_thread(verify_assets, guard["assets"])
+    host = SimpleNamespace(
+        client=client,
+        comfy_url=process.url,
+        control=control,
+        emit=emit,
+        proxy=proxy,
+        forward=modal.forward,
+    )
     return await run_worker_extensions(spec, host, lambda: generate(spec, client, control, emit))
 
 
 async def generate(spec, client, control, emit):
     job_id = spec["id"]
     body = dict(spec["body"], prompt_id=job_id, client_id=job_id)
+    body.pop("gpu", None)
+    if spec.get("mcp_guard"):
+        from comfy_split.mcp_policy import COMFY
+
+        if any(route[3] == COMFY for route in spec["mcp_guard"]["routes"]):
+            key = os.environ.get("COMFY_API_KEY", "").strip()
+            if not key:
+                raise ValueError("Comfy API key unavailable; no provider was called.")
+            # Only the loopback /prompt receives this ephemeral copy. Never put
+            # provider credentials into the queued body or durable history.
+            body["extra_data"] = {"api_key_comfy_org": key}
     async with client.ws_connect(process.url + "/ws?clientId=" + job_id, compress=0,
                                  max_msg_size=0) as socket:
         async with client.post(process.url + "/prompt", json=body) as response:
@@ -158,6 +188,15 @@ async def generate(spec, client, control, emit):
                     response.raise_for_status()
                     history = (await response.json()).get(job_id)
                 if history:
+                    prompt = history.get("prompt")
+                    if (
+                        spec.get("mcp_guard")
+                        and isinstance(prompt, list)
+                        and len(prompt) > 3
+                        and isinstance(prompt[3], dict)
+                    ):
+                        prompt[3].pop("api_key_comfy_org", None)
+                        prompt[3].pop("auth_token_comfy_org", None)
                     # History becomes available just before the final WS marker.
                     # Let preceding progress/output frames reach the controller
                     # before cancelling the relay; history remains authoritative

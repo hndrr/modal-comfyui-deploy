@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
-from comfy_split import remote_mcp
+from comfy_split import gpu, remote_mcp
 from comfy_split.config import Settings
 from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS
 from comfy_split.gateway import Controller, api_path
@@ -78,7 +78,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 async for message in socket:
                     await socket.send_str(message.data)
                 return socket
-            if request.path == "/object_info":
+            if request.path.startswith("/object_info"):
                 return web.json_response({"Test": {"input": {}}})
             if request.path == "/extensions":
                 return web.json_response([])
@@ -141,6 +141,59 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post("/_remote_mcp/call", json={"arguments": {}}, headers=headers)
             self.assertEqual(response.status, 409)
             run.assert_not_awaited()
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_read_progress_reports_native_steps_timing_and_errors_only_for_one_job(self):
+        headers = {"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"}
+        job, other = [self.control.journal.enqueue({"prompt":{"1":{}}}) for _ in range(2)]
+        async def snapshot():
+            response = await self.client.post("/_remote_mcp/progress", json={"prompt_id": job["id"]}, headers=headers)
+            self.assertEqual(response.status, 200)
+            return await response.json()
+        self.assertIsNone((await snapshot())["progress"])
+        job.update(status="running", created_at=100)
+        async def event(kind, data):
+            await self.control.relay_event(job, {"type":"event", "event":{"type":kind,"data":data}})
+        await event("executing", {"node":"2", "prompt_id":job["id"]})
+        await event("progress", {"node":"2", "value":3, "max":8, "prompt_id":job["id"]})
+        await event("progress", {"node":"4", "value":4, "max":8, "prompt_id":other["id"]})
+        self.assertEqual((await snapshot())["progress"], {"node":"2", "value":3, "max":8})
+        await event("executing", {"node":"3", "prompt_id":job["id"]})
+        self.assertEqual((await snapshot())["progress"], {"node":"3"})
+        job.update(status="failed", seconds=6, finished_at=112, history={"status":{"messages":[
+            ["execution_start",{"timestamp":2000}], ["execution_error",{"timestamp":4500,"node_id":"3",
+             "exception_message":"missing input","current_inputs":{"private":"redacted"}}]]}})
+        result = await snapshot()
+        self.assertEqual((result["execution_seconds"],result["elapsed_seconds"],result["worker_seconds"]),(2.5,12,6))
+        self.assertEqual(result["error"], {"node_id":"3", "exception_message":"missing input"})
+        self.assertIsNone(result["progress"])
+        unauthorized = await self.client.post("/_remote_mcp/progress",json={"prompt_id":job["id"]})
+        self.assertEqual(unauthorized.status,403)
+        self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_remote_cancel_is_scoped_idempotent_and_preserves_terminal_outputs(self):
+        headers = {"X-Modal-Execution-Mode": "split", "X-Split-Remote-Tool": "1"}
+        jobs = [self.control.journal.enqueue({"prompt":{"1":{}}}) for _ in range(4)]
+        queued, running, finished, other = jobs
+        running["status"] = "running"
+        finished.update(status="completed", history={"outputs":{"file":"keep"}})
+        async def cancel(job_id):
+            response = await self.client.post("/_remote_mcp/cancel",json={"prompt_id":job_id},headers=headers)
+            return response.status, (await response.json())["status"]
+        for _ in range(2):
+            self.assertEqual(await cancel(queued["id"]), (200, "cancelled"))
+            self.assertEqual(await cancel(running["id"]), (200, "cancel_requested"))
+        self.commands.put.aio.assert_awaited_once_with({"type":"interrupt"}, partition=running["id"])
+        self.assertEqual(await cancel(finished["id"]), (200,"completed"))
+        history = await (await self.client.get("/history/"+queued["id"])).json()
+        self.assertEqual(history[queued["id"]]["status"]["messages"][0][0], "execution_interrupted")
+        self.assertEqual(finished["history"]["outputs"], {"file":"keep"})
+        self.control.journal.retire([finished["id"]])
+        for _ in range(2):
+            self.assertEqual(await cancel(finished["id"]), (200, "completed"))
+        self.commands.put.aio.assert_awaited_once()
+        self.assertEqual(await cancel("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), (404,"not_found"))
+        self.assertEqual(other["status"], "queued")
         self.worker.spawn.aio.assert_not_awaited()
 
     async def test_internal_mcp_bad_subprocess_response_is_a_gateway_failure(self):
@@ -220,6 +273,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ConnectionError):
                 await self.control.read_result({"id": "missing-test-result", "call_id": "fc-test"})
 
+    async def test_pool_switch_waits_without_dispatch_intent_or_blocking_cancellation(self):
+        other = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-l4")),
+                                get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0)))
+        self.control.workers["L4"] = other
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job.update(gpu="L4", gpu_reason="ジョブの機種指定")
+        await self.control.spawn(job, "generate")
+        other.spawn.aio.assert_not_awaited()
+        self.assertEqual(job["status"], "queued")
+        state = await self.control.gpu_status()
+        self.assertEqual(state["containers"], 1)
+        self.assertEqual(state["latest_selection"]["gpu"], "L4")
+        await self.control.cancel([job["id"]])
+        self.assertEqual(job["status"], "cancelled")
+
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job["gpu"] = "L4"
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+        await self.control.spawn(job, "generate")
+        other.spawn.aio.assert_awaited_once()
+        self.assertEqual(job["call_id"], "fc-l4")
+
     async def test_spawn_failure_keeps_dispatch_intent_and_prevents_second_job(self):
         job = self.control.journal.enqueue({"prompt": {"1": {}}})
         self.worker.spawn.aio.side_effect = RuntimeError("connection lost after send")
@@ -229,6 +305,28 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         disk.recover()
         self.assertEqual(disk.data["jobs"][job["id"]]["status"], "unknown")
         self.assertIsNone(disk.next_job())
+
+    async def test_session_gpu_alias_still_counts_and_waits_for_the_named_pool(self):
+        for device in ("L4", "L40S"):
+            pools = {}
+            def lookup(app, name):
+                pools[name] = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-test")),
+                    get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0)))
+                return pools[name]
+            with patch("modal.Function.from_name", side_effect=lookup):
+                self.control.workers = gpu.deployed_workers("test", device)
+            named_pool = pools[gpu.WORKERS[device]]
+            named_pool.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
+            self.control.gpu_stats_expiry = 0
+            self.assertEqual((await self.control.gpu_status())["containers"], 1)
+            job = self.control.journal.enqueue({"prompt": {"1": {}}})
+            job.update(gpu=device, gpu_reason="manual")
+            await self.control.spawn(job, "generate")
+            pools["gpu_worker"].spawn.aio.assert_not_awaited()
+            self.assertEqual(job["status"], "queued")
+            named_pool.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+            await self.control.spawn(job, "generate")
+            pools["gpu_worker"].spawn.aio.assert_awaited_once()
 
 
     async def test_progress_counts_finished_non_output_nodes_and_preserves_real_outputs(self):
@@ -299,6 +397,22 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_uses_same_gpu_function_and_hides_token(self):
         response = await self.client.post("/split/mode", json={"mode": "legacy"})
         self.assertEqual(response.status, 202)
+        session = self.control.journal.data["session"]
+        self.assertEqual(session["status"], "queued")
+        started = asyncio.Event()
+        async def spawn(spec):
+            started.set()
+            return SimpleNamespace(object_id="fc-test")
+        self.worker.spawn.aio.side_effect = spawn
+        self.control.read_result = AsyncMock(return_value=None)
+        self.control.cleanup_storage = AsyncMock()
+        task = asyncio.create_task(self.control.dispatch())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
         self.worker.spawn.aio.assert_awaited_once()
         spec = self.worker.spawn.aio.call_args.args[0]
         self.assertEqual(spec["operation"], "legacy")

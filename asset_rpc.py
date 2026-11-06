@@ -342,7 +342,11 @@ def _resize_image_to_jpeg(source: Path, destination: Path) -> None:
         with Image.open(source) as image:
             if image.mode != "RGB":
                 image = image.convert("RGB")
-            image.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS)
+            # Avoid JPEG draft scaling on older Pillow (CVE-2026-112403).
+            image.thumbnail(
+                (THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS,
+                reducing_gap=None,
+            )
             image.save(tmp, format="JPEG", quality=THUMB_JPEG_QUALITY, optimize=True)
         _atomic_replace(tmp, destination)
     except Exception:

@@ -30,7 +30,7 @@ test("owner-only pages share paths with existing ComfyUI JSON and bundles", asyn
       Authorization:"Bearer other", Cookie:"CF_Binding=hidden", "CF-Access-Client-Secret":"hidden",
       "X-Forwarded-Host":"forged.example.com", ...opts.headers}}),env);
   for (const path of ["/models","/assets","/models/_ui/config","/assets/_ui/api/assets"]) {
-    for (const token of [null,other,machine,oauth]) assert.equal((await call(path,token)).status,403);
+    for (const token of [null,other,machine,oauth]) assert.equal((await call(path,token)).status,token===machine?410:403);
   }
   assert.equal((await call("/assets/_ui/api/assets",owner,"application/json",{method:"DELETE",headers:{Origin:"https://elsewhere.example"}})).status,403);
   assert.equal(calls.length,0);
@@ -49,7 +49,7 @@ test("owner-only pages share paths with existing ComfyUI JSON and bundles", asyn
   }
   for (const [path,accept] of [["/models","*/*"],["/models","application/json"],["/models/checkpoints","text/html"],
       ["/assets/index-a.js","*/*"],["/api/assets","application/json"]]) {
-    assert.equal((await call(path,machine,accept)).status,200);
+    assert.equal((await call(path,owner,accept)).status,200);
     assert.equal(calls.at(-1).url,ui+path);
   }
 });

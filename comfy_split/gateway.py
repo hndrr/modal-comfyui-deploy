@@ -10,6 +10,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
@@ -21,6 +22,7 @@ from comfy_split.extensions import load_extensions, check_requirements, reserved
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
+from comfy_split import gpu, job_progress, mcp_policy
 from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
@@ -37,8 +39,11 @@ def manager_path(path):
 
 class Controller:
     def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
-                 warmed_cpu=None, extensions=None):
-        self.worker, self.events, self.commands, self.volumes = worker, events, commands, volumes
+                 warmed_cpu=None, extensions=None, other_workers=None):
+        self.worker = worker  # Default worker exposed to existing controller extensions.
+        self.session_gpu = os.environ.get("SPLIT_SESSION_GPU", gpu.DEFAULT)
+        self.workers = {self.session_gpu: worker, **(other_workers or {})}
+        self.events, self.commands, self.volumes = events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
         self.cpu = warmed_cpu or ComfyProcess("cpu", 8187)
@@ -46,6 +51,7 @@ class Controller:
         self.sockets = {}
         self.task = None
         self.apply_task = None
+        self.model_hash_task = None
         self.client = None
         self.candidate_relays = {}
         self.gpu_stats_lock = asyncio.Lock()
@@ -67,10 +73,12 @@ class Controller:
         if time.monotonic() < self.cleanup_due:
             return
         self.cleanup_due = time.monotonic() + 5
-        stats = await self.worker.get_current_stats.aio()
-        if stats.num_total_runners or stats.backlog:
+        stats = await gpu.pool_stats(self.workers.values())
+        if any(s.num_total_runners or s.backlog for s in stats):
             return
         data = self.journal.data
+        from comfy_split.mcp_approvals import prune
+        prune(data.get("mcp_reviews", {}))
         environment_volume = self.volumes["environment"]
         environments = [Path(entry.path).name async for entry in
                         environment_volume.iterdir.aio("/", recursive=False)]
@@ -119,7 +127,7 @@ class Controller:
 
     def background_work(self):
         data = self.journal.data
-        return bool(data["session"] or any(
+        return bool(self.model_hash_task or data["session"] or any(
             job["status"] in {"queued", "dispatching", "running"}
             for job in data["jobs"].values()) or
             (data["candidate"] and data["candidate"]["status"] in {"creating", "validating"}))
@@ -149,6 +157,8 @@ class Controller:
                     state = await response.json()
                 needed = bool(state["is_processing"] or state.get("pending_count", 0))
                 if not needed and self.cpu_pinned:
+                    from comfy_split.split_admin import refresh_nodes
+                    await refresh_nodes(self, state)
                     await self.volumes["environment"].commit.aio()
         await self.pin_cpu(needed)
 
@@ -157,8 +167,8 @@ class Controller:
         async with self.gpu_stats_lock:
             if time.monotonic() >= self.gpu_stats_expiry:
                 try:
-                    stats = await asyncio.wait_for(self.worker.get_current_stats.aio(), timeout=3)
-                    self.gpu_stats = {"containers": stats.num_total_runners,
+                    stats = await gpu.pool_stats(self.workers.values())
+                    self.gpu_stats = {"containers": sum(s.num_total_runners for s in stats),
                                       "checked_at": time.time()}
                 except Exception:
                     log.warning("Could not read GPU container count", exc_info=True)
@@ -181,7 +191,9 @@ class Controller:
             phase = "active"
         else:
             phase = "stopping"
-        return dict(result, phase=phase)
+        latest = next((job for job in reversed(data["jobs"].values()) if "gpu" in job), None)
+        selection = {"prompt_id": latest["id"], "gpu": latest["gpu"], "gpu_reason": latest["gpu_reason"]} if latest else None
+        return dict(result, phase=phase, latest_selection=selection)
 
     async def persist(self):
         # Acquire before acknowledging durable work; a closed browser must not
@@ -197,6 +209,9 @@ class Controller:
         await self.volumes["environment"].commit.aio()
         await self.volumes["data"].commit.aio()
         self.journal.recover()
+        for operation in self.journal.data.get("admin_operations", {}).values():
+            if operation.get("_hash") and operation["status"] == "running":
+                operation.update(status="unknown", error="CPU restarted during file verification.")
         candidate = self.journal.data["candidate"]
         session = self.journal.data["session"]
         if candidate and candidate["status"] in {"creating", "validating"}:
@@ -327,6 +342,15 @@ class Controller:
         await self.commands.put.aio({"type": type_}, partition=session_id)
 
     async def spawn(self, record, operation):
+        target = record.get("gpu", self.session_gpu)
+        # The prior job may still own a warm container. Return to the dispatcher
+        # while it scales down so cancellation and status stay responsive.
+        others = await gpu.pool_stats(w for device, w in self.workers.items() if device != target)
+        if any(s.num_total_runners or s.backlog for s in others):
+            return
+        if operation == "generate":
+            await self.volumes["input"].commit.aio()
+            await self.volumes["models"].reload.aio()
         extra = {}
         try:
             check_requirements(record.get("body"), record)
@@ -334,7 +358,7 @@ class Controller:
                 hook = getattr(extension, "before_dispatch", None)
                 if hook:
                     values = hook(record)
-                    if set(values) & {"id", "operation", "environment", "body", "token"}:
+                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard"}:
                         raise ValueError("Extension attempted to replace core worker fields")
                     extra.update(values)
         except ValueError as error:
@@ -342,15 +366,16 @@ class Controller:
             return
         # Persist intent BEFORE spawn. A crash between spawn and call-id commit
         # leaves an unknown job, which recovery must never blindly resubmit.
+        self.gpu_stats_expiry = 0
         record["status"] = "dispatching"
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
                 "environment": record["environment"]}
-        for key in ("body", "token"):
+        for key in ("body", "token", "mcp_guard"):
             if key in record:
                 spec[key] = record[key]
         spec.update(extra)
-        call = await self.worker.spawn.aio(spec)
+        call = await self.workers[target].spawn.aio(spec)
         record["call_id"] = call.object_id
         record["status"] = "running"
         await self.persist()
@@ -396,6 +421,8 @@ class Controller:
         elif event["type"] in {"event", "preview"}:
             data = event.get("event", event.get("data"))
             kind = data.get("type") if isinstance(data, dict) else None
+            if kind:
+                job_progress.observe(record, kind, data.get("data"))
             # Terminal notifications are reconstructed from durable history
             # in finish(), after output reload and journal persistence.
             if kind in {"execution_success", "execution_error", "execution_interrupted"}:
@@ -474,6 +501,8 @@ class Controller:
                     await self.reconcile_cpu_scaling()
                     session = self.journal.data["session"]
                     if session:
+                        if session.get("status") == "queued":
+                            await self.spawn(session, session["operation"])
                         await self.drain_events(session)
                         if session.get("call_id") or session.get("status") == "dispatching":
                             if session.get("operation") == "legacy" and not session.get("stopping"):
@@ -496,10 +525,9 @@ class Controller:
                         else:
                             job = self.journal.next_job()
                             if job:
-                                await self.volumes["input"].commit.aio()
-                                await self.volumes["models"].reload.aio()
                                 await self.spawn(job, "generate")
-                                await self.status()
+                                if job["status"] != "queued":
+                                    await self.status()
                     await self.cleanup_storage()
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
@@ -564,6 +592,7 @@ class Controller:
             if job["status"] == "queued":
                 job["status"] = "cancelled"
                 job["finished_at"] = time.time()
+                job["history"] = job_history(job)
             elif job["status"] in {"dispatching", "running"}:
                 await self.command(job_id, "interrupt")
         await self.persist()
@@ -585,11 +614,11 @@ class Controller:
                 await self.volumes["input"].commit.aio()
                 await self.volumes["data"].commit.aio()
                 await self.cpu.stop()
-                session = {"id": str(uuid.uuid4()), "operation": "legacy",
+                session = {"id": str(uuid.uuid4()), "operation": "legacy", "status": "queued",
                            "environment": self.journal.data["environment"],
                            "token": secrets.token_urlsafe(32), "call_id": None}
                 self.journal.data.update(mode="legacy", session=session)
-                await self.spawn(session, "legacy")
+                await self.persist()
             elif desired == "split":
                 session = self.journal.data["session"]
                 if not session or not session.get("url"):
@@ -678,10 +707,10 @@ class Controller:
                 if resume:
                     session = self.journal.data["session"]
                 else:
-                    session = {"id": str(uuid.uuid4()), "operation": "validate",
+                    session = {"id": str(uuid.uuid4()), "operation": "validate", "status": "queued",
                                "environment": version, "call_id": None}
                     self.journal.data["session"] = session
-                    await self.spawn(session, "validate")
+                    await self.persist()
             timeout_seconds = int(os.environ.get("SPLIT_VALIDATION_TIMEOUT", "3600"))
             deadline = time.time() + timeout_seconds
             while "result" not in session:
@@ -699,6 +728,8 @@ class Controller:
             await self.volumes["environment"].commit.aio()
             await self.cpu.start(version, cpu=True)
             async with self.lock:
+                from comfy_split.split_admin import settle_apply
+                settle_apply(self, version, True)
                 self.journal.data.update(environment=version, candidate=None, session=None)
                 await self.persist()
                 self.cleanup_due = 0
@@ -706,6 +737,8 @@ class Controller:
         except Exception as error:
             log.exception("Environment validation failed")
             async with self.lock:
+                from comfy_split.split_admin import settle_apply
+                settle_apply(self, candidate["version"], False)
                 candidate["status"] = "failed"
                 candidate["error"] = str(error)
                 # Clear session to allow discard to proceed. Send interrupt command
@@ -761,9 +794,56 @@ class Controller:
                 origin = self.cpu.url
             return await proxy(request, self.client, origin, body=body)
 
+    @staticmethod
+    def receipt(job):
+        return {"prompt_id": job["id"], "number": job["number"], "node_errors": {},
+                **{k: job[k] for k in ("gpu", "gpu_reason") if k in job}}
+
+    def prepare_prompt(self, body):
+        for extension in self.plugins:
+            body = extension.prepare(body)
+        check_requirements(body)
+        return body
+
+    async def select_gpu(self, requested, graph, definitions):
+        selection = gpu.select_gpu(requested, graph, definitions)
+        if requested != "auto-speed" or selection["gpu"] != "L4":
+            return selection
+        # Immediate admissions can reuse a GPU observed running at admission.
+        # Speed-priority API/I/O jobs need no model-specific GPU memory.
+        try:
+            stats = await gpu.pool_stats(self.workers.values())
+        except Exception:
+            log.warning("Could not check for a warm GPU; using graph selection", exc_info=True)
+            return selection
+        running = [device for device, stat in zip(self.workers, stats) if stat.num_total_runners]
+        if len(running) == 1 and running[0] in gpu.WORKERS:
+            selection = {"gpu": running[0], "gpu_reason": "速度優先：起動済みGPUで外部API・素材入出力を実行"}
+        return selection
+
+    def admit_prompt(self, body, request_id, selection=None):
+        existing = request_id and any(
+            j.get("request_id") == request_id
+            for j in (*self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values())
+        )
+        admissions = [(ext, ext.admit(body, existing)) for ext in self.plugins if hasattr(ext, "admit")]
+        job = self.journal.enqueue(body, request_id)
+        if selection and not existing:
+            job.update(selection)
+        for ext, admission in admissions:
+            ext.accepted(job, admission)
+        return job
+
+    async def commit_prompt(self):
+        await self.volumes["input"].commit.aio()
+        await self.persist()
+
     async def handle(self, request):
         path = api_path(request.path)
         try:
+            if path.startswith("/_remote_mcp/review/"):
+                from comfy_split.mcp_approvals import review
+                return await review(self, request, path)
             if path.startswith("/_split/"):
                 raise web.HTTPNotFound()
             if reserved_route(path):
@@ -810,9 +890,51 @@ class Controller:
                 async with self.lock:
                     await self.ensure_candidate(restore_image_browsing=True)
                 return await self.manager(request, "/manager/reboot")
+            if path == "/_remote_mcp/submit":
+                from comfy_split.remote_mcp import authorize
+                from comfy_split.mcp_approvals import MAX_BODY, submit
+                authorize(request, self.journal.data["mode"])
+                key = request.headers.get("Idempotency-Key")
+                if not key or len(key) > 160:
+                    raise ValueError("MCP submission requires a bounded idempotency key.")
+                body = await request.clone(client_max_size=MAX_BODY + 1).json()
+                async with self.lock:
+                    authorize(request, self.journal.data["mode"])
+                    return await submit(self, body, key)
+            if path == "/_remote_mcp/operations":
+                from comfy_split.remote_mcp import operations
+                return await operations(self, request)
             if path == "/_remote_mcp/call":
                 from comfy_split.remote_mcp import call
                 return await call(request, mode=self.journal.data["mode"])
+            if path in {"/_remote_mcp/media", "/_remote_mcp/cancel", "/_remote_mcp/progress"}:
+                from comfy_split.remote_mcp import authorize
+                authorize(request, self.journal.data["mode"])
+                if path.endswith("/media"):
+                    from comfy_split.input_media import handle
+                    return await handle(request, self.volumes["input"])
+                body = await request.json()
+                if not isinstance(body, dict) or not isinstance(body.get("prompt_id"), str):
+                    raise web.HTTPBadRequest(text="Expected a prompt_id")
+                job_id = str(uuid.UUID(body["prompt_id"]))
+                if path.endswith("/progress"):
+                    job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
+                    if job is None:
+                        return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
+                    return web.json_response(job_progress.snapshot(job))
+                async with self.lock:
+                    job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
+                    if job is None:
+                        return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
+                    if job["status"] == "queued":
+                        await self.cancel([job_id])
+                    elif job["status"] in {"dispatching", "running"}:
+                        if not job.get("cancel_requested"):
+                            await self.command(job_id, "interrupt")
+                            job["cancel_requested"] = True
+                            await self.persist()
+                        return web.json_response({"prompt_id": job_id, "status": "cancel_requested"})
+                    return web.json_response({"prompt_id": job_id, "status": job["status"]})
             if self.journal.data["mode"] == "legacy":
                 if request.headers.get("X-Modal-Execution-Mode") == "split":
                     return web.json_response({"error": "This client requires split mode."}, status=409)
@@ -844,20 +966,40 @@ class Controller:
                     if self.journal.data["mode"] != "split":
                         raise ValueError("This client requires split mode.")
                     request_id = request.headers.get("Idempotency-Key")
-                    existing = request_id and any(j.get("request_id") == request_id for j in (
-                        *self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values()))
-                    for extension in self.plugins:
-                        body = extension.prepare(body)
-                    check_requirements(body)
-                    admissions = [(extension, extension.admit(body, existing))
-                                  for extension in self.plugins if hasattr(extension, "admit")]
-                    job = self.journal.enqueue(body, request_id)
-                    for extension, admission in admissions:
-                        extension.accepted(job, admission)
-                    await self.volumes["input"].commit.aio()
-                    await self.persist()
+                    # Older MCP Workers must fail closed during an independent rollout.
+                    if request.headers.get("X-Modal-Execution-Mode") == "split" and (
+                        (request_id or "").startswith("remote-mcp:")
+                        or (
+                            isinstance(body, dict)
+                            and body.get("client_id") in {"comfyui-mcp", "remote-mcp"}
+                        )
+                    ):
+                        raise ValueError(
+                            "Update the Worker to submit through the MCP approval endpoint."
+                        )
+                    if not isinstance(body, dict):
+                        raise ValueError("Prompt body must be an object")
+                    saved_gpu = request.cookies.get("split_gpu", "auto")
+                    requested = gpu.request_gpu(body.pop("gpu", saved_gpu if saved_gpu in gpu.CHOICES else "auto"))
+                    body = self.prepare_prompt(body)
+                    graph = body.get("prompt")
+                    if not isinstance(graph, dict) or not graph:
+                        raise ValueError("prompt must be a non-empty object")
+                    definitions = {}
+                    if requested not in gpu.WORKERS:
+                        definitions = json.loads((await self.objects("/object_info", graph=graph)).body)
+                        try:
+                            graph = mcp_policy.executable_graph(graph, definitions, body.get("partial_execution_targets"))
+                        except (TypeError, ValueError):
+                            # Native prompt validation handles incomplete UI graphs on the worker.
+                            definitions = {}
+                    if requested != "auto":
+                        body["gpu"] = requested
+                    selection = await self.select_gpu(requested, graph, definitions)
+                    job = self.admit_prompt(body, request_id, selection)
+                    await self.commit_prompt()
                 await self.status()
-                return web.json_response({"prompt_id": job["id"], "number": job["number"], "node_errors": {}})
+                return web.json_response(self.receipt(job))
             for extension in self.plugins:
                 response = await extension.handle(request, path)
                 if response is not None:
@@ -924,17 +1066,24 @@ class Controller:
         except (ValueError, TypeError) as error:
             return web.json_response({"error": str(error)}, status=409)
 
-    async def objects(self, path):
-        async with self.client.get(self.cpu.url + "/object_info") as response:
-            response.raise_for_status()
-            objects = await response.json()
+    async def objects(self, path, *, graph=None):
+        # Admission needs only the graph's definitions. Keep them live, without
+        # enumerating every unrelated node's dynamic model/file choices.
+        names = {node["class_type"] for node in graph.values()
+                 if isinstance(node, dict) and isinstance(node.get("class_type"), str)} if isinstance(graph, dict) else None
+        paths = ["/object_info/" + quote(name, safe="") for name in names] if names is not None else ["/object_info"]
+        objects = {}
+        for node_path in paths:
+            async with self.client.get(self.cpu.url + node_path) as response:
+                response.raise_for_status()
+                objects.update(await response.json())
         catalog_path = environment_path(self.journal.data["environment"]) / "catalog.json"
         if catalog_path.exists():
             catalog = json.loads(catalog_path.read_text())
             # Managed packs are CPU-importable and always use live definitions.
             # Old GPU catalogs must not resurrect removed or disabled node IDs.
             catalog["objects"] = {name: definition for name, definition in catalog["objects"].items()
-                                  if not node_packs.is_managed_node(definition)}
+                                  if (names is None or name in names) and not node_packs.is_managed_node(definition)}
             # Live CPU definitions take precedence so model/file choices stay fresh.
             for name, sections in catalog.get("choice_sources", {}).items():
                 if name in objects or name not in catalog["objects"]:
@@ -960,7 +1109,6 @@ class Controller:
             for name, root in json.loads(catalog_path.read_text())["extensions"].items():
                 directory = self.extension_root(root)
                 if directory:
-                    from urllib.parse import quote
                     items.extend("/extensions/" + quote(name, safe="") + "/" + p.relative_to(directory).as_posix()
                                  for p in directory.rglob("*.js"))
         return web.json_response(list(dict.fromkeys(items)))
@@ -993,9 +1141,10 @@ class Controller:
 
 def application(controller):
     from comfy_split.startup import StartupGate
+    from comfy_split.gateway_access import boundary, ENV
 
     startup = StartupGate(controller)
-    app = web.Application(client_max_size=1024 ** 3)
+    app = web.Application(client_max_size=1024 ** 3, middlewares=[boundary(os.getenv(ENV, ""))])
     app.router.add_route("*", "/{path:.*}", startup.handle)
     app.on_startup.append(startup.start)
     app.on_cleanup.append(startup.close)
@@ -1006,10 +1155,13 @@ def make_controller(volumes=None, *, warmed_cpu=None):
     names = json.loads(os.environ["SPLIT_VOLUMES"])
     volumes = volumes or {key: modal.Volume.from_name(name) for key, name in names.items()}
     app_name = os.environ["SPLIT_APP"]
-    return Controller(modal.Function.from_name(app_name, "gpu_worker"),
+    session_gpu = os.environ.get("SPLIT_SESSION_GPU", gpu.DEFAULT)
+    workers = gpu.deployed_workers(app_name, session_gpu)
+    return Controller(workers.pop(session_gpu),
         modal.Queue.from_name(app_name + "-events", create_if_missing=True),
         modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
-        ui_function=modal.Function.from_name(app_name, "ui"), warmed_cpu=warmed_cpu)
+        ui_function=modal.Function.from_name(app_name, "ui"), warmed_cpu=warmed_cpu,
+        other_workers=workers)
 
 
 if __name__ == "__main__":

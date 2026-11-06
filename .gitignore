@@ -17,7 +17,7 @@ uv.lock
 .env.comfy-mcp
 /mcp/node_modules/
 /.codex/config.toml
-# このチェックアウトで使う Modal プロファイル（docs/modal-profiles.md）
+# このチェックアウトで使う Modal プロファイル（docs/operations/modal-profiles.md）
 .modal-profile
 comfy-docker
 

@@ -54,7 +54,7 @@ def models():
 asset_image = (
     modal.Image.from_registry("node:24.22.2-bookworm-slim", add_python="3.12")
     .apt_install("ffmpeg")
-    .pip_install("modal==1.1.4", "pillow>=11,<13")
+    .pip_install("modal==1.1.4", "pillow>=13,<14")
     .env({"ASSET_GUI_BASE": "/assets/_ui/", "COMFY_ASSET_MOUNT_ROOT": "/volumes"})
     .workdir("/opt/gui/web")
 )
