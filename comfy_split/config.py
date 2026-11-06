@@ -3,21 +3,21 @@
 from dataclasses import dataclass
 import os
 
-from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS, LEGACY, NODE_SOURCES
+from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS, NODE_SOURCES
 
 NODE_PACKS = {name: source["repository"] for name, source in NODE_SOURCES.items()}
 DEPLOYMENT_ENV = "SPLIT_DEPLOYMENT_ID"
 
 
-def switch(environ, name, default="off"):
-    value = environ.get(name, default).strip().lower()
+def switch(environ, name):
+    value = environ.get(name, "off").strip().lower()
     if value not in {"on", "off"}:
         raise ValueError(f"{name} must be on or off")
     return value == "on"
 
 
-def selection(environ, name, allowed, default=""):
-    values = tuple(dict.fromkeys(part.strip() for part in environ.get(name, default).split(",") if part.strip()))
+def selection(environ, name, allowed):
+    values = tuple(dict.fromkeys(part.strip() for part in environ.get(name, "").split(",") if part.strip()))
     if set(values) - set(allowed):
         raise ValueError(f"{name} must select from: {', '.join(allowed)}")
     return values
@@ -32,16 +32,11 @@ class Settings:
     @classmethod
     def read(cls, environ=None):
         environ = os.environ if environ is None else environ
-        # Each explicitly provided new setting wins, including an empty list.
-        legacy = switch(environ, LEGACY["mode_env"]) if any(
-            name not in environ for name in ("SPLIT_EXTENSIONS", "SPLIT_NODE_PACKS",
-                                             *(item["setting"] for item in INTEGRATIONS.values()))
-        ) else False
         return cls(
-            selection(environ, "SPLIT_EXTENSIONS", EXTENSIONS, ",".join(LEGACY["extensions"]) if legacy else ""),
-            selection(environ, "SPLIT_NODE_PACKS", NODE_PACKS, ",".join(NODE_PACKS) if legacy else ""),
+            selection(environ, "SPLIT_EXTENSIONS", EXTENSIONS),
+            selection(environ, "SPLIT_NODE_PACKS", NODE_PACKS),
             tuple(name for name, item in INTEGRATIONS.items()
-                  if switch(environ, item["setting"], "on" if legacy else "off")),
+                  if switch(environ, item["setting"])),
         )
 
     def environment(self):
