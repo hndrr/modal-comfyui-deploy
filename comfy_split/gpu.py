@@ -6,7 +6,27 @@ from collections import defaultdict
 
 DEFAULT = "RTX-PRO-6000"
 WORKERS = {DEFAULT: "gpu_worker_rtx", "L4": "gpu_worker_l4", "L40S": "gpu_worker_l40s"}
-CHOICES = ("auto", "auto-speed", *WORKERS)
+CHOICES = ("auto", "auto-speed", "CPU", *WORKERS)
+
+# CPU execution eligibility, independent of MCP's disclosure/approval policy.
+# Add nodes here only after the CPU checks in docs/guides/split-gpu.md.
+CPU_API_NODES = {
+    "comfy_api_nodes.nodes_openai": {"OpenAIChatNode", "OpenAIGPTImage1", "OpenAIGPTImageNodeV2"},
+    "comfy_api_nodes.nodes_openrouter": {"OpenRouterLLMNode", "OpenRouterImageNode"},
+    "comfy_api_nodes.nodes_gemini": {
+        "GeminiNode", "GeminiNodeV2", "GeminiNodeV3", "GeminiImageNode", "GeminiImage2Node",
+        "GeminiNanoBanana2", "GeminiNanoBanana2V2",
+    },
+    "comfy_api_nodes.nodes_sora": {"OpenAIVideoSora2"},
+    "comfy_api_nodes.nodes_comfy_cloud": {
+        "ComfyCloudMiniMaxMusic3TextToAudioNode", "ComfyCloudMiniMaxH3TextToVideoNode",
+        "ComfyCloudMiniMaxH3FirstLastFrameToVideoNode", "ComfyCloudMiniMaxH3ImageToVideoNode",
+        "ComfyCloudFlux2TextToImageNode", "ComfyCloudZImageTurboNode", "ComfyCloudMageFlowTextToImageNode",
+        "ComfyCloudMageFlowTurboTextToImageNode",
+    },
+    "custom_nodes.comfyui-geminitools": {"GeminiToolsLLM", "GeminiToolsImageGeneration", "GeminiToolsMusicGeneration"},
+    "custom_nodes.comfyui-jev": {"OpenRouterText"},
+}
 
 # These nodes load or encode media without local model inference.
 MEDIA_NODES = {
@@ -42,7 +62,7 @@ async def deployed_gpu_count():
 
 def request_gpu(value):
     if not isinstance(value, str) or value not in CHOICES:
-        raise ValueError("gpu must be auto, auto-speed, L4, L40S or RTX-PRO-6000")
+        raise ValueError("gpu must be auto, auto-speed, CPU, L4, L40S or RTX-PRO-6000")
     return value
 
 
@@ -102,25 +122,16 @@ def measured_still_gpu(graph, definitions):
 
 
 def select_gpu(requested, graph, definitions):
-    from comfy_split.mcp_policy import classification
-
-    if requested in WORKERS:
-        return {"gpu": requested, "gpu_reason": "ジョブの機種指定"}
+    if requested == "CPU":
+        return {"gpu": "CPU", "gpu_reason": "明示的なCPU指定（CPU対応未登録でも実行）"}
     speed = requested == "auto-speed"
     priority = "速度優先" if speed else "料金優先"
-    fallback = {"gpu": DEFAULT, "gpu_reason": "速度優先でローカル処理にRTX PRO 6000を選択" if speed
-                else "料金優先：必要メモリが未検証のため大容量GPUを選択"}
-    if any(isinstance(n, dict) and n.get("class_type") == "UNETLoader" for n in graph.values()):
-        if speed:
-            return fallback
-        measured = measured_still_gpu(graph, definitions)
-        if measured is not None:
-            return {"gpu": measured, "gpu_reason": "料金優先：FLUX.3 Kleinの実測時間とGPU単価から選択"}
-        return fallback
+    unsupported = set()
     has_provider = False
     for node in graph.values():
         if not isinstance(node, dict) or not isinstance(node.get("class_type"), str) or not isinstance(node.get("inputs"), dict):
-            return fallback
+            unsupported.add("ノード定義・入力を確認できません")
+            continue
         name = node["class_type"]
         info = definitions.get(name, {})
         module = info.get("python_module", "").lower()
@@ -129,14 +140,22 @@ def select_gpu(requested, graph, definitions):
                 inputs = node["inputs"]
                 dims = [inputs.get(k) for k in ("width", "height", "batch_size")]
                 if not all(type(n) is int and n > 0 for n in dims) or dims[0] * dims[1] * dims[2] > 4096**2:
-                    return fallback
+                    unsupported.add(name)
             continue
-        try:
-            provider = classification(name, info, node["inputs"])
-        except ValueError:
-            return fallback
-        if not provider:
-            return fallback
-        has_provider = True
-    reason = "外部APIと素材の入出力のみ" if has_provider else "素材の入出力のみ"
-    return {"gpu": "L4", "gpu_reason": f"{priority}：{reason}"}
+        if name in CPU_API_NODES.get(module, ()) and (
+            not module.startswith("comfy_api_nodes.") or info.get("api_node") is True
+        ):
+            has_provider = True
+        else:
+            unsupported.add(name)
+    if graph and not unsupported:
+        reason = "外部APIと素材の入出力のみ" if has_provider else "素材の入出力のみ"
+        return {"gpu": "CPU", "gpu_reason": f"{reason}：CPUで実行（GPU指定より優先）"}
+    detail = "CPU対応未登録または対象条件外：" + ", ".join(sorted(unsupported))
+    if requested in WORKERS:
+        return {"gpu": requested, "gpu_reason": "ジョブの機種指定。" + detail}
+    if not speed:
+        measured = measured_still_gpu(graph, definitions)
+        if measured is not None:
+            return {"gpu": measured, "gpu_reason": "料金優先：FLUX.3 Kleinの実測時間とGPU単価から選択。" + detail}
+    return {"gpu": DEFAULT, "gpu_reason": f"{priority}：ローカル処理・未検証の処理に大容量GPUを選択。{detail}"}

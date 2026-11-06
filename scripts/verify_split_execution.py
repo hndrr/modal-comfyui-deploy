@@ -1,4 +1,4 @@
-"""Run inside the split CPU container. Starts GPU for synthetic API smoke tests."""
+"""Run inside the UI container. CPU I/O smoke, then GPU legacy mode smoke."""
 
 import asyncio
 import json
@@ -11,8 +11,9 @@ from comfy_split.gpu import deployed_gpu_count
 
 
 async def main():
-    """Check generated media, queue cancellation, mode switching, and GPU scale-down."""
+    """Check CPU media, queue cancellation, GPU mode switching, and scale-down."""
     origin = "http://127.0.0.1:8000"
+    assert await deployed_gpu_count() == 0, "Start with GPU pools stopped"
     async with aiohttp.ClientSession() as client:
         async def request(method, path, **kwargs):
             async with client.request(method, origin + path, **kwargs) as response:
@@ -38,14 +39,16 @@ async def main():
                 }}
                 first, second = await asyncio.gather(*[
                     request("POST", "/api/prompt", json=body) for _ in range(2)])
+                assert first["gpu"] == second["gpu"] == "CPU", (first, second)
                 assert first["prompt_id"] != second["prompt_id"]
                 pending = (await request("GET", "/api/queue"))["queue_pending"]
-                assert pending, "Expected at least one pending prompt during GPU startup"
+                assert pending, "Expected at least one pending prompt during CPU worker startup"
                 cancelled = pending[-1][1]
                 await request("POST", "/api/queue", json={"delete": [cancelled]})
                 remaining = ({first["prompt_id"], second["prompt_id"]} - {cancelled}).pop()
                 deadline = time.monotonic() + 600
                 while time.monotonic() < deadline:
+                    assert await deployed_gpu_count() == 0, "CPU job started a GPU"
                     history = await request("GET", "/api/history/" + remaining)
                     if history:
                         break
@@ -59,6 +62,7 @@ async def main():
                     assert response.status == 200
                     assert len(await response.read()) > 0
                 assert not await request("GET", "/api/history/" + cancelled)
+                assert await deployed_gpu_count() == 0
                 assert any(e.get("type") == "executing" and
                            e.get("data", {}).get("prompt_id") == remaining for e in events), events
                 print(json.dumps({"event": "generation_verified", "job": remaining,

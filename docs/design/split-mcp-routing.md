@@ -86,7 +86,7 @@ sequenceDiagram
   participant Edge as 認証済みWorker
   participant CPU as ComfyUI CPU
   participant Owner as 本人のブラウザ
-  participant GPU as GPUワーカー
+  participant GPU as CPU/GPU実行ワーカー
   participant Store as Modal Volume
   participant Read as 配信用CPU
   Agent->>Edge: enqueue_workflow(request_id, workflow)
@@ -96,7 +96,7 @@ sequenceDiagram
     CPU-->>Agent: Worker経由でprompt_idを返す
   else 対応する外部サービスを利用
     CPU-->>Agent: Worker経由でapproval_requiredと確認リンク
-    Note over CPU,GPU: この時点ではジョブ・GPU実行はまだ作らない
+    Note over CPU,GPU: この時点ではジョブ・実行ワーカーはまだ作らない
     Owner->>Edge: ブラウザで送信内容・素材・課金先を確認
     Owner->>Edge: この1件を承認して実行
     Edge->>CPU: 本人の承認を送る
@@ -106,7 +106,7 @@ sequenceDiagram
     Edge->>CPU: 同じ受付要求
     CPU-->>Agent: 同じprompt_idを返す
   end
-  CPU->>GPU: 記録したジョブを実行
+  CPU->>GPU: 受付時に選んだCPU/GPUでジョブ全体を実行
   GPU->>Store: 出力と完了記録を保存
   Note over CPU,GPU: ほかに利用がなければアイドル停止
   Agent->>Edge: list_outputs / get_image / get_audio / get_video

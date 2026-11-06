@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 from comfy_split import storage, worker
 from comfy_split.gateway import Controller
 from comfy_split.state import Journal
+from tests.split.support import remote_mock
 
 
 class Volume:
@@ -169,6 +170,12 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
             await self.control.cleanup_storage()
             self.assertEqual(self.events, [])
         self.stats.num_total_runners = self.stats.backlog = 0
+        self.control.cpu_worker = SimpleNamespace(get_current_stats=remote_mock(
+            SimpleNamespace(num_total_runners=1, backlog=0)))
+        self.control.cleanup_due = 0
+        await self.control.cleanup_storage()
+        self.assertEqual(self.events, [])
+        self.control.cpu_worker = None
         self.job.update(status="unknown", environment="env-old")
         self.control.cleanup_due = 0
         await self.control.cleanup_storage()

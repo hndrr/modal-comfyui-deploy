@@ -54,6 +54,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(failed["containers"])
         self.assertIsNone(failed["checked_at"])
 
+    async def test_cpu_job_skips_gpu_wait_and_is_not_counted_as_gpu_work(self):
+        cpu = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-cpu")),
+                              get_current_stats=remote_mock(SimpleNamespace(num_total_runners=1, backlog=0)))
+        self.control.cpu_worker = cpu
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
+        job = self.control.journal.enqueue({"prompt": {"1": {"class_type": "Test", "inputs": {}}}})
+        job.update(gpu="CPU", gpu_reason="test")
+        await self.control.spawn(job, "generate")
+        cpu.spawn.aio.assert_awaited_once()
+        self.worker.spawn.aio.assert_not_awaited()
+        self.worker.get_current_stats.aio.assert_not_awaited()
+        self.assertEqual(job["call_id"], "fc-cpu")
+        self.assertEqual((await self.control.gpu_status())["phase"], "stopping")
+        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+        self.control.gpu_stats_expiry = 0
+        status = await self.control.gpu_status()
+        self.assertEqual(status["containers"], 0)
+        self.assertEqual(status["phase"], "stopped")
+        self.assertEqual(status["latest_selection"]["gpu"], "CPU")
+        cpu.get_current_stats.aio.assert_not_awaited()
+
     async def asyncSetUp(self):
         self.enterContext(patch.dict("os.environ", Settings().environment()))
         self.temp = tempfile.TemporaryDirectory()
