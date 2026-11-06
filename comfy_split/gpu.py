@@ -105,6 +105,16 @@ def measured_still_gpu(graph, definitions):
     return min(timings, key=lambda device: timings[device] * GPU_USD_PER_SECOND[device])
 
 
+def light_media_node(name, module, inputs):
+    """Apply the same media workload limits to CPU eligibility and L4 routing."""
+    if name not in MEDIA_NODES.get(module, ()):
+        return False
+    if name != "EmptyImage":
+        return True
+    dims = [inputs.get(k) for k in ("width", "height", "batch_size")]
+    return all(type(n) is int and n > 0 for n in dims) and dims[0] * dims[1] * dims[2] <= 4096**2
+
+
 def select_gpu(requested, graph, definitions):
     """Route verified, currently CPU-importable graphs before applying GPU preferences."""
     if requested == "CPU":
@@ -126,12 +136,7 @@ def select_gpu(requested, graph, definitions):
         if info.get("_split_cpu_imported") is False:
             cpu_missing.add(name)
             continue
-        if name in MEDIA_NODES.get(module, ()):
-            if name == "EmptyImage":
-                inputs = node["inputs"]
-                dims = [inputs.get(k) for k in ("width", "height", "batch_size")]
-                if not all(type(n) is int and n > 0 for n in dims) or dims[0] * dims[1] * dims[2] > 4096**2:
-                    unsupported.add(name)
+        if light_media_node(name, module, node["inputs"]):
             continue
         if name in CPU_API_NODES.get(module, ()) and (
             not module.startswith("comfy_api_nodes.") or info.get("api_node") is True
@@ -162,13 +167,9 @@ def select_gpu(requested, graph, definitions):
             name = node["class_type"]
             info = definitions[name]
             module = info["python_module"].lower()
-            if name in MEDIA_NODES.get(module, ()) or (
+            if light_media_node(name, module, node["inputs"]) or (
                 module == "custom_nodes.comfyui-geminitools" and name == "GeminiToolsSaveAudio"
             ):
-                if name == "EmptyImage":
-                    dims = [node["inputs"].get(k) for k in ("width", "height", "batch_size")]
-                    if not all(type(n) is int and n > 0 for n in dims) or dims[0] * dims[1] * dims[2] > 4096**2:
-                        break
                 continue
             try:
                 if not classification(name, info, node["inputs"]):
