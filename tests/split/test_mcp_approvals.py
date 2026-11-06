@@ -68,8 +68,8 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             json={"prompt": graph, **kwargs},
         )
 
-    async def pending(self, key, graph):
-        r = await self.send(key, graph)
+    async def pending(self, key, graph, **kwargs):
+        r = await self.send(key, graph, **kwargs)
         self.assertEqual(r.status, 202, await r.text())
         receipt = await r.json()
         path = receipt["approval_path"].replace(approvals.PUBLIC, approvals.INTERNAL)
@@ -97,6 +97,36 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             {"EmptyImage": {"python_module": "custom_nodes.other"}}
         )
         self.assertEqual((await self.send("spoof", disguised)).status, 409)
+
+    async def test_gpu_selection_is_pinned_across_browser_mcp_review_and_replay(self):
+        browser = await (await self.client.post("/api/prompt", json={"prompt": PAID})).json()
+        automatic = await (await self.send("auto", PAID)).json()
+        self.assertEqual(browser["gpu"], "L4")
+        self.assertEqual(browser["gpu_reason"], automatic["gpu_reason"])
+        self.assertEqual(automatic["gpu"], browser["gpu"])
+        path, csrf, html = await self.pending("fixed", PAID, gpu="L40S")
+        self.assertIn("L40S", html)
+        self.assertEqual((await self.send("fixed", PAID, gpu="L4")).status, 409)
+        await self.decide(path, csrf, "approve")
+        receipt = await (await self.send("fixed", PAID, gpu="L40S")).json()
+        self.assertEqual(receipt["gpu"], "L40S")
+        progress = await self.client.post("/_remote_mcp/progress", json={"prompt_id": receipt["prompt_id"]},
+            headers={"X-Split-Remote-Tool": "1", "X-Modal-Execution-Mode": "split"})
+        self.assertEqual((await progress.json())["gpu_reason"], receipt["gpu_reason"])
+        self.control.journal.data["mcp_reviews"].clear()
+        self.control.journal.data["jobs"][receipt["prompt_id"]]["status"] = "completed"
+        self.control.journal.retire([receipt["prompt_id"]])
+        self.assertEqual(await (await self.send("fixed", PAID, gpu="L40S")).json(), receipt)
+        self.assertEqual((await self.send("fixed", PAID)).status, 409)
+
+    async def test_auto_considers_local_work_after_external_generation(self):
+        graph = {**PAID, "2": {"class_type": "ImageUpscaleWithModel", "inputs": {"image": ["1", 0]}}}
+        self.control.objects.return_value = web.json_response({**DEFS, "ImageUpscaleWithModel":
+            {"python_module": "comfy_extras.nodes_upscale_model", "output_node": True}})
+        r = await self.client.post("/api/prompt", json={"prompt": graph})
+        self.assertEqual((await r.json())["gpu"], "RTX-PRO-6000")
+        r = await self.client.post("/api/prompt", json={"prompt": graph}, headers={"Cookie": "split_gpu=L40S"})
+        self.assertEqual((await r.json())["gpu"], "L40S")
 
     async def test_disconnected_cloud_node_is_removed_before_local_execution(self):
         defs = {k: {**d, "output_node": False} for k, d in DEFS.items()}

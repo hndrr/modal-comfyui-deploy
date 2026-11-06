@@ -155,7 +155,7 @@ def is_link(value):
     )
 
 
-def executable_graph(graph, definitions):
+def executable_graph(graph, definitions, targets=None):
     """Remove disconnected branches from the payload itself, before classifying it.
 
     Every registered output is a root (including output nodes with side effects).
@@ -171,7 +171,7 @@ def executable_graph(graph, definitions):
         output = definitions.get(node.get("class_type"), {}).get("output_node")
         if type(output) is not bool:
             return graph
-        if output:
+        if output and (targets is None or node_id in targets):
             roots.append(node_id)
     if not roots:
         raise ValueError("Workflow has no executable output. Connect a save or preview node.")

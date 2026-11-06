@@ -117,14 +117,17 @@ test('a lost receipt uses exactly the same queue request on retry',async()=>{
     assert.equal(path,'/_remote_mcp/submit');assert.equal(init.headers['X-Split-Remote-Tool'],'1'); const key=init.headers['Idempotency-Key'];
     assert.equal(key,'remote-mcp:job-1');calls++;
     if(!receipts.has(key)){commits++;receipts.set(key,init.body);throw new Error('connection lost after commit');}
-    return receipts.get(key)===init.body?Response.json({prompt_id:'original',number:1}):new Response(null,{status:409});
+    return receipts.get(key)===init.body?Response.json({prompt_id:'original',number:1,gpu:'L40S',gpu_reason:'manual'}):new Response(null,{status:409});
   };
-  const args={request_id:'job-1',workflow:{'1':{class_type:'EmptyImage'}}};
+  const args={request_id:'job-1',gpu:'L40S',workflow:{'1':{class_type:'EmptyImage'}}};
   assert.ok((await callSplit(send,'enqueue_workflow',args)).isError);
   const retried=await callSplit(send,'enqueue_workflow',args);
   assert.equal(JSON.parse(retried.content[0].text).prompt_id,'original');
   assert.ok((await callSplit(send,'enqueue_workflow',{...args,workflow:{other:1}})).isError);
-  assert.deepEqual([commits,calls],[1,3]);
+  assert.equal(JSON.parse(retried.content[0].text).gpu,'L40S');
+  assert.equal(JSON.parse(receipts.get('remote-mcp:job-1')).gpu,'L40S');
+  assert.ok((await callSplit(send,'enqueue_workflow',{...args,gpu:'L4'})).isError);
+  assert.deepEqual([commits,calls],[1,4]);
 });
 
 test('409 reports a bounded gateway reason or a neutral rejection', async()=>{
@@ -190,13 +193,14 @@ test('an external submission advertises only its trusted browser link, never a p
     const send=async p=>{
       if(p==='/split/startup')return Response.json({ready:true});
       assert.equal(p,'/_remote_mcp/submit');
-      return Response.json({status:'approval_required',approval_path,expires_at:1500},{status:202});
+      return Response.json({status:'approval_required',approval_path,expires_at:1500,gpu:'L4',gpu_reason:'external'},{status:202});
     };
     const r=await callSplit(send,'enqueue_workflow',args,'https://split.example.com');
     if(approval_path===path){
       const info=JSON.parse(r.content[0].text);
       assert.equal(info.approval_url,'https://split.example.com'+path);
       assert.equal(info.prompt_id,undefined);
+      assert.equal(info.gpu,'L4');
     }else assert.ok(r.isError);
   }
 });

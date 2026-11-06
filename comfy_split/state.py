@@ -110,7 +110,7 @@ class Journal:
             if str(uuid.UUID(key)) != key:
                 raise ValueError("Invalid saved job ID")
             value = {k: job[k] for k in ("id", "number", "status", "created_at", "finished_at",
-                "seconds", "error", "cancel_requested", "live_progress") if k in job}
+                "seconds", "error", "cancel_requested", "live_progress", "gpu", "gpu_reason") if k in job}
             value["body"] = {"prompt": job.get("body", {}).get("prompt", {})}
             history = job.get("history")
             value["history"] = {k: history[k] for k in ("outputs", "status") if k in history} if history else None
@@ -199,6 +199,7 @@ class Journal:
             record = {"id": key, "number": job["number"], "status": job["status"]}
             if job.get("request_id"):
                 record.update(request_id=job["request_id"], body_digest=body_digest(job["body"]))
+                record.update({k: job[k] for k in ("gpu", "gpu_reason") if k in job})
                 if "mcp_digest" in job:
                     record["mcp_digest"] = job["mcp_digest"]
             self.data["retired_jobs"][key] = record
