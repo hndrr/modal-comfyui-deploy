@@ -54,7 +54,9 @@ wheel の依存は NumPy、Pillow、setuptools なども含めて固定します
 
 フロントエンド・Manager・comfy-kitchen・SageAttention は、CPU/GPU ともにイメージの `/opt/split-core` を優先して読み込みます。保存済み venv に旧版が残っていても、これらはイメージ側の固定版を使います。
 
-1. Manager で候補環境を作り、検証エラーに出るパッケージを確認します。
+「ノード更新を反映」の検証に失敗した候補は `failed` になり、同じ候補を反映ボタンから再検証できません。「未反映の変更を取り消す」で候補を破棄してから作り直し、必要なノード更新も再実行してください。以下の手順で行う手動検証だけが失敗した場合は、同じ編集中の候補を修復できます。
+
+1. Manager で候補環境を作り、反映前に候補の Python で `-m comfy_split.check_environment` を実行して、検証エラーに出るパッケージを確認します。
 2. CPU コンテナで候補の `venv/bin/python -m pip show <PACKAGE>` を実行し、`Location` が候補の venv 内であることを確認します。その候補だけで `venv/bin/python -m pip uninstall <PACKAGE>` を行うと、`--system-site-packages` によりイメージ側の版が使われます。有効環境やイメージ自体のパッケージは削除しません。
 3. 同じ候補の Python で `-m comfy_split.check_environment` を実行し、Manager の「ノード更新を反映」で通常の CPU/GPU 検証を通してから採用します。
 4. ノード自体が旧版を要求する場合は、候補内で対応版へ更新するか、その候補を破棄します。本体更新前の構成へ戻す場合は、既知の SHA と元のイメージ定義を使って再デプロイします。
