@@ -91,19 +91,19 @@ Volumeの構成一覧については、[CPU/GPU分離構成ガイドのVolume一
 ### 入出力のコミットとUI通知の整合性
 
 - **実行順序**:
-  1. GPUは入力ファイルを `reload` した後に生成処理を実行します。
+  1. 実行ワーカーは入力ファイルを `reload` した後に生成処理を実行します。
   2. 出力ファイルを `commit` した後に結果を保存します。
   3. CPUは出力ファイルを `reload` してからクライアントへ完了を通知します。
 - **通知の保留**: `execution_success` やエラー通知は、出力ファイルの公開と履歴の保存が完了するまで保留されます。
 - **フロントエンドのTotal表示対策**: `executed` イベントで完了ノード数を数えるフロントエンドに合わせ、`progress_state` で完了した出力なしノードに対しても空のUI結果を1回通知します。実際の画像・動画を含む結果は出力公開後に通知されます。本体更新時は対応するフロントエンドでTotal表示とプレビューを確認してください。
 - **一時出力（`temp`）の処理**:
-  - 一時ファイルはコンテナのローカル作業領域で生成され、GPUワーカーが出力Volumeの `.split-temp/<起動ID>/` へコピーします。
+  - 一時ファイルはコンテナのローカル作業領域で生成され、CPU/GPU実行ワーカーが出力Volumeの `.split-temp/<起動ID>/` へコピーします。
   - 履歴および完了イベントの参照を永続出力へ変換した上で公開します（`.split-temp/temp` に保存された一時出力も `type=temp` で参照・閲覧可能）。
 - **ジョブ受付日時の補完**: 待機中・実行中のジョブおよび履歴には受付日時を付与し、保存済みの失敗履歴に不足している項目も補完します。これにより、1件の失敗ジョブが原因でMedia Assetsの一覧全体が読み込めなくなる不具合を防ぎます。
 
 ### 自動清掃（クリーンアップ）ルール
 
-保存領域の清掃は、**分離モードのアイドル時（GPUコンテナ数および待機呼び出しがともに0である状態）**に行われます。停止中に清掃のためだけにCPUやGPUを起動することはありません。詳細な設計は[保存構成の設計・変更記録](../design/split-storage.md)を参照してください。
+保存領域の清掃は、**分離モードのアイドル時（CPU/GPU実行ワーカーのコンテナ数および待機呼び出しがともに0である状態）**に行われます。停止中に清掃のためだけにCPUやGPUを起動することはありません。詳細な設計は[保存構成の設計・変更記録](../design/split-storage.md)を参照してください。
 
 | 対象 | 保護対象 / 保持ルール | 清掃対象 |
 | :--- | :--- | :--- |
@@ -138,7 +138,7 @@ Volumeの構成一覧については、[CPU/GPU分離構成ガイドのVolume一
 | `/split/environment/apply` | `POST` | 候補環境を作成・検証して有効環境に反映 |
 | `/split/environment/discard` | `POST` | 未反映の候補環境を破棄 |
 | `/split/environment/repair-image-browsing` | `POST` | Image Browsingをイメージ同梱版へ戻す候補環境を作成・検証して反映 |
-| `/jobs/<id>/cancel` | `POST` | 指定ジョブの待機キャンセル、またはGPUワーカーへの中断指示 |
+| `/jobs/<id>/cancel` | `POST` | 指定ジョブの待機キャンセル、またはCPU/GPU実行ワーカーへの中断指示 |
 | `/jobs/cancel` | `POST` | 複数ジョブの一括キャンセル（`{"job_ids": ["<id>", ...]}`） |
 
 ### リクエストヘッダー仕様
@@ -203,7 +203,7 @@ Volumeの構成一覧については、[CPU/GPU分離構成ガイドのVolume一
 
 ### ログとメトリクスの確認
 
-- 構造化ログに含まれる `comfy_ready`、`gpu_ready`、`gpu_finished` で起動時間および総処理時間を確認できます。
+- 構造化ログに含まれる `comfy_ready`、`gpu_ready`、`gpu_finished`（CPU実行は `cpu_worker_ready`、`cpu_worker_finished`） で起動時間および総処理時間を確認できます。
 - モデル読み込みの詳細な所要時間はComfyUI内部ログで、コンテナの停止状況はModal Containers管理画面で確認してください（※GPU Memory Snapshotは本構成では未使用です）。
 
 ### ローカル単体テスト
@@ -228,7 +228,7 @@ uv run --locked --extra split-test python scripts/test_standalone.py --suite spl
 
 | スクリプト | 実行場所 / 所要時間 | 検証内容 | 備考 |
 | :--- | :--- | :--- | :--- |
-| `scripts/verify_split_execution.py` | CPUコンテナ内<br>（短時間） | 2件の投入と待機キャンセル、画像保存・表示、WebSocketイベント、モード往復、GPU停止を確認するAPIスモークテスト | `EmptyImage` を使用するため、モデル推論やサンプリング中プレビューの検証は含みません |
+| `scripts/verify_split_execution.py` | CPUコンテナ内<br>（短時間） | CPUでの画像保存・表示、WebSocketイベント、モード往復、GPU停止を確認するAPIスモークテスト（待機取消は同期したローカルHTTPテストで確認） | `EmptyImage` を使用するため、モデル推論やサンプリング中プレビューの検証は含みません |
 | `scripts/verify_split_idle.py` | CPUコンテナ内<br>（約10分間） | WebSocketを維持しながら、画面配信、メタデータ取得、画像アップロード・表示、ワークフロー保存・読取を繰り返し、各回でGPU台数が常に0であることを確認 | 検証用ファイルは `split-verification` 名で保存されます |
 | `scripts/verify_image_browsing.py` | 修復後CPUコンテナ内 | Web拡張配信、一覧表示、アップロード、プレビュー、名前変更、削除、MiniMax生成結果参照を確認 | 出力Volumeの `split-verification/` に `minimax_real_` で始まる画像が存在することが前提です |
 

@@ -24,6 +24,43 @@ ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_cpu_execution_worker_has_no_gpu_and_shares_worker_resources(self):
+        import modal
+        import comfyapp
+
+        definitions = {}
+        original = modal.App.function
+        original_env = modal.Image.env
+        image_env = {}
+
+        def capture_env(image, values):
+            result = original_env(image, values)
+            image_env[result] = values
+            return result
+
+
+        def capture(app, *args, **kwargs):
+            decorate = original(app, *args, **kwargs)
+            def register(fn):
+                if hasattr(fn, "__name__"):
+                    definitions[fn.__name__] = kwargs
+                return decorate(fn)
+            return register
+
+        with (patch.dict(os.environ, PLAIN), patch.object(modal.App, "function", capture),
+              patch.object(modal.Image, "env", capture_env),
+              patch("comfy_split.release.comfy_revision", return_value="a" * 40)):
+            runpy.run_path(str(Path(comfyapp.__file__).with_name("splitapp.py")))
+        cpu, gpu = definitions["cpu_worker"], definitions["gpu_worker"]
+        self.assertEqual(image_env[cpu["image"]]["SPLIT_WORKER_CPU"], "1")
+        self.assertNotIn("SPLIT_WORKER_CPU", image_env.get(gpu["image"], {}))
+        self.assertNotIn("gpu", cpu)
+        self.assertEqual((cpu["cpu"], cpu["memory"]), (2, 8192))
+        for field in ("secrets", "volumes", "retries", "timeout", "min_containers", "max_containers", "scaledown_window"):
+            self.assertEqual(cpu[field], gpu[field])
+        self.assertEqual((cpu["min_containers"], cpu["max_containers"], cpu["scaledown_window"]), (0, 1, 30))
+        self.assertNotIn("enable_memory_snapshot", cpu)
+
     def test_gpu_verification_uses_dotenv_revision_without_overriding_shell(self):
         """Verify fresh imports use the dotenv SHA while preserving a shell override."""
         script = '''

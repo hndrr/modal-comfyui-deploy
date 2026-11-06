@@ -122,6 +122,16 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.generate.assert_not_awaited()
         self.process.start.assert_not_awaited()
 
+    async def test_cpu_worker_uses_shared_commit_protocol_without_retry_on_failure(self):
+        self.generate.side_effect = RuntimeError("CUDA-only custom node")
+        with patch.object(worker_module, "CPU_WORKER", True):
+            result = await self.run_job()
+        self.process.start.assert_awaited_once_with("base", cpu=True)
+        self.generate.assert_awaited_once()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("CUDA-only", result["error"])
+        self.assertEqual(json.loads((self.root / "job.json").read_text())["status"], "failed")
+
     async def test_output_commit_failure_does_not_publish_completion(self):
         self.volumes["output"].commit.aio.side_effect = OSError("output commit failed")
         with self.assertRaisesRegex(OSError, "output commit failed"):
