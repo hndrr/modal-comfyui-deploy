@@ -411,6 +411,7 @@ class Controller:
                 break
 
     async def relay_event(self, record, event):
+        """Relay worker progress while deferring output notifications until files are durable."""
         for extension in self.plugins:
             hook = getattr(extension, "worker_event", None)
             if hook and await hook(record, event):
@@ -432,7 +433,7 @@ class Controller:
                 record.setdefault("deferred_events", []).append(data)
             else:
                 await self.broadcast(data, record.get("body", {}).get("client_id"))
-            # Frontend 1.52 counts `executed`/`execution_cached` for Total,
+            # Frontend's Total counter uses `executed`/`execution_cached`,
             # while core reports non-output node completion in progress_state.
             # Emit one empty UI result only for those genuinely finished
             # prompt nodes; leave real UI results and expanded child IDs alone.
