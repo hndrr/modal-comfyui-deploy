@@ -4,10 +4,74 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from comfy_split import runtime
+from comfy_split.build_constraints import build_constraints, core_pins, wheel_pins, wheel_roots
 from comfy_split.check_environment import check_core_requirements, check_pins
 
 
 class EnvironmentTests(unittest.TestCase):
+    def test_discovers_new_remote_and_local_wheels_without_a_package_list(self):
+        """Discover wheel roots from origin metadata while excluding ordinary and editable installs."""
+        def installed(name, origin):
+            return Mock(metadata={"Name": name}, read_text=Mock(return_value=origin))
+        packages = [
+            installed("remote", '{"url":"https://example.invalid/kernel.whl#sha256=abc"}'),
+            installed("local", '{"url":"file:///opt/wheels/another.whl"}'),
+            installed("ordinary", None), installed("source", '{"url":"file:///src/pkg","dir_info":{}}'),
+        ]
+        with patch("comfy_split.build_constraints.distributions", return_value=packages):
+            self.assertEqual(set(wheel_roots()), {"remote", "local"})
+
+    def test_base_wheels_protect_transitive_runtime_and_requested_extras(self):
+        """Preserve active dependency versions and combine them with release-specific pins."""
+        base = {"new-kernel": Mock(version="1", requires=["torch", "cuda[driver]", "uninstalled; python_version<'3'"]),
+                "torch": Mock(version="2.10.0+cu130", requires=["triton", "cuda"]),
+                "cuda": Mock(version="13", requires=["nv-lib; extra=='driver'", "optional; extra=='dev'"]),
+                "nv-lib": Mock(version="13.1", requires=[]), "triton": Mock(version="3", requires=["torch"])}
+        pins = wheel_pins(["new_kernel"], base.__getitem__)
+        self.assertEqual(set(pins), {"new-kernel==1", "torch==2.10.0+cu130", "cuda==13", "nv-lib==13.1", "triton==3"})
+        with self.assertRaisesRegex(RuntimeError, "wheel origins"):
+            wheel_pins([])
+        with patch("comfy_split.build_constraints.wheel_pins", return_value=pins):
+            for frontend in ("1.57.4", "2.0"):
+                requirements = f"torch>=2.11\ncomfyui-frontend-package=={frontend}\ncomfy-kitchen==1.0"
+                for manager in ("4.2.2", "5.0.0"):
+                    self.assertEqual(set(build_constraints(requirements, f"comfyui_manager == {manager}")),
+                                     {*pins, f"comfyui-frontend-package=={frontend}", "comfy-kitchen==1.0",
+                                      f"comfyui-manager=={manager}"})
+
+    def test_core_pins_accept_requirement_spelling_comments_and_active_markers(self):
+        """Accept equivalent package spellings and ignore comments and inactive markers."""
+        requirements = """
+            # Core requirements may use any normalized package spelling.
+            Comfy_Kitchen == 1.0 ; python_version >= '3'  # pinned kitchen
+            comfy.kitchen == 0.9 ; python_version < '3'
+            ComfyUI_frontend_package == 1.57.4  # matching frontend
+        """
+        self.assertEqual(list(core_pins(requirements)),
+                         ["comfy-kitchen==1.0", "comfyui-frontend-package==1.57.4"])
+        installed = {"comfy-kitchen": "1.0", "comfyui-frontend-package": "1.57.4"}
+        check_core_requirements(requirements, installed.__getitem__)
+
+    def test_core_pins_leave_pip_directives_and_unrelated_sources_to_pip(self):
+        """Parse protected pins without interpreting unrelated pip syntax or source locations."""
+        requirements = (
+            "--extra-index-url https://example.invalid/simple\n"
+            "-r optional.txt\n-e git+https://example.invalid/node.git#egg=node\n"
+            "./dist/node.whl\nhttps://example.invalid/node.whl\n"
+            "comfy-kitchen == \\\n 1.0\ncomfyui-frontend-package==1.57.4\n"
+        )
+        self.assertEqual(list(core_pins(requirements)),
+                         ["comfy-kitchen==1.0", "comfyui-frontend-package==1.57.4"])
+        with self.assertRaisesRegex(RuntimeError, "must pin comfyui-manager"):
+            list(core_pins("comfyui_manager>=5", ("comfyui-manager",)))
+
+    def test_core_pins_require_an_active_exact_version(self):
+        """Reject ranges, wildcards, URLs, and inactive markers for protected packages."""
+        for spec in (">=1.0", "==1.*", "@ https://example.invalid/kitchen.whl",
+                     "==1.0 ; python_version < '3'"):
+            with self.subTest(spec=spec), self.assertRaisesRegex(RuntimeError, "must pin comfy-kitchen"):
+                list(core_pins(f"comfy-kitchen {spec}\ncomfyui-frontend-package==1.57.4"))
+
     def test_core_upgrade_rejects_a_stale_frontend_even_if_internal_constraints_match(self):
         requirements = "comfyui-frontend-package==1.57.4\ncomfy-kitchen==1.0"
         installed = {"comfyui-frontend-package": "1.52.7", "comfy-kitchen": "1.0"}

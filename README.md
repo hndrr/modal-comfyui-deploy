@@ -176,11 +176,11 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 <details>
 <summary>主な依存ソフトウェアのライセンス</summary>
 
-版や導入条件は、通常構成・Split app のイメージ定義と各パッケージのロックファイルに基づきます。版を固定していない依存先は、実際に導入する版のライセンスも確認してください。
+以下の版はライセンスを確認した際の参照版です。Split app の ComfyUI はデプロイ時に選択したリリースまたは指定 SHA、フロントエンド・Manager・comfy-kitchen・comfy-aimdo はそのコミットの requirements に従います。実際に導入する版のライセンスも確認してください。
 
 | 依存先 | 確認した版 | ライセンス・出典 |
 | --- | --- | --- |
-| [ComfyUI](https://github.com/Comfy-Org/ComfyUI) | v0.43.0（Split app の固定コミット） | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI/blob/426f5eea52a7ece1dd599fff4cb6cd1f352ddd24/LICENSE) |
+| [ComfyUI](https://github.com/Comfy-Org/ComfyUI) | v0.43.0（ライセンス確認時の参照版） | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI/blob/426f5eea52a7ece1dd599fff4cb6cd1f352ddd24/LICENSE) |
 | [ComfyUI frontend](https://github.com/Comfy-Org/ComfyUI_frontend) | 1.57.4 | [GNU GPL v3](https://github.com/Comfy-Org/ComfyUI_frontend/blob/v1.57.4/LICENSE) |
 | [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) | 4.2.2 | [GPL-3.0-only](https://pypi.org/project/comfyui-manager/4.2.2/) |
 | [comfy-cli](https://github.com/Comfy-Org/comfy-cli) | 1.7.3 | [GPL-3.0-only](https://pypi.org/project/comfy-cli/1.7.3/) |
@@ -203,8 +203,8 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 | [xFormers](https://github.com/facebookresearch/xformers) | 0.0.34 | [BSD-3-Clause ほか（同梱コードの条件を含む）](https://github.com/facebookresearch/xformers/blob/v0.0.34/LICENSE) |
 | [FlashAttention](https://github.com/Dao-AILab/flash-attention)（[wheel 配布元](https://github.com/mjun0812/flash-attention-prebuild-wheels)） | 2.8.3（wheel 配布元の v0.9.0 リリース） | [BSD-3-Clause（本体）](https://github.com/Dao-AILab/flash-attention/blob/v2.8.3/LICENSE)、[BSD-3-Clause（wheel ビルド）](https://github.com/mjun0812/flash-attention-prebuild-wheels/blob/v0.9.0/LICENSE) |
 | [SageAttention](https://github.com/woct0rdho/SageAttention)（ビルド元 fork） | `abi3_stable` ブランチ | [Apache-2.0](https://github.com/woct0rdho/SageAttention/blob/abi3_stable/LICENSE) |
-| [comfy-kitchen](https://github.com/Comfy-Org/comfy-kitchen) | 0.2.40（Split app の ComfyUI 固定版の依存） | [Apache-2.0](https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.40/LICENSE) |
-| [comfy-aimdo](https://github.com/Comfy-Org/comfy-aimdo) | 0.6.0（Split app の ComfyUI 固定版の依存） | [GNU GPL v3](https://github.com/Comfy-Org/comfy-aimdo/blob/v0.6.0/LICENSE) |
+| [comfy-kitchen](https://github.com/Comfy-Org/comfy-kitchen) | 0.2.40（ライセンス確認時の参照版） | [Apache-2.0](https://github.com/Comfy-Org/comfy-kitchen/blob/v0.2.40/LICENSE) |
+| [comfy-aimdo](https://github.com/Comfy-Org/comfy-aimdo) | 0.6.0（ライセンス確認時の参照版） | [GNU GPL v3](https://github.com/Comfy-Org/comfy-aimdo/blob/v0.6.0/LICENSE) |
 
 #### 通常構成で追加する Python ライブラリ
 

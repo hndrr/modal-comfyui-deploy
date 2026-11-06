@@ -1,6 +1,10 @@
-"""Run with scripts/modal.sh run -m scripts.verify_split_gpus. Uses billable GPUs sequentially."""
+"""Set SPLIT_COMFYUI_REVISION, then scripts/modal.sh run -m scripts.verify_split_gpus.
+
+Uses billable GPUs sequentially. Select the deployed SHA to compare its revision.
+"""
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -10,8 +14,13 @@ from tempfile import TemporaryDirectory
 import modal
 
 from comfy_split.storage import VOLUME_NAMES
+from comfy_split.release import REVISION_ENV
 
 if modal.is_local():
+    import comfyapp  # Load shared .env settings before checking the required SHA.
+
+    if not os.environ.get(REVISION_ENV, "").strip():
+        raise ValueError(f"Set {REVISION_ENV} to the deployed ComfyUI SHA before GPU verification")
     from splitapp import image
 else:
     image = None  # The worker already runs the resolved split image.
@@ -23,12 +32,15 @@ options = dict(image=image, volumes={"/models": model_volume}, timeout=900, max_
 
 
 def verify(graph, size):
+    """Exercise attention kernels and ComfyUI generation, reporting the actual checkout SHA."""
     import requests
     import torch
     from flash_attn import flash_attn_func
     from PIL import Image
     from sageattention import sageattn
 
+    revision = subprocess.check_output(
+        ["git", "-C", "/opt/comfy-template", "rev-parse", "HEAD"], text=True).strip()
     q = torch.randn(1, 8, 128, 64, device="cuda", dtype=torch.float16)
     assert sageattn(q, q, q).isfinite().all()
     q = q.transpose(1, 2).contiguous()
@@ -68,7 +80,8 @@ def verify(graph, size):
             with Image.open(root / "output" / saved["subfolder"] / saved["filename"]) as output:
                 output.load()
                 assert output.size == (size, size)
-            return {"device": name, "size": size, "seconds": round(time.monotonic() - start, 2)}
+            return {"device": name, "size": size, "comfy_revision": revision,
+                    "seconds": round(time.monotonic() - start, 2)}
         finally:
             process.terminate()
             process.wait(timeout=20)

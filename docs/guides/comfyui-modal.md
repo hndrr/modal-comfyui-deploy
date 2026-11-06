@@ -146,7 +146,7 @@ COMFYUI_MANAGER_INSTALL=off
 COMFYUI_FORCE_BUILD=on uv run modal deploy comfyapp.py
 ```
 
-`COMFYUI_FORCE_BUILD` はキャッシュを使うかを決める設定です。`COMFYUI_REVISION` が空ならビルド時の `comfy install` に任せ、指定していればその SHA をチェックアウトします。split の固定版は通常版には適用されません。
+`COMFYUI_FORCE_BUILD` はキャッシュを使うかを決める設定です。`COMFYUI_REVISION` が空ならビルド時の `comfy install` に任せ、指定していればその SHA をチェックアウトします。split がデプロイ時に選ぶリリースは通常版には適用されません。
 
 Modal の公開 URL に `Modal-Key` / `Modal-Secret` ヘッダーを必須にする場合:
 

@@ -15,17 +15,13 @@ from comfy_split import gpu, node_packs
 from comfy_split.config import Settings, DEPLOYMENT_ENV
 from comfy_split.model_import import import_model as import_model_file
 from comfy_split.extension_sources import enabled_sources
+from comfy_split.release import REVISION_ENV, comfy_revision
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
 from comfyapp import (
-    FLASH_ATTN_WHEEL_URL,
     FUNCTION_TIMEOUT,
     GPU_PROFILE,
     PREBUILT_WHEEL_DIR,
     SAGE_ATTENTION_ENABLED,
-    TORCH_WHEEL_URL,
-    TORCHAUDIO_WHEEL_URL,
-    TORCHVISION_WHEEL_URL,
-    XFORMERS_WHEEL_URL,
     build_sage_wheel,
     torch_image,
 )
@@ -46,9 +42,7 @@ if settings.node_packs or enabled_sources(settings):
                                                 required_keys=[node_packs.TOKEN_ENV])
     if settings.node_packs:
         github_secrets = [github_build_secret]
-COMFY_REVISION = "426f5eea52a7ece1dd599fff4cb6cd1f352ddd24"  # split: ComfyUI v0.43.0
-FRONTEND_VERSION = "1.57.4"  # Version required by this ComfyUI revision.
-MANAGER_VERSION = "4.2.2"
+COMFY_REVISION = comfy_revision(local=modal.is_local())
 NODE_REVISIONS = {
     "crystian/ComfyUI-Crystools": "2f18256c5b5063937106f29a8e0a7db3ae3869b7",
     "Firetheft/ComfyUI_Local_Media_Manager": "5e74ce0cc708798ed25a77097d6059b6c796da87",
@@ -72,14 +66,22 @@ cuda_arches = ";".join(architectures)
 image = (
     build_sage_wheel(torch_image.env({
         "TORCH_CUDA_ARCH_LIST": cuda_arches, "SAGEATTENTION_CUDA_ARCH_LIST": cuda_arches,
-    })).run_commands(
+    }))
+    .add_local_file("comfy_split/build_constraints.py", "/opt/build_constraints.py", copy=True)
+    .run_commands(
         "git clone https://github.com/Comfy-Org/ComfyUI.git /opt/comfy-template",
         f"git -C /opt/comfy-template checkout {COMFY_REVISION}",
+        # Capture the wheels SageAttention was built against before any resolver runs.
+        f"python -m pip install --no-deps {PREBUILT_WHEEL_DIR}/*.whl",
+        "python /opt/build_constraints.py /opt/comfy-template/requirements.txt "
+        "/opt/comfy-template/manager_requirements.txt > /opt/split-constraints.txt",
+    )
+    .env({"PIP_CONSTRAINT": "/opt/split-constraints.txt", REVISION_ENV: COMFY_REVISION})
+    .run_commands(
         "python -m pip install -r /opt/comfy-template/requirements.txt",
+        "python -m pip install -r /opt/comfy-template/manager_requirements.txt",
     )
     .pip_install(
-        f"comfyui-frontend-package=={FRONTEND_VERSION}",
-        f"comfyui-manager=={MANAGER_VERSION}",
         "modal==1.1.4",
         "aiohttp==3.14.4",
     )
@@ -105,12 +107,7 @@ image = (
         "rm /tmp/image-browsing-dist.tar.gz",
     )
     .run_commands(
-        f'python -m pip install "{TORCH_WHEEL_URL}" "{TORCHVISION_WHEEL_URL}" '
-        f'"{TORCHAUDIO_WHEEL_URL}" "{XFORMERS_WHEEL_URL}" "{FLASH_ATTN_WHEEL_URL}" {PREBUILT_WHEEL_DIR}/*.whl',
         "python -m pip freeze > /opt/split-base-requirements.txt",
-        "python -c 'import importlib.metadata as m; from pathlib import Path; "
-        'names=["torch","torchvision","torchaudio","xformers","flash-attn","sageattention","comfyui-frontend-package","comfyui-manager","comfy-kitchen"]; '
-        'Path("/opt/split-constraints.txt").write_text("\\n".join(n+"=="+m.version(n) for n in names)+"\\n")\'',
     )
     .env(
         {
@@ -163,9 +160,9 @@ for name, source in enabled_sources(settings):
 # core packages from the image, without changing any shared node environment.
 image = image.run_commands(
     "python -m pip install --no-deps --target /opt/split-core -c /opt/split-constraints.txt "
-    f"comfyui-frontend-package comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
+    f"comfyui-frontend-package comfyui-manager comfy-kitchen {PREBUILT_WHEEL_DIR}/sageattention-*.whl",
 ).env({"PYTHONPATH": "/opt/split:/opt/split-core"}).run_commands(
-    "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt"
+    "python -m comfy_split.check_environment --requirements /opt/comfy-template/requirements.txt --bridge"
 )
 
 app = modal.App(APP_NAME)

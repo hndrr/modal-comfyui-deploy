@@ -11,6 +11,7 @@ from comfy_split.gpu import deployed_gpu_count
 
 
 async def main():
+    """Check generated media, queue cancellation, mode switching, and GPU scale-down."""
     origin = "http://127.0.0.1:8000"
     async with aiohttp.ClientSession() as client:
         async def request(method, path, **kwargs):
@@ -53,7 +54,8 @@ async def main():
                 item = history[remaining]
                 assert item["status"]["status_str"] == "success", item
                 image = item["outputs"]["2"]["images"][0]
-                async with client.get(origin + "/api/view", params=image) as response:
+                params = {name: image[name] for name in ("filename", "subfolder", "type")}
+                async with client.get(origin + "/api/view", params=params) as response:
                     assert response.status == 200
                     assert len(await response.read()) > 0
                 assert not await request("GET", "/api/history/" + cancelled)

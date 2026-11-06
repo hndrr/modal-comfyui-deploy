@@ -30,10 +30,9 @@ ComfyUIや環境バージョンを交換しても拡張はイメージから読�
   `/split/environment/discard` を使います。状態表示だけでは呼びません。
 
 読み込みにはComfyUIの `app.registerExtension()` を使います。
-このrepoのsplit構成は、[splitapp.py](../../splitapp.py)でComfyUI `v0.43.0`、frontend `1.57.4`を固定しています。
+split はデプロイ時に ComfyUI の安定リリースを選び、そのリリースが指定するフロントエンドを使います（[split の更新方法](../../docs/guides/comfyui-split.md)）。
 将来のすべてのバージョンとの互換性を保証するものではありません。
 更新時は標準拡張一覧、状態API、GPU0台の表示、保存・復元を確認してください。
-本体の固定バージョンをこの拡張の変更に合わせて更新する必要はありません。
 
 公式の読み込み仕様: https://docs.comfy.org/custom-nodes/js/javascript_overview
 

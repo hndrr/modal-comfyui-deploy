@@ -1,10 +1,11 @@
 import importlib.util
+import runpy
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from comfy_split.runtime import ComfyProcess
 
@@ -46,6 +47,38 @@ class BridgeTests(unittest.TestCase):
         with (patch.dict(sys.modules, {'execution': SimpleNamespace(PromptQueue=ChangedQueue)}),
               self.assertRaisesRegex(RuntimeError, 'signature')):
             guard.install_cpu_guard()
+
+    def test_image_validation_rejects_an_incompatible_upstream_job_contract(self):
+        """Ensure build validation accepts the expected job API and rejects an incompatible response."""
+        class Queue:
+            def put(self, item):
+                pass
+
+        guard = load('build_cpu_guard', PACK / 'cpu_guard.py')
+        job = {"id": "split-build-check"}
+        jobs = SimpleNamespace(JobStatus=SimpleNamespace(PENDING="pending"),
+                               get_job=Mock(return_value=job), get_all_jobs=Mock())
+        cli = SimpleNamespace(args=SimpleNamespace(cpu=False))
+        kitchen = SimpleNamespace(**{name: lambda: None for name in
+                                    ("sol_attn", "sol_attn_chunked", "sol_attn_is_available", "int8_linear")})
+        modules = {"execution": SimpleNamespace(PromptQueue=Queue), "comfy.cli_args": cli,
+                   "comfy_execution.jobs": jobs, "comfy_kitchen": kitchen}
+        run = runpy.run_path
+        for compatible in (True, False):
+            jobs.get_all_jobs.return_value = ([job], 1) if compatible else ([], 0)
+            with self.subTest(compatible=compatible), patch.dict(sys.modules, modules), \
+                 patch.object(sys, "argv", ["check_environment", "--bridge"]), \
+                 patch.object(sys, "path", sys.path.copy()), \
+                 patch("pathlib.Path.read_text", return_value="comfy-kitchen==1\n"), \
+                 patch("importlib.metadata.version", return_value="1"), patch("subprocess.run"), \
+                 patch("runpy.run_path", return_value={"install_cpu_guard": guard.install_cpu_guard}):
+                if compatible:
+                    run(str(ROOT / "comfy_split/check_environment.py"), run_name="__main__")
+                    self.assertTrue(cli.args.cpu)
+                    self.assertTrue(guard.cpu_guard_enabled())
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "job serialization"):
+                        run(str(ROOT / "comfy_split/check_environment.py"), run_name="__main__")
 
     def test_temporary_output_survives_normal_cleanup_and_restart(self):
         with tempfile.TemporaryDirectory() as directory:
