@@ -112,13 +112,16 @@ async def submit(c, body, key):
     definitions = json.loads((await c.objects("/object_info", graph=graph)).body)
     graph = prepared["prompt"] = policy.executable_graph(graph, definitions)
     calls, loaders = policy.plan(graph, definitions)
-    selection = await c.select_gpu(requested, graph, definitions)
     if not calls:
+        selection = await c.select_gpu(requested, graph, definitions)
         job = c.admit_prompt(prepared, key, selection)
         job.update(mcp_guard=policy.execution_guard(prepared, [], []), mcp_digest=digest)
         await c.commit_prompt()
         await c.status()
         return web.json_response(c.receipt(job))
+    # Owner approval can outlast a warm container. Pin the graph-based choice
+    # instead of charging for a larger GPU that may be cold by approval time.
+    selection = gpu.select_gpu(requested, graph, definitions)
     if sum(r["status"] == "pending" for r in rows.values()) >= 64:
         raise ValueError("Too many pending reviews; decline one or wait for expiry.")
     async with input_media._lock:
