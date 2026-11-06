@@ -29,6 +29,8 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();
+  const enqueue=list.result.tools.find(t=>t.name==='enqueue_workflow');
+  assert.deepEqual(enqueue.inputSchema.properties.gpu.enum,['auto','auto-speed','L4','L40S','RTX-PRO-6000']);
   for (const name of ["get_image", "get_video", "get_audio", "upload_media", "get_workflow", "cancel_job", "get_job_progress", "list_models","calculate","get_split_status","save_workflow","visualize_workflow","list_nodes","search_custom_nodes","get_job_workflow","reuse_output","list_inputs","list_outputs","inspect_media","prepare_environment","change_node","apply_environment","discard_environment","add_model","inspect_model","remove_model","restore_model","get_admin_operation"])
     assert.ok(list.result.tools.some(t => t.name === name));
   const upload=list.result.tools.find(t=>t.name==='upload_media');
@@ -117,16 +119,17 @@ test('a lost receipt uses exactly the same queue request on retry',async()=>{
     assert.equal(path,'/_remote_mcp/submit');assert.equal(init.headers['X-Split-Remote-Tool'],'1'); const key=init.headers['Idempotency-Key'];
     assert.equal(key,'remote-mcp:job-1');calls++;
     if(!receipts.has(key)){commits++;receipts.set(key,init.body);throw new Error('connection lost after commit');}
-    return receipts.get(key)===init.body?Response.json({prompt_id:'original',number:1,gpu:'L40S',gpu_reason:'manual'}):new Response(null,{status:409});
+    return receipts.get(key)===init.body?Response.json({prompt_id:'original',number:1,gpu:'RTX-PRO-6000',gpu_reason:'速度優先'}):new Response(null,{status:409});
   };
-  const args={request_id:'job-1',gpu:'L40S',workflow:{'1':{class_type:'EmptyImage'}}};
+  const args={request_id:'job-1',gpu:'auto-speed',workflow:{'1':{class_type:'UNETLoader'}}};
   assert.ok((await callSplit(send,'enqueue_workflow',args)).isError);
   const retried=await callSplit(send,'enqueue_workflow',args);
   assert.equal(JSON.parse(retried.content[0].text).prompt_id,'original');
   assert.ok((await callSplit(send,'enqueue_workflow',{...args,workflow:{other:1}})).isError);
-  assert.equal(JSON.parse(retried.content[0].text).gpu,'L40S');
-  assert.equal(JSON.parse(receipts.get('remote-mcp:job-1')).gpu,'L40S');
-  assert.ok((await callSplit(send,'enqueue_workflow',{...args,gpu:'L4'})).isError);
+  assert.equal(JSON.parse(retried.content[0].text).gpu,'RTX-PRO-6000');
+  assert.equal(JSON.parse(retried.content[0].text).gpu_reason,'速度優先');
+  assert.equal(JSON.parse(receipts.get('remote-mcp:job-1')).gpu,'auto-speed');
+  assert.ok((await callSplit(send,'enqueue_workflow',{...args,gpu:'auto'})).isError);
   assert.deepEqual([commits,calls],[1,4]);
 });
 

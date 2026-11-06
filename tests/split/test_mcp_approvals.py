@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import re
 import tempfile
 import threading
@@ -127,6 +128,41 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await r.json())["gpu"], "RTX-PRO-6000")
         r = await self.client.post("/api/prompt", json={"prompt": graph}, headers={"Cookie": "split_gpu=L40S"})
         self.assertEqual((await r.json())["gpu"], "L40S")
+
+    async def test_cost_and_speed_priorities_match_ui_and_survive_approval_and_replay(self):
+        fixture = Path(__file__).resolve().parents[2] / "scripts/verify_split_gpu_workflow.json"
+        graph = json.loads(fixture.read_text())
+        defs = {n["class_type"]: {"python_module": "nodes", "output_node": n["class_type"] == "SaveImage"}
+                for n in graph.values()}
+        defs["EmptyFlux2LatentImage"]["python_module"] = "comfy_extras.nodes_flux"
+        self.control.objects.return_value = web.json_response(defs)
+        for choice, device, label in [("auto", "L4", "料金優先"), ("auto-speed", "RTX-PRO-6000", "速度優先")]:
+            browser = await (await self.client.post("/api/prompt", json={"prompt": graph},
+                headers={"Cookie": f"split_gpu={choice}"})).json()
+            receipt = await (await self.send(choice, graph, gpu=choice)).json()
+            self.assertEqual(receipt["gpu"], device)
+            self.assertEqual(browser["gpu"], device)
+            self.assertEqual(browser["gpu_reason"], receipt["gpu_reason"])
+            self.assertIn(label, receipt["gpu_reason"])
+            self.assertEqual(await (await self.send(choice, graph, gpu=choice)).json(), receipt)
+        self.assertEqual((await self.send("auto-speed", graph, gpu="auto")).status, 409)
+        manual = await (await self.client.post("/api/prompt", json={"prompt": graph, "gpu": "L40S"},
+            headers={"Cookie": "split_gpu=auto-speed"})).json()
+        self.assertEqual(manual["gpu"], "L40S")
+
+        self.control.objects.return_value = web.json_response(DEFS)
+        path, csrf, html = await self.pending("speed-review", PAID, gpu="auto-speed")
+        self.assertIn("速度優先", html)
+        self.assertIn("L4", html)
+        browser = await (await self.client.post("/api/prompt", json={"prompt": PAID},
+            headers={"Cookie": "split_gpu=auto-speed"})).json()
+        self.assertEqual(browser["gpu"], "L4")
+        self.assertEqual((await self.send("speed-review", PAID, gpu="auto")).status, 409)
+        await self.decide(path, csrf, "approve")
+        receipt = await (await self.send("speed-review", PAID, gpu="auto-speed")).json()
+        self.assertEqual(receipt["gpu"], "L4")
+        self.assertIn("速度優先", receipt["gpu_reason"])
+        self.assertEqual(await (await self.send("speed-review", PAID, gpu="auto-speed")).json(), receipt)
 
     async def test_disconnected_cloud_node_is_removed_before_local_execution(self):
         defs = {k: {**d, "output_node": False} for k, d in DEFS.items()}
