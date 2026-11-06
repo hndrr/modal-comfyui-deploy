@@ -1,7 +1,7 @@
 import unittest
 
-from comfy_split.config import NODE_PACKS, Settings
-from comfy_split.extension_sources import INTEGRATIONS, LEGACY
+from comfy_split.config import Settings
+from comfy_split.extension_sources import EXTENSIONS, INTEGRATIONS, enabled_sources
 
 PLAIN = Settings().environment()
 ADAPTER = next(iter(INTEGRATIONS.values()))
@@ -9,17 +9,24 @@ ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
 
 
 class SettingsTests(unittest.TestCase):
-    def test_new_settings_override_legacy_individually_including_empty(self):
+    def test_settings_require_explicit_selection(self):
         self.assertEqual(Settings.read({}), Settings())
-        old = {LEGACY["mode_env"]: "on"}
-        self.assertEqual(Settings.read(old).node_packs, tuple(NODE_PACKS))
-        self.assertEqual(Settings.read({**old, **PLAIN}), Settings())
-        self.assertEqual(Settings.read({**old, "SPLIT_EXTENSIONS": ""}).extensions, ())
+        self.assertEqual(Settings.read(PLAIN), Settings())
+        ambient = Settings.read({"SPLIT_EXTENSIONS": "ambient"})
+        self.assertEqual(ambient, Settings(extensions=("ambient",)))
+        self.assertEqual(enabled_sources(ambient), [("ambient", EXTENSIONS["ambient"])])
         for key, value in (("SPLIT_EXTENSIONS", "typo"), ("SPLIT_NODE_PACKS", "typo"),
-                           (ADAPTER["setting"], "yes"), (LEGACY["mode_env"], "of")):
+                           (ADAPTER["setting"], "yes")):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 Settings.read({key: value})
-        self.assertEqual(Settings.read({LEGACY["mode_env"]: " ON "}).node_packs, tuple(NODE_PACKS))
+
+    def test_removed_ambient_mode_is_ignored(self):
+        for value in ("on", " ON ", "off", "of"):
+            with self.subTest(value=value):
+                old = {"COMFYUI_AMBIENT_MODE": value}
+                self.assertEqual(Settings.read(old), Settings())
+                self.assertEqual(Settings.read({**old, "SPLIT_EXTENSIONS": "ambient"}),
+                                 Settings(extensions=("ambient",)))
 
     def test_node_packs_and_adapters_do_not_enable_extensions_or_unrelated_secrets(self):
         env = {"SPLIT_NODE_PACKS": "gemini", ADAPTER["setting"]: "on",

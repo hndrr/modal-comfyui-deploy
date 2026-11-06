@@ -13,8 +13,6 @@ guarded_routes = ["/ambient/workflows", "/ambient/executions", "/ambient/library
 
 # Read compatibility for existing deployments; never rewrite or delete data.
 [legacy]
-mode_env = "COMFYUI_AMBIENT_MODE"
-extensions = ["ambient"]
 node_directory = "ambient_nodes"
 node_manifest = "ambient-nodes.json"
 
