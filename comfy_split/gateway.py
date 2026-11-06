@@ -411,6 +411,7 @@ class Controller:
                 break
 
     async def relay_event(self, record, event):
+        """Relay worker progress while deferring output notifications until files are durable."""
         for extension in self.plugins:
             hook = getattr(extension, "worker_event", None)
             if hook and await hook(record, event):

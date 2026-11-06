@@ -12,6 +12,7 @@ from packaging.utils import canonicalize_name
 
 
 def wheel_roots():
+    """Yield packages installed from explicit wheel URLs or local wheel files."""
     # The base installs its GPU wheels from explicit URLs and local wheel files.
     # pip records both in PEP 610 metadata; no second list of wheel names to maintain.
     for dist in distributions():
@@ -21,6 +22,7 @@ def wheel_roots():
 
 
 def wheel_pins(roots, lookup=distribution):
+    """Pin base wheels and their active transitive requirements, including extras."""
     pending = [(canonicalize_name(root), "") for root in roots]
     if not pending:
         raise RuntimeError("No base wheel origins found; refusing to install split dependencies")
@@ -43,6 +45,7 @@ def wheel_pins(roots, lookup=distribution):
 
 
 def core_pins(requirements, names=("comfy-kitchen", "comfyui-frontend-package")):
+    """Require active exact pins for protected packages while leaving other lines to pip."""
     pins = {}
     for line in re.sub(r"\\\r?\n", "", requirements).splitlines():
         line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
@@ -65,6 +68,7 @@ def core_pins(requirements, names=("comfy-kitchen", "comfyui-frontend-package"))
 
 
 def build_constraints(requirements, manager_requirements):
+    """Combine the installed wheel closure with the selected release's core and Manager pins."""
     return [*wheel_pins(wheel_roots()), *core_pins(requirements),
             *core_pins(manager_requirements, ("comfyui-manager",))]
 

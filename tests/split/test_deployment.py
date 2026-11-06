@@ -25,6 +25,7 @@ ADAPTER_SECRET, ADAPTER_TOKEN = ADAPTER["secrets"][0]
 
 class DeploymentTests(unittest.TestCase):
     def test_gpu_verification_uses_dotenv_revision_without_overriding_shell(self):
+        """Verify fresh imports use the dotenv SHA while preserving a shell override."""
         script = '''
 import os, runpy, sys
 from io import StringIO
@@ -51,6 +52,7 @@ with (
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_plain_deployment_never_imports_or_bundles_extensions_or_requests_secrets(self):
+        """Keep the plain image independent of optional integrations and their credentials."""
         script = '''
 import importlib.abc, json, runpy, sys
 from unittest.mock import patch
@@ -82,6 +84,7 @@ print(json.dumps({'standalone': True}))
         self.assertIn('"standalone": true', result.stdout)
 
     def test_named_provider_secrets_do_not_capture_local_keys(self):
+        """Include only enabled providers' named secrets, never local credential values."""
         import modal
 
         import comfyapp  # Load shared configuration before spying on this app's secrets.
@@ -122,6 +125,7 @@ print(json.dumps({'standalone': True}))
                 self.assertEqual(app["provider_secrets"], [])
 
     def test_container_import_preserves_named_secret_dependencies(self):
+        """Preserve release and secret identities at cold start while allowing a new deployment."""
         import modal
 
         import comfyapp
@@ -136,6 +140,7 @@ print(json.dumps({'standalone': True}))
             return original(image, values)
 
         settings = {**Settings(node_packs=tuple(NODE_PACKS), integrations=tuple(INTEGRATIONS)).environment(),
+                    REVISION_ENV: "",
                     "GITHUB_SECRET_NAME": "private-repos",
                     "GEMINI_SECRET_NAME": "provider-a", "TYPESAFE_SECRET_NAME": "",
                     "OPENROUTER_SECRET_NAME": "provider-b", ADAPTER_SECRET: "adapter",
@@ -181,6 +186,7 @@ print(json.dumps({'standalone': True}))
                 self.assertTrue(source["factory"])
 
     def test_selected_packages_share_build_path_and_limit_runtime_credentials(self):
+        """Install selected private packages at immutable revisions with only their required secrets."""
         import modal
 
         import comfyapp  # noqa: F401 - initialize the base image before spying on split's install

@@ -52,6 +52,8 @@ wheel の依存は NumPy、Pillow、setuptools なども含めて固定します
 
 既存の保存済み venv は再デプロイ時に書き換わりません。新しく固定対象になった依存を venv 内で上書きしていると、「ノード更新を反映」や自動更新の検証が失敗します。失敗した候補は採用されず、有効環境は維持されます。
 
+フロントエンド・Manager・comfy-kitchen・SageAttention は、CPU/GPU ともにイメージの `/opt/split-core` を優先して読み込みます。保存済み venv に旧版が残っていても、これらはイメージ側の固定版を使います。
+
 1. Manager で候補環境を作り、検証エラーに出るパッケージを確認します。
 2. CPU コンテナで候補の `venv/bin/python -m pip show <PACKAGE>` を実行し、`Location` が候補の venv 内であることを確認します。その候補だけで `venv/bin/python -m pip uninstall <PACKAGE>` を行うと、`--system-site-packages` によりイメージ側の版が使われます。有効環境やイメージ自体のパッケージは削除しません。
 3. 同じ候補の Python で `-m comfy_split.check_environment` を実行し、Manager の「ノード更新を反映」で通常の CPU/GPU 検証を通してから採用します。
