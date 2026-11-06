@@ -59,6 +59,8 @@ wheel の依存は NumPy、Pillow、setuptools なども含めて固定します
 3. 同じ候補の Python で `-m comfy_split.check_environment` を実行し、Manager の「ノード更新を反映」で通常の CPU/GPU 検証を通してから採用します。
 4. ノード自体が旧版を要求する場合は、候補内で対応版へ更新するか、その候補を破棄します。本体更新前の構成へ戻す場合は、既知の SHA と元のイメージ定義を使って再デプロイします。
 
+`pip check` が版の競合ではなく依存の不足を報告する場合もあります。以前のイメージから継承していた依存が、新しいイメージに含まれなくなった場合です。エラーに示された要求を候補の `venv/bin/python -m pip install -c /opt/split-constraints.txt '<REQUIREMENT>'` で補い、手順3の検証を通してください。
+
 ### ブラウザからの接続（Cloudflare Access）
 
 接続先はデプロイ出力に表示される `ui` URL です。
