@@ -34,13 +34,28 @@ class MeasuredRoutingTests(unittest.TestCase):
                 for key, node in graph.items()}
         for choice in ("auto", "auto-speed"):
             self.assertEqual(select_gpu(choice, executable_graph(graph, defs), defs)["gpu"], DEFAULT)
-            self.assertEqual(select_gpu(choice, executable_graph(graph, defs, ["2"]), defs)["gpu"], "L4")
+            self.assertEqual(select_gpu(choice, executable_graph(graph, defs, ["2"]), defs)["gpu"], "CPU")
 
     def test_encoded_video_io_is_light_but_frame_processing_is_unmeasured(self):
         graph = {"1": {"class_type": "LoadVideo", "inputs": {"file": "movie.mp4"}},
                  "2": {"class_type": "SaveVideo", "inputs": {"video": ["1", 0], "format": "auto"}}}
         definitions = {name: {"python_module": "comfy_extras.nodes_video"}
                        for name in ("LoadVideo", "SaveVideo", "GetVideoComponents")}
-        self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], "L4")
+        self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], "CPU")
         graph["3"] = {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}}
         self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], DEFAULT)
+
+    def test_cpu_precedes_manual_gpu_but_requires_separate_registration(self):
+        graph = {"1": {"class_type": "GeminiNode", "inputs": {"prompt": "hello"}}}
+        defs = {"GeminiNode": {"python_module": "comfy_api_nodes.nodes_gemini", "api_node": True}}
+        for choice in ("auto", "auto-speed", "L4", "L40S", DEFAULT):
+            self.assertEqual(select_gpu(choice, graph, defs)["gpu"], "CPU")
+        # Neither API_NODE nor a familiar class name alone confers CPU eligibility.
+        for name, module in (("NewAPINode", "comfy_api_nodes.nodes_gemini"), ("GeminiNode", "custom_nodes.other")):
+            unregistered = {"1": {"class_type": name, "inputs": {}}}
+            definitions = {name: {"python_module": module, "api_node": True}}
+            selected = select_gpu("auto", unregistered, definitions)
+            self.assertEqual(selected["gpu"], DEFAULT)
+            self.assertIn(name, selected["gpu_reason"])
+            self.assertEqual(select_gpu("CPU", unregistered, definitions)["gpu"], "CPU")
+            self.assertEqual(select_gpu("L40S", unregistered, definitions)["gpu"], "L40S")

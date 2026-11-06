@@ -39,10 +39,11 @@ def manager_path(path):
 
 class Controller:
     def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
-                 warmed_cpu=None, extensions=None, other_workers=None):
+                 warmed_cpu=None, extensions=None, other_workers=None, cpu_worker=None):
         self.worker = worker  # Default worker exposed to existing controller extensions.
         self.session_gpu = os.environ.get("SPLIT_SESSION_GPU", gpu.DEFAULT)
         self.workers = {self.session_gpu: worker, **(other_workers or {})}
+        self.cpu_worker = cpu_worker
         self.events, self.commands, self.volumes = events, commands, volumes
         self.journal = Journal(root)
         self.lock = asyncio.Lock()
@@ -73,7 +74,7 @@ class Controller:
         if time.monotonic() < self.cleanup_due:
             return
         self.cleanup_due = time.monotonic() + 5
-        stats = await gpu.pool_stats(self.workers.values())
+        stats = await gpu.pool_stats([*self.workers.values(), *([self.cpu_worker] if self.cpu_worker else [])])
         if any(s.num_total_runners or s.backlog for s in stats):
             return
         data = self.journal.data
@@ -177,17 +178,18 @@ class Controller:
             result = dict(self.gpu_stats)
         data = self.journal.data
         count = result["containers"]
+        gpu_busy = any(j["status"] in ACTIVE and j.get("gpu") != "CPU" for j in data["jobs"].values())
         if count is None:
             phase = "unknown"
         elif count == 0:
-            phase = "starting" if self.journal.busy() or data["session"] else "stopped"
+            phase = "starting" if gpu_busy or data["session"] else "stopped"
         elif data["session"] and data["session"].get("stopping"):
             phase = "stopping"
         elif data["mode"] == "legacy":
             phase = "legacy"
         elif data["session"]:
             phase = "maintenance"
-        elif self.journal.busy():
+        elif gpu_busy:
             phase = "active"
         else:
             phase = "stopping"
@@ -345,9 +347,10 @@ class Controller:
         target = record.get("gpu", self.session_gpu)
         # The prior job may still own a warm container. Return to the dispatcher
         # while it scales down so cancellation and status stay responsive.
-        others = await gpu.pool_stats(w for device, w in self.workers.items() if device != target)
-        if any(s.num_total_runners or s.backlog for s in others):
-            return
+        if target != "CPU":
+            others = await gpu.pool_stats(w for device, w in self.workers.items() if device != target)
+            if any(s.num_total_runners or s.backlog for s in others):
+                return
         if operation == "generate":
             await self.volumes["input"].commit.aio()
             await self.volumes["models"].reload.aio()
@@ -375,7 +378,8 @@ class Controller:
             if key in record:
                 spec[key] = record[key]
         spec.update(extra)
-        call = await self.workers[target].spawn.aio(spec)
+        worker = self.cpu_worker if target == "CPU" else self.workers[target]
+        call = await worker.spawn.aio(spec)
         record["call_id"] = call.object_id
         record["status"] = "running"
         await self.persist()
@@ -807,20 +811,7 @@ class Controller:
         return body
 
     async def select_gpu(self, requested, graph, definitions):
-        selection = gpu.select_gpu(requested, graph, definitions)
-        if requested != "auto-speed" or selection["gpu"] != "L4":
-            return selection
-        # Immediate admissions can reuse a GPU observed running at admission.
-        # Speed-priority API/I/O jobs need no model-specific GPU memory.
-        try:
-            stats = await gpu.pool_stats(self.workers.values())
-        except Exception:
-            log.warning("Could not check for a warm GPU; using graph selection", exc_info=True)
-            return selection
-        running = [device for device, stat in zip(self.workers, stats) if stat.num_total_runners]
-        if len(running) == 1 and running[0] in gpu.WORKERS:
-            selection = {"gpu": running[0], "gpu_reason": "速度優先：起動済みGPUで外部API・素材入出力を実行"}
-        return selection
+        return gpu.select_gpu(requested, graph, definitions)
 
     def admit_prompt(self, body, request_id, selection=None):
         existing = request_id and any(
@@ -987,7 +978,7 @@ class Controller:
                     if not isinstance(graph, dict) or not graph:
                         raise ValueError("prompt must be a non-empty object")
                     definitions = {}
-                    if requested not in gpu.WORKERS:
+                    if requested != "CPU":
                         definitions = json.loads((await self.objects("/object_info", graph=graph)).body)
                         try:
                             graph = mcp_policy.executable_graph(graph, definitions, body.get("partial_execution_targets"))
@@ -1162,7 +1153,7 @@ def make_controller(volumes=None, *, warmed_cpu=None):
         modal.Queue.from_name(app_name + "-events", create_if_missing=True),
         modal.Queue.from_name(app_name + "-commands", create_if_missing=True), volumes,
         ui_function=modal.Function.from_name(app_name, "ui"), warmed_cpu=warmed_cpu,
-        other_workers=workers)
+        other_workers=workers, cpu_worker=modal.Function.from_name(app_name, "cpu_worker"))
 
 
 if __name__ == "__main__":

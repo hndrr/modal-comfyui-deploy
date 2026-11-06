@@ -253,7 +253,9 @@ class ComfyProcess:
         environment.pop("COMFY_API_KEY", None)
         # Custom nodes, including unreviewed candidate packs, must not bypass the gateway boundary.
         environment.pop(GATEWAY_TOKEN_ENV, None)
-        environment.update(SPLIT_CPU="1" if cpu else "0", SPLIT_INTEGRATION="1",
+        # CPU device selection and UI/candidate execution prohibition are separate.
+        guarded = self.role in {"cpu", "candidate"}
+        environment.update(SPLIT_CPU="1" if guarded else "0", SPLIT_INTEGRATION="1",
                            PYTHONPATH="/opt/split:" + environment.get("PYTHONPATH", ""),
                            VIRTUAL_ENV=str(source / "venv"),
                            PATH=str(source / "venv/bin") + ":" + environment["PATH"])
@@ -276,8 +278,10 @@ class ComfyProcess:
                                 if catalog_response.status != 200:
                                     raise RuntimeError("Modal bridge extension did not load")
                                 metadata = await catalog_response.json()
-                                if cpu and not metadata.get("cpu_guard"):
+                                if guarded and not metadata.get("cpu_guard"):
                                     raise RuntimeError("CPU execution guard did not load")
+                                if not guarded and metadata.get("cpu_guard"):
+                                    raise RuntimeError("Execution worker unexpectedly has the CPU guard")
                             self.version = version
                             self.dependencies = metadata.get("dependencies", {})
                             print(json.dumps({"event": "comfy_ready", "role": self.role,

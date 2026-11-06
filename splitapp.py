@@ -213,7 +213,7 @@ import_model = app.function(image=model_image, min_containers=0, max_containers=
 )(import_model_file)
 
 
-# All three pools run the same code and mount the same versioned environment.
+# Execution pools share code, credentials and the versioned environment.
 worker_options = dict(
     image=image,
     secrets=provider_secrets + ([modal.Secret.from_name(billing_secret, required_keys=["COMFY_API_KEY"])]
@@ -227,7 +227,7 @@ worker_options = dict(
 )
 
 
-async def run_gpu(spec):
+async def run_job(spec):
     from comfy_split.worker import run_worker
 
     return await run_worker(spec, events, commands, volumes)
@@ -235,23 +235,29 @@ async def run_gpu(spec):
 
 @app.function(gpu=session_gpu, **worker_options)
 async def gpu_worker(spec):
-    return await run_gpu(spec)
+    return await run_job(spec)
 
 
 if session_gpu != gpu.DEFAULT:
     @app.function(gpu=gpu.DEFAULT, **worker_options)
     async def gpu_worker_rtx(spec):
-        return await run_gpu(spec)
+        return await run_job(spec)
 
 
 @app.function(gpu="L4", **worker_options)
 async def gpu_worker_l4(spec):
-    return await run_gpu(spec)
+    return await run_job(spec)
 
 
 @app.function(gpu="L40S", **worker_options)
 async def gpu_worker_l40s(spec):
-    return await run_gpu(spec)
+    return await run_job(spec)
+
+
+@app.function(**{**worker_options, "image": image.env({"SPLIT_WORKER_CPU": "1"}),
+                 "cpu": 2, "memory": 8192})
+async def cpu_worker(spec):
+    return await run_job(spec)
 
 
 @app.function(

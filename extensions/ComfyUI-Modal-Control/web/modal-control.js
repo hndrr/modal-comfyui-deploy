@@ -38,7 +38,7 @@ app.registerExtension({
     const gpuDescription = document.createElement("p");
     gpuDescription.setAttribute("role", "status");
     const gpuLabel = document.createElement("label");
-    gpuLabel.textContent = "次の生成に使うGPU";
+    gpuLabel.textContent = "ローカル生成に使うGPU";
     const choice = document.createElement("select");
     for (const [value, title] of [["auto", "自動（料金優先）"], ["auto-speed", "自動（速度優先）"],
       ["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]]) {
@@ -54,6 +54,9 @@ app.registerExtension({
       document.cookie = `split_gpu=${choice.value}; Path=/; SameSite=Strict; Max-Age=31536000`;
     };
     gpuLabel.append(choice);
+    const routingHint = document.createElement("p");
+    routingHint.className = "modal-hint";
+    routingHint.textContent = "CPU対応済みのAPIと軽い読み込み・保存・プレビューだけの場合は、GPUの指定にかかわらずCPUで実行します。";
     const selection = document.createElement("p");
     selection.setAttribute("role", "status");
     let updateIndicator = () => {};
@@ -99,8 +102,9 @@ app.registerExtension({
       showGpu(state.gpu);
       syncChoice();
       gpuLabel.hidden = state.mode !== "split";
+      routingHint.hidden = state.mode !== "split";
       const latest = state.gpu?.latest_selection;
-      selection.textContent = latest ? `直近の受付：${latest.gpu}（${latest.gpu_reason}）` : "";
+      selection.textContent = latest ? `直近の実行先：${latest.gpu}（${latest.gpu_reason}）` : "";
       description.textContent = state.mode === "legacy"
         ? "常時起動：生成していない間もGPUを使います。"
         : "生成時だけ起動：生成が終わると自動で停止します。CPU・ストレージ等の料金は別途発生します。";
@@ -147,7 +151,7 @@ app.registerExtension({
     });
     updates.append(apply, discard);
     advanced.append(updates);
-    panel.append(heading, button, gpuDescription, description, gpuLabel, selection, error, advanced);
+    panel.append(heading, button, gpuDescription, description, gpuLabel, routingHint, selection, error, advanced);
     registerGpuSidebar((element) => element.replaceChildren(panel));
     updateIndicator = registerGpuIndicator();
     const poll = async () => {

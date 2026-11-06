@@ -1,4 +1,4 @@
-"""Shared generation, validation and legacy execution for split GPU workers."""
+"""Shared generation for CPU/GPU workers; validation and legacy stay on GPU."""
 
 import asyncio
 import hmac
@@ -18,7 +18,8 @@ from comfy_split.runtime import ComfyProcess
 from comfy_split.state import write_json
 from comfy_split.storage import JOBS, STATE, USER
 
-process = ComfyProcess("gpu", 8188)
+CPU_WORKER = os.environ.get("SPLIT_WORKER_CPU") == "1"
+process = ComfyProcess("cpu_worker" if CPU_WORKER else "gpu", 8188)
 
 
 async def run_worker(spec, events, commands, volumes):
@@ -66,15 +67,15 @@ async def run_worker(spec, events, commands, volumes):
             if started_path.exists():
                 # Modal can replay inputs after preemption independently of the
                 # configured application retries. Never rerun ambiguous effects.
-                result = {"status": "unknown", "error": "GPUの実行開始記録がありますが結果がありません。自動再実行はしません。"}
+                result = {"status": "unknown", "error": "実行開始記録がありますが結果がありません。自動再実行はしません。"}
                 write_json(result_path, result)
                 await volumes["data"].commit.aio()
                 return result
             write_json(started_path, {"id": session_id, "at": time.time(),
                                      "environment": spec["environment"], "operation": spec["operation"]})
             await volumes["data"].commit.aio()
-            await process.start(spec["environment"])
-            print(json.dumps({"event": "gpu_ready", "id": session_id,
+            await process.start(spec["environment"], cpu=CPU_WORKER)
+            print(json.dumps({"event": "cpu_worker_ready" if CPU_WORKER else "gpu_ready", "id": session_id,
                               "seconds": time.monotonic() - started}))
             if spec["operation"] == "validate":
                 catalog = await process.catalog(client)
@@ -106,7 +107,7 @@ async def run_worker(spec, events, commands, volumes):
         write_json(result_path, result)
         await volumes["data"].commit.aio()
         await emit({"type": "result_ready"})
-        print(json.dumps({"event": "gpu_finished", "id": session_id,
+        print(json.dumps({"event": "cpu_worker_finished" if CPU_WORKER else "gpu_finished", "id": session_id,
                           "seconds": result["seconds"], "status": result["status"]}))
         return result
 

@@ -37,7 +37,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
             for mode in ("on", "off", "gemini"):
                 packs = tuple(NODE_PACKS) if mode == "on" else (("gemini",) if mode == "gemini" else ())
                 selection = Settings(node_packs=packs).environment()
-                for role in ("cpu", "gpu"):
+                for role in ("cpu", "candidate", "gpu", "cpu_worker"):
                     process = runtime.ComfyProcess(role, 8187)
                     process.root = root / f"{mode}-{role}"
                     process.temp_root = process.root / "temporary"
@@ -52,8 +52,11 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                                                 **provider_keys}), \
                          patch.object(runtime.asyncio, "create_subprocess_exec", launch), \
                          self.assertRaisesRegex(RuntimeError, "captured launch"):
-                        await process.start("env-snapshot", cpu=role == "cpu")
+                        await process.start("env-snapshot", cpu=role != "gpu")
                     command = launch.call_args.args
+                    self.assertEqual("--cpu" in command, role != "gpu")
+                    self.assertEqual(launch.call_args.kwargs["env"]["SPLIT_CPU"],
+                                     "1" if role in {"cpu", "candidate"} else "0")
                     self.assertNotIn(node_packs.TOKEN_ENV, launch.call_args.kwargs["env"])
                     self.assertNotIn(GATEWAY_TOKEN_ENV, launch.call_args.kwargs["env"])
                     self.assertEqual({key: launch.call_args.kwargs["env"][key] for key in provider_keys},
