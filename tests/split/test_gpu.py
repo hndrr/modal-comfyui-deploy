@@ -67,11 +67,32 @@ class MeasuredRoutingTests(unittest.TestCase):
             self.assertEqual(select_gpu("auto", graph, definitions)["gpu"], DEFAULT)
 
     def test_unverified_providers_stay_on_gpu_until_cpu_registration(self):
-        graph = {"1": {"class_type": "GeminiNode", "inputs": {}}}
-        defs = {"GeminiNode": {"python_module": "comfy_api_nodes.nodes_gemini", "api_node": True}}
-        self.assertEqual(select_gpu("auto", graph, defs)["gpu"], DEFAULT)
+        graph = {"1": {"class_type": "GeminiNode", "inputs": {}},
+                 "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}}}
+        defs = {"GeminiNode": {"python_module": "comfy_api_nodes.nodes_gemini", "api_node": True},
+                "SaveImage": {"python_module": "nodes"}}
+        for choice in ("auto", "auto-speed"):
+            selected = select_gpu(choice, graph, defs)
+            self.assertEqual(selected["gpu"], "L4")
+            self.assertIn("CPU対応未登録または対象条件外：GeminiNode", selected["gpu_reason"])
         self.assertEqual(select_gpu("L40S", graph, defs)["gpu"], "L40S")
         self.assertEqual(select_gpu("CPU", graph, defs)["gpu"], "CPU")
+        for name, info, inputs in (
+            ("EmptyImage", {"python_module": "nodes"}, {"width": 8192, "height": 8192, "batch_size": 1}),
+            ("ImageUpscaleWithModel", {"python_module": "comfy_extras.nodes_upscale_model"}, {}),
+            ("NewAPI", {"python_module": "comfy_api_nodes.nodes_new", "api_node": True}, {}),
+        ):
+            mixed = {**graph, "3": {"class_type": name, "inputs": inputs}}
+            for choice in ("auto", "auto-speed"):
+                self.assertEqual(select_gpu(choice, mixed, {**defs, name: info})["gpu"], DEFAULT)
+
+        # GPU catalog nodes and the unverified custom audio saver stay on L4,
+        # without entering the independently maintained CPU registry.
+        audio = {"1": {"class_type": "GeminiToolsSaveAudio", "inputs": {}}}
+        self.assertEqual(select_gpu("auto", audio, {"GeminiToolsSaveAudio":
+            {"python_module": "custom_nodes.comfyui-geminitools"}})["gpu"], "L4")
+        defs["GeminiNode"]["_split_cpu_imported"] = False
+        self.assertEqual(select_gpu("auto", graph, defs)["gpu"], "L4")
 
     def test_missing_definitions_and_bounded_unsupported_reasons(self):
         graph = {str(i): {"class_type": f"Node{i}", "inputs": {}} for i in range(25)}

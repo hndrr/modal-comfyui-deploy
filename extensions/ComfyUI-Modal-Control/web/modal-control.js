@@ -38,7 +38,7 @@ app.registerExtension({
     const gpuDescription = document.createElement("p");
     gpuDescription.setAttribute("role", "status");
     const gpuLabel = document.createElement("label");
-    gpuLabel.textContent = "CPU対象外の処理に使うGPU";
+    gpuLabel.textContent = "GPUの選び方";
     const choice = document.createElement("select");
     for (const [value, title] of [["auto", "自動（料金優先）"], ["auto-speed", "自動（速度優先）"],
       ["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]]) {
@@ -56,7 +56,7 @@ app.registerExtension({
     gpuLabel.append(choice);
     const routingHint = document.createElement("p");
     routingHint.className = "modal-hint";
-    routingHint.textContent = "CPU対応済みのAPIと軽い入出力だけならCPUを優先します。ローカル生成・CPU対応未登録のAPIには選択したGPUを使い、GPU料金が発生します。";
+    routingHint.textContent = "CPU対応済みのAPIと軽い入出力だけなら通常はCPUを使います。速度優先は起動中GPUを再利用します（承認待ちがない場合）。ローカル生成・CPU未登録APIなどのGPU実行中はGPU料金が発生します。";
     const selection = document.createElement("p");
     selection.setAttribute("role", "status");
     let updateIndicator = () => {};
