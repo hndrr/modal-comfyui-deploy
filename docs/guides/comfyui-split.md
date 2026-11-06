@@ -36,7 +36,7 @@ ComfyUI 本体は、デプロイ時に [公式が Latest に指定した安定�
 
 GPU 用の wheel と、それらがこの環境で必要とする依存パッケージは、ベースイメージにインストールされた版を維持します。wheel のメタデータから依存をたどるので、PyTorch・SageAttention に加え、Triton や cuDNN なども対象になります。ComfyUI やカスタムノードの依存関係がこれらと衝突する場合、またはリリースを取得できない場合はデプロイが失敗し、稼働中のデプロイはそのまま残ります。
 
-既知の版への復旧、本体を更新しない再デプロイ、GPU 検証では、デプロイログの `Split ComfyUI revision` に記録された SHA を指定します。指定時は GitHub のリリース API を呼びません。
+既知の版への復旧、本体を更新しない再デプロイ、GPU 検証では、デプロイログの `Split ComfyUI revision` に記録された SHA を指定します。指定時は GitHub のリリース API を呼びません。通常のデプロイでは、未設定・空欄・空白のみなら Latest を選びます。GPU 検証では引き続き SHA の指定が必須です。
 
 ```bash
 SPLIT_COMFYUI_REVISION=<COMFYUI_COMMIT_SHA> scripts/modal.sh deploy splitapp.py
