@@ -10,6 +10,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
@@ -804,6 +805,22 @@ class Controller:
         check_requirements(body)
         return body
 
+    async def select_gpu(self, requested, graph, definitions):
+        selection = gpu.select_gpu(requested, graph, definitions)
+        if requested != "auto-speed" or selection["gpu"] != "L4":
+            return selection
+        # Pin the observed warm GPU at admission, including pending approvals.
+        # Speed-priority API/I/O jobs need no model-specific GPU memory.
+        try:
+            stats = await gpu.pool_stats(self.workers.values())
+        except Exception:
+            log.warning("Could not check for a warm GPU; using graph selection", exc_info=True)
+            return selection
+        running = [device for device, stat in zip(self.workers, stats) if stat.num_total_runners]
+        if len(running) == 1 and running[0] in gpu.WORKERS:
+            selection = {"gpu": running[0], "gpu_reason": "速度優先：起動済みGPUで外部API・素材入出力を実行"}
+        return selection
+
     def admit_prompt(self, body, request_id, selection=None):
         existing = request_id and any(
             j.get("request_id") == request_id
@@ -962,14 +979,15 @@ class Controller:
                         )
                     if not isinstance(body, dict):
                         raise ValueError("Prompt body must be an object")
-                    requested = gpu.request_gpu(body.pop("gpu", request.cookies.get("split_gpu", "auto")))
+                    saved_gpu = request.cookies.get("split_gpu", "auto")
+                    requested = gpu.request_gpu(body.pop("gpu", saved_gpu if saved_gpu in gpu.CHOICES else "auto"))
                     body = self.prepare_prompt(body)
                     graph = body.get("prompt")
                     if not isinstance(graph, dict) or not graph:
                         raise ValueError("prompt must be a non-empty object")
                     definitions = {}
                     if requested not in gpu.WORKERS:
-                        definitions = json.loads((await self.objects("/object_info")).body)
+                        definitions = json.loads((await self.objects("/object_info", graph=graph)).body)
                         try:
                             graph = mcp_policy.executable_graph(graph, definitions, body.get("partial_execution_targets"))
                         except (TypeError, ValueError):
@@ -977,7 +995,7 @@ class Controller:
                             definitions = {}
                     if requested != "auto":
                         body["gpu"] = requested
-                    selection = gpu.select_gpu(requested, graph, definitions)
+                    selection = await self.select_gpu(requested, graph, definitions)
                     job = self.admit_prompt(body, request_id, selection)
                     await self.commit_prompt()
                 await self.status()
@@ -1048,17 +1066,24 @@ class Controller:
         except (ValueError, TypeError) as error:
             return web.json_response({"error": str(error)}, status=409)
 
-    async def objects(self, path):
-        async with self.client.get(self.cpu.url + "/object_info") as response:
-            response.raise_for_status()
-            objects = await response.json()
+    async def objects(self, path, *, graph=None):
+        # Admission needs only the graph's definitions. Keep them live, without
+        # enumerating every unrelated node's dynamic model/file choices.
+        names = {node["class_type"] for node in graph.values()
+                 if isinstance(node, dict) and isinstance(node.get("class_type"), str)} if isinstance(graph, dict) else None
+        paths = ["/object_info/" + quote(name, safe="") for name in names] if names is not None else ["/object_info"]
+        objects = {}
+        for node_path in paths:
+            async with self.client.get(self.cpu.url + node_path) as response:
+                response.raise_for_status()
+                objects.update(await response.json())
         catalog_path = environment_path(self.journal.data["environment"]) / "catalog.json"
         if catalog_path.exists():
             catalog = json.loads(catalog_path.read_text())
             # Managed packs are CPU-importable and always use live definitions.
             # Old GPU catalogs must not resurrect removed or disabled node IDs.
             catalog["objects"] = {name: definition for name, definition in catalog["objects"].items()
-                                  if not node_packs.is_managed_node(definition)}
+                                  if (names is None or name in names) and not node_packs.is_managed_node(definition)}
             # Live CPU definitions take precedence so model/file choices stay fresh.
             for name, sections in catalog.get("choice_sources", {}).items():
                 if name in objects or name not in catalog["objects"]:
@@ -1084,7 +1109,6 @@ class Controller:
             for name, root in json.loads(catalog_path.read_text())["extensions"].items():
                 directory = self.extension_root(root)
                 if directory:
-                    from urllib.parse import quote
                     items.extend("/extensions/" + quote(name, safe="") + "/" + p.relative_to(directory).as_posix()
                                  for p in directory.rglob("*.js"))
         return web.json_response(list(dict.fromkeys(items)))

@@ -48,7 +48,9 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.dict(MOUNTS, input=str(self.input)))
         self.enterContext(patch.dict("os.environ", SPLIT_COMFY_BILLING_ENABLED="1"))
         self.control = Controller(
-            SimpleNamespace(spawn=remote_mock()), None, None, volume_mocks(), root, extensions=[]
+            SimpleNamespace(spawn=remote_mock(),
+                            get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0))),
+            None, None, volume_mocks(), root, extensions=[]
         )
         self.control.objects = AsyncMock(return_value=web.json_response(DEFS))
         app = web.Application()
@@ -163,6 +165,36 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receipt["gpu"], "L4")
         self.assertIn("速度優先", receipt["gpu_reason"])
         self.assertEqual(await (await self.send("speed-review", PAID, gpu="auto-speed")).json(), receipt)
+
+    async def test_speed_reuses_warm_gpu_and_pins_it_through_external_approval(self):
+        stats = self.control.worker.get_current_stats.aio
+        stats.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
+        browser = await (await self.client.post("/api/prompt", json={"prompt": PAID},
+            headers={"Cookie": "split_gpu=auto-speed"})).json()
+        self.assertEqual(browser["gpu"], "RTX-PRO-6000")
+        path, csrf, html = await self.pending("warm-api", PAID, gpu="auto-speed")
+        self.assertIn("RTX-PRO-6000", html)
+        self.assertIn("起動済み", html)
+        self.assertEqual((await (await self.send("cost-api", PAID)).json())["gpu"], "L4")
+        self.assertEqual((await (await self.send("manual-api", PAID, gpu="L40S")).json())["gpu"], "L40S")
+        stats.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
+        await self.decide(path, csrf, "approve")
+        receipt = await (await self.send("warm-api", PAID, gpu="auto-speed")).json()
+        self.assertEqual(receipt["gpu"], "RTX-PRO-6000")
+        self.assertEqual(receipt["gpu_reason"], browser["gpu_reason"])
+        self.assertEqual((await self.send("warm-api", PAID, gpu="auto")).status, 409)
+        stats.side_effect = TimeoutError("unavailable")
+        with self.assertLogs("comfy_split.gateway", level="WARNING"):
+            fallback = await (await self.send("stats-down", PAID, gpu="auto-speed")).json()
+        self.assertEqual(fallback["gpu"], "L4")
+        self.control.worker.spawn.aio.assert_not_awaited()
+
+    async def test_stale_cookie_falls_back_but_invalid_explicit_gpu_is_rejected(self):
+        browser = await (await self.client.post("/api/prompt", json={"prompt": PAID},
+            headers={"Cookie": "split_gpu=retired-choice"})).json()
+        self.assertEqual(browser["gpu"], "L4")
+        response = await self.client.post("/api/prompt", json={"prompt": PAID, "gpu": "retired-choice"})
+        self.assertEqual(response.status, 409)
 
     async def test_disconnected_cloud_node_is_removed_before_local_execution(self):
         defs = {k: {**d, "output_node": False} for k, d in DEFS.items()}

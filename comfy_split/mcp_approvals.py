@@ -109,10 +109,10 @@ async def submit(c, body, key):
             return web.json_response(c.receipt(job))
     prepared = c.prepare_prompt(copy.deepcopy(body))
     graph = prepared["prompt"]
-    definitions = json.loads((await c.objects("/object_info")).body)
+    definitions = json.loads((await c.objects("/object_info", graph=graph)).body)
     graph = prepared["prompt"] = policy.executable_graph(graph, definitions)
     calls, loaders = policy.plan(graph, definitions)
-    selection = gpu.select_gpu(requested, graph, definitions)
+    selection = await c.select_gpu(requested, graph, definitions)
     if not calls:
         job = c.admit_prompt(prepared, key, selection)
         job.update(mcp_guard=policy.execution_guard(prepared, [], []), mcp_digest=digest)
