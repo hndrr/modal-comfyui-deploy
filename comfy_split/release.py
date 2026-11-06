@@ -22,8 +22,8 @@ def github_json(path):
 
 
 def comfy_revision(*, local):
-    sha = os.environ.get(REVISION_ENV)
-    if local and sha is None:
+    sha = os.environ.get(REVISION_ENV, "").strip()
+    if local and not sha:
         try:
             release = github_json("releases/latest")
             tag = release["tag_name"]
@@ -34,7 +34,10 @@ def comfy_revision(*, local):
             ref = quote(f"refs/tags/{tag}", safe="")
             sha = github_json(f"commits/{ref}")["sha"]
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise RuntimeError("Cannot resolve the latest stable ComfyUI release; retry deployment") from exc
+            raise RuntimeError(
+                "Cannot resolve the latest stable ComfyUI release; check GitHub access/token "
+                f"or set {REVISION_ENV} to a known commit SHA"
+            ) from exc
     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Missing or invalid split ComfyUI commit SHA")
     if local:
