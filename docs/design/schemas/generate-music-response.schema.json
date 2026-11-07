@@ -59,9 +59,9 @@
       "properties": {
         "duration_seconds": {
           "type": "number",
-          "exclusiveMinimum": 0,
           "maximum": 1000,
-          "description": "Resolved target or upper bound; edits use total output duration, not added duration. Not an assertion about actual output duration."
+          "description": "Resolved target or upper bound; edits use total output duration, not added duration. Not an assertion about actual output duration.",
+          "minimum": 1
         },
         "duration_semantics": {
           "enum": [
@@ -352,37 +352,129 @@
       "if": {
         "required": [
           "model"
-        ],
-        "properties": {
-          "model": {
-            "enum": [
-              "minimax-music-3",
-              "yue2-3b"
-            ]
-          }
-        }
+        ]
       },
       "then": {
-        "properties": {
-          "effective_parameters": {
+        "oneOf": [
+          {
             "properties": {
-              "duration_semantics": {
-                "const": "upper_bound"
+              "model": {
+                "enum": [
+                  "ace-step-1.5-xl-turbo",
+                  "ace-step-1.5-xl-base",
+                  "ace-step-1.5-xl-sft"
+                ]
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "reference",
+                  "extend",
+                  "repaint"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 1000
+                  },
+                  "duration_semantics": {
+                    "const": "target_length"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "yue2-3b"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "cover"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 900
+                  },
+                  "duration_semantics": {
+                    "const": "upper_bound"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "stable-audio-3-medium"
+              },
+              "operation": {
+                "enum": [
+                  "create"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 285
+                  },
+                  "duration_semantics": {
+                    "const": "target_length"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "stable-audio-3-small-music"
+              },
+              "operation": {
+                "enum": [
+                  "create"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 120
+                  },
+                  "duration_semantics": {
+                    "const": "target_length"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "minimax-music-3"
+              },
+              "operation": {
+                "enum": [
+                  "create"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 360
+                  },
+                  "duration_semantics": {
+                    "const": "upper_bound"
+                  }
+                }
               }
             }
           }
-        }
-      },
-      "else": {
-        "properties": {
-          "effective_parameters": {
-            "properties": {
-              "duration_semantics": {
-                "const": "target_length"
-              }
-            }
-          }
-        }
+        ]
       }
     },
     {
@@ -438,6 +530,33 @@
                   ]
                 }
               ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "enum": [
+              "create",
+              "reference",
+              "cover"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effective_parameters": {
+            "properties": {
+              "duration_seconds": {
+                "type": "integer"
+              }
             }
           }
         }

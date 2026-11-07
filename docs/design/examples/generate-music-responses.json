@@ -1,16 +1,18 @@
 {
   "description": "Design only. Each valid response is an independent scenario, not a chronological transition from one terminal state to another. No generation or failure injection has been performed. IDs and node numbers are illustrative.",
-  "input_example": "generate-music.json#direct-vocal-create",
+  "input_examples": "generate-music.json",
   "schema": "../schemas/generate-music-response.schema.json",
   "notes": [
     "通常の受付・再送例は既存のdirect-vocal-create入力例（MiniMax M3、seed 42、上限30秒）に対応する。同じIDを使う障害例は別々の仮定である。",
     "失敗理由・次の処理は説明用の外側の情報であり、MCP応答はresponseの内容のみ。",
     "unknownにprompt_idはない。acceptedかつjob_status unknownには元のprompt_idがある。",
-    "進捗・履歴ツールの応答形式は変更しない。通信再試行の動作保証には実装後の障害注入が必要。"
+    "進捗・履歴ツールの応答形式は変更しない。通信再試行の動作保証には実装後の障害注入が必要。",
+    "input_exampleは隣のgenerate-music.jsonのvalid内のname。argument_overridesがある例は、指定したトップレベルのキーを置き換えてから呼ぶ。"
   ],
   "valid": [
     {
       "name": "accepted-queued",
+      "input_example": "direct-vocal-create",
       "explanation": "入力例 direct-vocal-create の初回受付。グラフ・seedと受付記録の永続化が完了した。",
       "response": {
         "request_id": "example-direct-vocal-create",
@@ -203,7 +205,7 @@
           "issues": [
             {
               "node_id": "30",
-              "node_type": "SaveAudio",
+              "node_type": "SaveAudioAdvanced",
               "input": "audio",
               "code": "return_type_mismatch",
               "message": "接続元はLATENTを返しますが、この入力はAUDIOを要求します。"
@@ -247,7 +249,7 @@
           "issues": [
             {
               "node_id": "30",
-              "node_type": "SaveAudio",
+              "node_type": "SaveAudioAdvanced",
               "input": "audio",
               "code": "required_output_not_validated",
               "message": "予定した音声保存ノード30が検証済み出力リストに含まれていません。"
@@ -365,6 +367,110 @@
         }
       },
       "next_action": "入力schemaに合わせて修正する。"
+    },
+    {
+      "name": "extend-one-latent-frame",
+      "input_example": "direct-extend",
+      "argument_overrides": {
+        "request_id": "example-extend-one-frame",
+        "extend": {
+          "continue_at": 45,
+          "duration_seconds": 0.01
+        }
+      },
+      "explanation": "60秒の素材から45秒を保持し、0.01秒の正の延長は編集ノードの最小1フレーム（0.04秒）になる。受付時の目標長は45.04秒。",
+      "response": {
+        "request_id": "example-extend-one-frame",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000019",
+        "job_status": "queued",
+        "number": 19,
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "seed": 3022895268930686,
+        "effective_parameters": {
+          "duration_seconds": 45.04,
+          "duration_semantics": "target_length",
+          "bpm": 120,
+          "keyscale": "C major",
+          "timesignature": "4",
+          "language": "unknown"
+        },
+        "warnings": []
+      },
+      "next_action": "同じprompt_idで進捗を確認する。"
+    },
+    {
+      "name": "cover-duration-ceiling",
+      "input_example": "direct-melody-cover",
+      "explanation": "採譜カバーの受付時に返す60秒は上限。実際の保存尺は生成後に分かる。",
+      "response": {
+        "request_id": "example-direct-melody-cover",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000020",
+        "job_status": "queued",
+        "number": 20,
+        "model": "yue2-3b",
+        "operation": "cover",
+        "seed": 486807903298377,
+        "effective_parameters": {
+          "duration_seconds": 60,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      },
+      "next_action": "同じprompt_idで進捗を確認する。"
+    },
+    {
+      "name": "instrumental-target-length",
+      "input_example": "direct-instrumental-create",
+      "explanation": "Stable Audio 3 Mediumのインスト。省略されたseedはこのrequest_idに対して決定的に解決する。",
+      "response": {
+        "request_id": "example-direct-instrumental-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000021",
+        "job_status": "queued",
+        "number": 21,
+        "model": "stable-audio-3-medium",
+        "operation": "create",
+        "seed": 4106157139236696,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "target_length"
+        },
+        "warnings": []
+      },
+      "next_action": "同じprompt_idで進捗を確認する。"
+    },
+    {
+      "name": "empty-latent-mask",
+      "input_example": "direct-repaint",
+      "argument_overrides": {
+        "request_id": "example-empty-latent-mask",
+        "repaint": {
+          "start_seconds": 12.001,
+          "end_seconds": 12.019
+        }
+      },
+      "explanation": "60秒の素材で秒数の順序は正しい。両端を25 Hzに丸めるといずれも300フレームで、マスクの幅は0。",
+      "response": {
+        "request_id": "example-empty-latent-mask",
+        "submission_status": "rejected",
+        "error": {
+          "code": "preflight_failed",
+          "message": "丸めた編集区間が空です。",
+          "issues": [
+            {
+              "node_id": "12",
+              "node_type": "ACEStep15XLRepaintAudio",
+              "input": "end_seconds",
+              "code": "empty_edit_range",
+              "message": "開始・終了ともに300フレームです。終了位置を後ろへ移してください。"
+            }
+          ]
+        }
+      },
+      "next_action": "同じ音源に対し、少なくとも1フレームを含む区間を指定する。"
     }
   ],
   "invalid": [
@@ -550,6 +656,124 @@
           "code": "submission_unknown",
           "message": "受付結果を確認できません。同じrequest_id・同じ入力で再照合してください。"
         }
+      }
+    },
+    {
+      "name": "m3-cover-receipt",
+      "reason": "M3で受付可能な操作はcreateのみ。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "queued",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "cover",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 30,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "m3-over-ceiling",
+      "reason": "M3の受付上限は360秒。",
+      "response": {
+        "request_id": "example-direct-vocal-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000001",
+        "job_status": "queued",
+        "number": 0,
+        "model": "minimax-music-3",
+        "operation": "create",
+        "seed": 42,
+        "effective_parameters": {
+          "duration_seconds": 361,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "yue2-repaint-receipt",
+      "reason": "YuE2の操作はcreateとcover。",
+      "response": {
+        "request_id": "example-direct-melody-cover",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000020",
+        "job_status": "queued",
+        "number": 20,
+        "model": "yue2-3b",
+        "operation": "repaint",
+        "seed": 486807903298377,
+        "effective_parameters": {
+          "duration_seconds": 60,
+          "duration_semantics": "upper_bound"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "small-music-over-ceiling",
+      "reason": "Small Musicの上限は120秒。",
+      "response": {
+        "request_id": "example-direct-instrumental-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000021",
+        "job_status": "queued",
+        "number": 21,
+        "model": "stable-audio-3-small-music",
+        "operation": "create",
+        "seed": 4106157139236696,
+        "effective_parameters": {
+          "duration_seconds": 121,
+          "duration_semantics": "target_length"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "non-edit-fractional-target",
+      "reason": "createの受付時の目標尺は整数秒。",
+      "response": {
+        "request_id": "example-direct-instrumental-create",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000021",
+        "job_status": "queued",
+        "number": 21,
+        "model": "stable-audio-3-medium",
+        "operation": "create",
+        "seed": 4106157139236696,
+        "effective_parameters": {
+          "duration_seconds": 30.25,
+          "duration_semantics": "target_length"
+        },
+        "warnings": []
+      }
+    },
+    {
+      "name": "edit-below-minimum-total",
+      "reason": "編集後の全体目標長の下限は1秒。",
+      "response": {
+        "request_id": "example-extend-one-frame",
+        "submission_status": "accepted",
+        "prompt_id": "00000000-0000-4000-8000-000000000019",
+        "job_status": "queued",
+        "number": 19,
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "seed": 3022895268930686,
+        "effective_parameters": {
+          "duration_seconds": 0.8,
+          "duration_semantics": "target_length",
+          "bpm": 120,
+          "keyscale": "C major",
+          "timesignature": "4",
+          "language": "unknown"
+        },
+        "warnings": []
       }
     }
   ]

@@ -78,9 +78,18 @@ Stable Audio 3 は音声・歌声生成向けではなく、既存Adapterも歌�
 | extend | ACEのみ。`0 < continue_at <= 元音源の長さ`。元音源の先頭から `continue_at` までを使い、その後に正の `duration_seconds` 分を生成。結果の目標長は両者の和。元音源の残り部分は新しい結果には含まれない |
 | repaint | ACEのみ。`0 <= start_seconds < end_seconds <= 元音源の長さ` の単一区間を再生成。結果の長さは元音源と同じ |
 
-編集時の `input.duration_seconds` は禁止、MusicSpec の同項目は0必須にして、全体尺の二重指定を防ぎます。extend/repaint の全体尺も ACE の1〜1000秒の範囲に収めます。時間は秒で受け付け、ACE の25 latent frames/秒へ変換する際の丸めを実効値として記録します。
+編集時の `input.duration_seconds` は禁止、MusicSpec の同項目は0必須にして、全体尺の二重指定を防ぎます。extend/repaint の全体尺も ACE の1〜1000秒の範囲に収めます。時間は秒で受け付けます。CPUは固定した素材をデコードし、1チャンネルあたりのサンプル数とサンプルレートから元の長さを求めます。コンテナの表示秒数だけで末尾を判定しません。
 
 保存済み出力を使う場合は `list_outputs` → `reuse_output` → 返却されたファイル名の順です。`list_outputs` の全出力を通した index と `get_audio` の音声だけの index は混ぜません。元ファイルを上書きせず、編集結果は別ジョブに保存します。latent の非編集領域を維持する設計であり、VAE再エンコードや音声保存後の波形の完全一致は保証しません。
+
+**ACEの編集境界。** 切り出しは元音声のサンプル単位、latent編集は25フレーム/秒です。以下の `round` は参照ノードと同じPythonの丸め（ちょうど中間なら偶数）です。まず元の秒指定で素材範囲と全体尺を検査し、次に下表の丸め後の値も検査します。[TrimAudioDurationの変換](https://github.com/Comfy-Org/ComfyUI/blob/63e5bf594339f676b4b15e072529873e3448409e/comfy_extras/nodes_audio.py#L505-L521)・[XL編集ノードの変換](https://github.com/starsFriday/ComfyUI-ACEStep/blob/1f0c0841e0e609732c41c33d164f766363d2736a/nodes.py#L584-L630)
+
+| 操作 | 受付前に確定する値 | GPU実行で確定する値 |
+| --- | --- | --- |
+| extend | 残すサンプル数は `round(continue_at × sample_rate)`、1未満なら拒否。右に足すフレーム数は `max(1, round(追加秒数 × 25))`。受付の全体目標尺は「残すサンプル数 ÷ sample_rate ＋ 追加フレーム数 ÷ 25」。1〜1000秒を外れたら拒否 | VAEが返す元latentのフレーム数と追加フレーム数で実効尺が決まる。条件付けには編集ノードの `seconds` を使う |
+| repaint | `[round(start_seconds × 25), round(end_seconds × 25))` を対象にする。丸め後に幅が0なら `preflight_failed`、issueは `empty_edit_range`。受付の全体目標尺は元音源の長さ | 編集ノードは両端を実latentの範囲に収める。実行時にも空になれば編集失敗として扱う |
+
+例えば60秒の素材を45秒まで残し、0.01秒追加する依頼では、右に1フレームを足すため受付時の目標は45.04秒です。12.001秒から12.019秒までのrepaintは両端が300フレームになるため、CPUで拒否します。受付記録には元の秒指定とCPUで算出したサンプル・フレーム数、実行履歴には編集ノードの実効秒数を残します。保存したMP3の再生尺はエンコード後に測定できます。
 
 ## 2. Suno との対応
 
@@ -179,6 +188,14 @@ digestには既存の `body_digest` と同じJSONのキー順整列・UTF-8・SH
 
 受付ロックと既存の環境固定を使い、CPU検査とGPU投入が同じノード実装・グラフ・ローダーのモデル・入力素材を参照するようにします。素材の確認・保持は既存の素材保護処理を使い、検査から投入の間に同名ファイルへすり替わる状態を受け付けません。環境更新やモード切替中に一致を確保できなければ新規受付を止めます。受付済みグラフの環境は保持し、更新後の環境へ暗黙に移しません。
 
+### 入力音源を固定する手順
+
+現行の `policy.plan` が返す `loaders` は外部送信に直結する入力用です。通常のローカル分岐は空の `assets` で実行ガードを作るため、これだけでは音楽グラフの `LoadAudio` を固定できません。[既存の素材固定と照合](../../comfy_split/mcp_policy.py)・[MCP受付](../../comfy_split/mcp_approvals.py)
+
+1. 固定テンプレートに、入力用 `LoadAudio` のノードID・入力名と、終端の `SaveAudioAdvanced` のIDを持たせる。準備後の実行グラフを既存のポリシーで分類し、外部送信が1件でもあればそのノードで `preflight_failed` とする。createは入力音源0件、ほかの4操作は選んだ素材1件を要求する。
+2. 初回受付の素材あり経路では、受付ロック内で既存の素材ロックを取り、テンプレートの `LoadAudio` から `{node_id: ("audio", source_audio)}` を作って `freeze_inputs` に渡す。固定処理後に素材ロックを解放し、返された内容ハッシュ付きファイルを読み、デコード・尺検査・本体検証を行う。ジョブにはこの確定グラフと `execution_guard(..., assets)` を保存し、既存の `commit_prompt` でinput Volumeと台帳を永続化する。
+3. Workerは生成POSTの前に既存の `verify_assets` で固定した内容を照合する。元のファイル名が別の音源に差し替わっても、受付済みジョブは固定した音源を使う。固定したファイル自体が失われた、または内容が変わったと確認できた場合は、元のジョブに失敗理由を記録する。同じIDの再送は第4節の照合で元のジョブを返す。
+
 ### GPU起動前に確認する内容
 
 | 対象 | 確認と拒否条件 |
@@ -200,7 +217,7 @@ CPU側に既存の内部アクセス制御下の非公開検証経路を設け�
 
 - 検証成功フラグが `true` で、トップレベルの検証エラーがない。
 - `node_errors` が空。
-- テンプレートが予定する音声保存ノードが一つ以上あり、その全IDが検証済み出力リストに含まれる。
+- この版でテンプレートが予定する音声保存先は、バッチ1の `SaveAudioAdvanced` ひとつ。この保存ノードを含め、テンプレートが宣言した全出力IDの集合とCPUの検証済み出力IDの集合が一致する。保存分岐の欠落に加え、意図しない別の出力分岐も受付前に検出する。
 
 ComfyUI本体は一部出力だけ有効でも成功を返し得るため、成功フラグだけでは受付できません。エラーは対象ノード・入力・理由を応答へ写し、検証情報が不足する場合も合格にしません。ノード更新後もこの検査に通れば受け付け、不整合があれば新規受付前に止めます。参照コミットとの完全一致を求める検査は追加しません。
 
@@ -242,6 +259,12 @@ MCP接続や進捗WebSocketの切断は生成取消の理由にしません。We
 
 ノード例外・OOM・プロセス終了・生成タイムアウトは、確認できた実行失敗として既存のエラー情報に理由を残します。出力取得や完了記録の読み取り失敗は実行失敗と区別し、同じジョブを再照合します。`completed` を返すには、既存の出力保存と完了記録の永続化が済んでいることが必要です。別モデルへの切り替え、グラフの自動修正、生成の自動再試行はしません。
 
+### 音声が保存されたと判断する条件
+
+Workerは同じ `prompt_id` の終端履歴を読み、成功時にはテンプレートで宣言した保存ノードの出力を確認します。既存の `output_rows` の形式で、終端履歴全体の `type: output` の音声が計1件で、そのノードIDが予定した保存先と一致し、MP3が出力領域にサイズが正の通常ファイルとして存在することを要求します。出力Volumeのcommit後に完了記録を永続化し、Gatewayが元のジョブを `completed` にします。履歴に出た順番やファイル名の検索で別ジョブの曲を採用しません。[出力の列挙](../../comfy_split/media_server.py)・[保存と完了記録](../../comfy_split/worker.py)
+
+成功履歴を読み切った結果が音声0件・複数件・別ノードの音声だけなら、保存結果の不整合として元ジョブを `failed` にし、対象の保存ノードを履歴に残します。履歴取得・ファイル照会・commitの通信障害は、結果の件数や保存失敗を確定する証拠にはなりません。既存の締切内で状態を再照合し、永続化の成否を確認できなければ元ジョブを `unknown` とします。完了後に配信用CPUからの取得だけが失敗したときは、同じ `prompt_id` で `list_outputs` や `get_audio` を再取得します。
+
 ### 障害・再送時の復旧表
 
 | 状況 | 返却・保持する状態 | 次の処理 |
@@ -270,9 +293,11 @@ MCP接続や進捗WebSocketの切断は生成取消の理由にしません。We
 | `number`, `model`, `operation`, `seed`, `effective_parameters`, `warnings` | `accepted` で必須。初回受付の確定値を保持し再送でも返す。状態以外を現在の環境で計算し直さない |
 | `error` | `rejected / unknown` で必須。`code` と `message`。検証不整合は `issues` にノードID・class・入力名・理由コード・説明を付ける |
 
+MCPではこの表のJSONを `structuredContent` に入れ、従来のテキスト表示用に同じJSONを `content` のtextにも載せます。`isError` は `rejected / unknown` の受付応答でtrue、`accepted` でfalseです。例えば既に失敗したジョブの同一入力再送は `isError: false`、本文は `accepted / failed` です。受付POSTの送信後に空・破損した本文、元のrequest_idと一致しない本文、依頼したmodel・operation・確定seedと一致しない受付済み応答、またはschema違反の応答を受け取った場合、呼び出し側が元のIDで `submission_unknown` を返します。HTTPのステータスや成功したJSON解析だけでは受付を確定しません。
+
 受付エラーのコードは `invalid_request`、`preflight_failed`、`preflight_unavailable`、`idempotency_conflict`、`submission_unknown` に限定します。`preflight_failed` では `issues` を必須とし、ノード欠落など特定の入力名がない場合だけ `input: null` を使います。内部トレース、秘密情報、環境識別子を応答へ転記しません。
 
-`effective_parameters` は `duration_seconds` と `duration_semantics: target_length | upper_bound`、ACEならBPM・keyscale・timesignature・languageを含みます。編集時の `duration_seconds` は追加秒数でなく編集後の全体尺です。M3/YuE2は `upper_bound` とし、指定秒での終曲を保証しません。`warnings` は初回受付で確定した文字列配列です。Adapter実行時の追加警告と実行エラーは既存の履歴に残し、この受付応答の `error` と混在させません。`accepted / failed` の実行理由は `get_job_progress`・`get_history` で取得します。
+`effective_parameters` は `duration_seconds` と `duration_semantics: target_length | upper_bound`、ACEならBPM・keyscale・timesignature・languageを含みます。create/reference/coverの受付尺は整数秒です。編集時の `duration_seconds` は第1節で算出する全体目標尺で、小数を許します。応答schemaにもモデル別の操作と尺上限を適用します。例えばM3のcover受領や361秒の受付値は契約違反です。M3/YuE2は `upper_bound` とし、指定秒での終曲を保証しません。`warnings` は初回受付で確定した文字列配列です。Adapter実行時の追加警告と実行エラーは既存の履歴に残し、この受付応答の `error` と混在させません。`accepted / failed` の実行理由は `get_job_progress`・`get_history` で取得します。
 
 `submission_status: unknown` は受付の永続化を確認できない応答です。`submission_status: accepted, job_status: unknown` は受付記録とIDが確定しており、実行状況が不明な応答です。通信が完全に切れた場合はJSON自体を届けられないため、応答可能なMCP側が前者へ変換し、クライアント自身の通信タイムアウトも同じ再照合手順で扱います。HTTP切断をサーバーの明示的拒否と解釈しません。
 
@@ -326,7 +351,7 @@ MCP接続や進捗WebSocketの切断は生成取消の理由にしません。We
 
 この版は `jsonschema 4.25.1` で照合済みです。正常形12件は合格し、schema拒否例11件は拒否、意味検証の拒否例5件はschemaを通ることと記載した違反条件を確認しました。両入力経路のモデル別尺上限、seedの整数上限、省略時の入力形、MusicSpecの必須32項目、資料内の相対リンクも確認しています。意味検証の実装や実生成が完了したことを示すものではありません。
 
-今回追加した応答schemaも `jsonschema 4.25.1` で静的照合しました。応答例の `valid` 19件は合格し、`invalid` 12件は拒否されます。`valid` は応答契約上の正常形であり、`rejected` や `unknown` の応答も含みます。`invalid` は必須ID・理由の欠落、二種類のunknownの混同、未定義のジョブ状態など、返してはいけない形です。3種類の受付状態と既存7種類のジョブ状態、同一ID再送時の不変項目、既存M3入力例との対応、相対リンクを確認しました。入力schema・既存入力例・ランタイムは変更していません。障害注入と実生成は行っていません。
+今回追加した応答schemaも `jsonschema 4.25.1` で静的照合しました。応答例の `valid` 23件は合格し、`invalid` 18件は拒否されます。`valid` は応答契約上の正常形であり、`rejected` や `unknown` の応答も含みます。`invalid` は必須ID・理由の欠落、二種類のunknownの混同、未定義のジョブ状態など、返してはいけない形です。3種類の受付状態と既存7種類のジョブ状態、同一ID再送時の不変項目、4モデル系列の入力と応答の対応、モデル×操作の全組み合わせと尺上限、編集境界の計算例、相対リンクを確認しました。入力schema・既存入力例・ランタイムは変更していません。障害注入と実生成は行っていません。
 
 ### 実装段階で行う確認
 
@@ -335,10 +360,12 @@ MCP接続や進捗WebSocketの切断は生成取消の理由にしません。We
 | 確認項目 | 合格条件 | 優先する既存テスト |
 | --- | --- | --- |
 | GPU前の不整合検出 | ノード欠落、リンク型不一致、Adapterの不正値、保存出力の欠落・部分検証成功を拒否し、ジョブ作成・GPU呼び出しが0回 | [Gateway](../../tests/split/test_gateway.py) と既存MCP許可・素材テスト |
-| ノード更新 | 互換更新は事前検査で合格し、不整合更新は受付前に停止する。過去の版や更新ごとの実生成を合格条件にしない | 同上 |
+| 音源の同一性 | 受付後に元のファイルが変わっても固定した内容で実行する。固定した内容に不一致があれば生成POSTは0回。同じIDの再送では再固定しない | 既存MCP許可・素材テスト、GPU Worker |
+| ノード更新 | 互換更新は事前検査で合格し、不整合更新は受付前に停止する。過去の版や更新ごとの実生成を合格条件にしない | Gateway、既存MCP許可テスト |
 | 受付応答断・再送・再起動・退避 | 同じID・入力で元のジョブを返し、ジョブ数・GPU呼び出し回数が増えない。入力違いは競合。保存成否不明を拒否と誤報しない | [台帳](../../tests/split/test_state.py)、Gateway、[MCP中継](../../worker/tests/remote-mcp.test.mjs) |
 | 監視通信の一時障害 | 進捗接続・履歴取得が一時的に失敗しても生成を取消さず、同じジョブの永続化済み結果を取得できる。再試行間隔と既存締切を守る | [GPU Worker](../../tests/split/test_worker.py)、Gateway |
 | 投入成否不明・完了記録の読み取り障害 | POST応答喪失時は同じIDを照合し、追跡不能は `unknown`。POST・GPU呼び出しを増やさず、実行失敗と区別する。結果の読み取り失敗だけで `failed / completed` にしない | GPU Worker、Gateway |
+| 保存結果 | 正しい保存ノードの1曲だけが完了になる。空の成功履歴と履歴読み取りの通信失敗を区別し、配信の一時失敗は完了済みジョブの状態を保つ | GPU Worker、Gateway |
 | 終端状態への再送 | 実行失敗・完了・取消後の同じIDは元の状態を返し、再生成しない | 台帳、MCP中継 |
 
 音楽入力・各モデルの初回実装については、既存の条件を維持します。
