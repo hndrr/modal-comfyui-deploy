@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
-from aiohttp import web
+from aiohttp import ClientConnectionError, web
 from PIL import Image
 
 from comfy_split import gateway, model_files as models, production as media, split_admin as admin
@@ -33,6 +33,35 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
 
     async def run_op(self, name, **args):
         return await admin.handle(self.c, name, args)
+
+    async def test_failed_reservation_commit_does_not_leave_a_candidate_without_a_task(self):
+        self.c.volumes["data"].commit.aio.side_effect = [None, OSError("commit failed"), None]
+        result = await self.run_op("prepare_environment", active="base", request_id="failed-reservation")
+        self.assertEqual(result["status"], "unknown")
+        self.assertIsNone(self.c.journal.data["candidate"])
+        self.assertIsNone(self.c.prepare_task)
+        self.assertFalse(self.c.background_work())
+        self.c.journal.assert_idle()
+
+    async def test_browser_relay_failure_does_not_fail_preparation_or_block_other_relays(self):
+        socket = AsyncMock()
+        socket.__aiter__.return_value = []
+        self.c.sockets = {"first": set(), "second": set()}
+        self.c.client = SimpleNamespace(ws_connect=AsyncMock(
+            side_effect=[ClientConnectionError("relay disconnected"), socket, socket]))
+        self.c.candidate.start = AsyncMock()
+        with patch.object(gateway, "create_environment", return_value="copy"):
+            await self.run_op("prepare_environment", active="base", request_id="with-browsers")
+            with self.assertLogs("comfy_split.gateway", level="WARNING"):
+                await self.c.prepare_task
+        result = await self.run_op("get_admin_operation", request_id="with-browsers")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(self.c.journal.data["candidate"]["status"], "editing")
+        self.assertNotIn("first", self.c.candidate_relays)
+        self.assertIn("second", self.c.candidate_relays)
+        await self.c.attach_candidate("first")
+        self.assertIn("first", self.c.candidate_relays)
+        await self.c.close_candidate_relays()
 
     async def test_slow_candidate_copy_returns_receipt_without_blocking_reads_or_model_import(self):
         started, release = asyncio.Event(), threading.Event()
