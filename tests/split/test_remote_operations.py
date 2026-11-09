@@ -1,4 +1,6 @@
+import asyncio
 import tempfile
+import threading
 import subprocess
 import unittest
 from pathlib import Path
@@ -9,7 +11,7 @@ from uuid import uuid4
 from aiohttp import web
 from PIL import Image
 
-from comfy_split import model_files as models, production as media, split_admin as admin
+from comfy_split import gateway, model_files as models, production as media, split_admin as admin
 from comfy_split.gateway import Controller
 from comfy_split.storage import MOUNTS
 from tests.split.support import volume_mocks
@@ -31,6 +33,89 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
 
     async def run_op(self, name, **args):
         return await admin.handle(self.c, name, args)
+
+    async def test_slow_candidate_copy_returns_receipt_without_blocking_reads_or_model_import(self):
+        started, release = asyncio.Event(), threading.Event()
+        booting, ready = asyncio.Event(), asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def copy(source):
+            self.assertEqual(source, "base")
+            loop.call_soon_threadsafe(started.set)
+            if not release.wait(5):
+                raise TimeoutError("test did not release candidate copy")
+            return "copy"
+
+        async def boot(*args, **kwargs):
+            self.c.candidate.process = SimpleNamespace(returncode=None)
+            booting.set()
+            await ready.wait()
+
+        self.c.candidate.start = AsyncMock(side_effect=boot)
+        with patch.object(gateway, "create_environment", side_effect=copy) as clone, \
+                patch.object(admin, "start_download", AsyncMock(return_value="download")):
+            args = dict(active="base", request_id="prepare")
+            first = await asyncio.wait_for(self.run_op("prepare_environment", **args), 1)
+            self.assertEqual(first["status"], "running")
+            task = self.c.prepare_task
+            try:
+                await asyncio.wait_for(started.wait(), 1)
+                self.assertTrue(self.c.background_work())
+                status = await asyncio.wait_for(self.run_op("get_split_status"), 1)
+                self.assertEqual(status["candidate"], {"version": None, "status": "creating"})
+                self.assertEqual(await self.run_op("prepare_environment", **args), first)
+                self.assertEqual(await self.run_op("get_admin_operation", request_id="prepare"), first)
+                added = await asyncio.wait_for(self.run_op("add_model", request_id="add",
+                    repo="test/model", file="new.gguf", category="loras"), 1)
+                self.assertEqual(added["status"], "running")
+                self.assertEqual((await self.run_op("prepare_environment", active="base",
+                    request_id="second"))["status"], "failed")
+                with self.assertRaises(ValueError):
+                    self.c.journal.enqueue({"prompt": {"1": {}}})
+                release.set()
+                await asyncio.wait_for(booting.wait(), 1)
+                # The Manager HTTP port is not ready while ComfyUI imports nodes.
+                status = await asyncio.wait_for(self.run_op("get_split_status"), 1)
+                self.assertEqual(status["candidate"], {"version": "copy", "status": "creating"})
+                self.assertIsNone(status["manager_queue"])
+                self.assertEqual((await self.run_op("get_admin_operation", request_id="prepare"))["status"], "running")
+            finally:
+                release.set()
+                ready.set()
+                await task
+            clone.assert_called_once_with("base")
+            self.c.candidate.start.assert_awaited_once_with("copy", cpu=True, manager=True)
+            result = await self.run_op("get_admin_operation", request_id="prepare")
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["candidate"], "copy")
+            self.assertEqual(self.c.journal.data["candidate"], {"version": "copy", "status": "editing"})
+            self.assertEqual(self.c.journal.data["environment"], "base")
+            self.assertFalse(self.c.background_work())
+            self.assertEqual(await self.run_op("prepare_environment", **args), result)
+
+    async def test_candidate_preparation_failures_are_persisted_and_leave_active_environment(self):
+        for failure in ("copy", "startup"):
+            with self.subTest(failure=failure):
+                self.c.journal.data["candidate"] = None
+                self.c.candidate.start = AsyncMock(side_effect=RuntimeError("private startup detail")
+                    if failure == "startup" else None)
+                with patch.object(gateway, "create_environment", return_value="copy",
+                        side_effect=OSError("private copy detail") if failure == "copy" else None):
+                    await self.run_op("prepare_environment", active="base", request_id=failure)
+                    with self.assertLogs("comfy_split.split_admin", level="ERROR"):
+                        await self.c.prepare_task
+                result = await self.run_op("get_admin_operation", request_id=failure)
+                self.assertEqual(result["status"], "failed")
+                self.assertNotIn("private", str(result))
+                self.assertEqual(self.c.journal.data["environment"], "base")
+                self.assertFalse(self.c.background_work())
+                self.assertIsNone(self.c.prepare_task)
+                if failure == "copy":
+                    self.assertIsNone(self.c.journal.data["candidate"])
+                else:
+                    self.assertEqual(self.c.journal.data["candidate"], {"version": "copy", "status": "failed"})
+                    discarded = await self.run_op("discard_environment", candidate="copy", request_id="discard")
+                    self.assertEqual(discarded["status"], "completed")
 
     async def test_probe_timeout_and_missing_executable_have_distinct_errors(self):
         (self.dirs["input"] / "test.wav").write_bytes(b"RIFFxxxxWAVE")
