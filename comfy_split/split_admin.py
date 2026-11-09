@@ -255,7 +255,12 @@ async def mutate(c, name, a, row):
             c.journal.assert_idle()
             data["candidate"] = {"status": "creating", "version": None}
             row["status"] = "running"
-            await c.persist()
+            try:
+                await c.persist()
+            except Exception:
+                data["candidate"] = None
+                row["status"] = "dispatching"
+                raise
             c.prepare_task = asyncio.create_task(prepare_in_background(c, row))
     elif name == "change_node":
         await change(c, a, row)

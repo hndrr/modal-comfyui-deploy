@@ -650,8 +650,16 @@ class Controller:
             self.journal.assert_idle()
             # Reserve before any subprocess/network operation can yield.
             self.journal.data["candidate"] = {"status": "creating", "version": None}
-            await self.persist()
-            await self.create_candidate(restore_image_browsing=restore_image_browsing)
+            try:
+                await self.persist()
+                await self.create_candidate(restore_image_browsing=restore_image_browsing)
+            except Exception:
+                candidate = self.journal.data["candidate"]
+                candidate["status"] = "failed"
+                if candidate["version"] is None:
+                    self.journal.data["candidate"] = None
+                await self.persist()
+                raise
             self.journal.data["candidate"]["status"] = "editing"
             await self.persist()
             return
@@ -659,10 +667,11 @@ class Controller:
         if candidate["status"] != "editing":
             raise ValueError("環境更新処理中です。状態画面を確認してください。")
         await self.candidate.start(candidate["version"], cpu=True, manager=True)
-        for sid in self.sockets:
+        for sid in tuple(self.sockets):
             await self.attach_candidate(sid)
 
     async def create_candidate(self, *, restore_image_browsing=False):
+        """Build and start the reserved candidate without depending on browser relays."""
         # The caller reserves a creating candidate before releasing the lock.
         # Copying a Volume and importing nodes can take minutes; MCP runs this
         # outside its request and the controller lock so reads stay responsive.
@@ -672,7 +681,7 @@ class Controller:
         candidate["version"] = version
         await self.volumes["environment"].commit.aio()
         await self.candidate.start(version, cpu=True, manager=True)
-        for sid in self.sockets:
+        for sid in tuple(self.sockets):
             await self.attach_candidate(sid)
 
     async def close_candidate_relays(self):
@@ -683,10 +692,15 @@ class Controller:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def attach_candidate(self, sid):
+        """Leave a failed browser connection available for a later relay retry."""
         if sid in self.candidate_relays and not self.candidate_relays[sid].done():
             return
-        socket = await self.client.ws_connect(self.candidate.url + "/ws",
-                                              params={"clientId": sid}, compress=0)
+        try:
+            socket = await self.client.ws_connect(self.candidate.url + "/ws",
+                                                  params={"clientId": sid}, compress=0)
+        except (ClientError, OSError, asyncio.TimeoutError):
+            log.warning("Could not attach browser relay to candidate; retry on reconnect", exc_info=True)
+            return
         async def relay():
             try:
                 async for message in socket:
