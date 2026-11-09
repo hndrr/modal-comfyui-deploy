@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
 from uuid import uuid4
@@ -54,6 +55,8 @@ async def manager(c, method, path, **kwargs):
 
 
 async def queue_status(c):
+    if (c.journal.data["candidate"] or {}).get("status") == "creating":
+        return None
     if c.candidate.process and c.candidate.process.returncode is None:
         state = await manager(c, "GET", "manager/queue/status")
         return {key: state.get(key) for key in ("is_processing", "pending_count", "in_progress_count")}
@@ -145,6 +148,8 @@ async def hash_in_background(c, row, args, root):
 
 async def poll(c, row):
     if row["status"] in ACTIVE:
+        if row["tool"] == "prepare_environment":
+            return receipt(row)
         if row.get("_hash"):
             if c.model_hash_task is None:
                 row["status"] = "unknown"
@@ -175,6 +180,24 @@ async def poll(c, row):
             row["status"] = "unknown"
         await c.persist()
     return receipt(row)
+
+
+async def prepare_in_background(c, row):
+    try:
+        await c.create_candidate()
+    except Exception:
+        logging.getLogger(__name__).exception("Candidate preparation failed")
+        result = {"status": "failed", "error": "Candidate preparation failed; read get_split_status before retrying."}
+    else:
+        result = {"status": "completed", "candidate": c.journal.data["candidate"]["version"]}
+    async with c.lock:
+        candidate = c.journal.data["candidate"]
+        candidate["status"] = "editing" if result["status"] == "completed" else "failed"
+        if candidate["version"] is None:
+            c.journal.data["candidate"] = None
+        row.update(result)
+        c.prepare_task = None
+        await c.persist()
 
 
 async def change(c, a, row):
@@ -226,8 +249,14 @@ async def mutate(c, name, a, row):
     if name == "prepare_environment":
         if data["environment"] != a["active"]:
             conflict("Active version changed; read get_split_status.")
-        await c.ensure_candidate()
-        row["candidate"] = data["candidate"]["version"]
+        if data["candidate"]:
+            row["candidate"] = editing(c, data["candidate"]["version"])["version"]
+        else:
+            c.journal.assert_idle()
+            data["candidate"] = {"status": "creating", "version": None}
+            row["status"] = "running"
+            await c.persist()
+            c.prepare_task = asyncio.create_task(prepare_in_background(c, row))
     elif name == "change_node":
         await change(c, a, row)
     elif name in {"discard_environment", "apply_environment"}:

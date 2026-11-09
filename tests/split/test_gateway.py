@@ -159,6 +159,20 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 409)
         self.assertEqual(self.control.journal.data["candidate"]["version"], "env-existing")
 
+    async def test_browser_cannot_discard_or_apply_candidate_while_mcp_prepares_it(self):
+        self.control.journal.data["candidate"] = {"version": None, "status": "creating"}
+        self.control.prepare_task = asyncio.create_task(asyncio.Event().wait())
+        try:
+            for path in ("/split/environment/discard", "/manager/reboot"):
+                response = await self.client.post(path)
+                self.assertEqual(response.status, 409)
+                self.assertEqual(self.control.journal.data["candidate"]["status"], "creating")
+                self.assertIsNone(self.control.apply_task)
+        finally:
+            self.control.prepare_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await self.control.prepare_task
+
     async def test_image_browsing_repair_rejects_queued_generation(self):
         self.control.journal.enqueue({"prompt": {"1": {}}})
         response = await self.client.post("/api/split/environment/repair-image-browsing")
