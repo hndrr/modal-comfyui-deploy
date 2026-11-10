@@ -160,6 +160,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.control.journal.data["candidate"]["version"], "env-existing")
 
     async def test_browser_candidate_failure_is_saved_and_can_be_discarded(self):
+        """Browser failures must leave a discardable state and preserve the active version."""
         c = self.control
         for stage in ("copy", "startup"):
             with self.subTest(stage=stage):
@@ -181,6 +182,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(c.background_work())
 
     async def test_browser_cannot_discard_or_apply_candidate_while_mcp_prepares_it(self):
+        """Browser actions must not replace the candidate owned by an ongoing MCP preparation."""
         self.control.journal.data["candidate"] = {"version": None, "status": "creating"}
         self.control.prepare_task = asyncio.create_task(asyncio.Event().wait())
         try:

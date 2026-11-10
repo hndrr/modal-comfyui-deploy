@@ -18,6 +18,7 @@ ADAPTER_TOKEN = next(iter(INTEGRATIONS.values()))["secrets"][0][1]
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_candidate_archive_failure_still_terminates_and_reaps_process(self):
+        """Candidate archive errors must still allow forced termination and process reaping."""
         process = runtime.ComfyProcess("candidate", 8190)
         child = SimpleNamespace(pid=123, returncode=None,
                                 wait=AsyncMock(side_effect=[asyncio.TimeoutError(), 0]))
@@ -32,6 +33,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(process.version)
 
     async def test_execution_process_archive_failure_remains_visible_before_stop(self):
+        """Execution roles must propagate archive failures before terminating their process."""
         for role in ("cpu", "gpu", "cpu_worker"):
             with self.subTest(role=role):
                 process = runtime.ComfyProcess(role, 8187)

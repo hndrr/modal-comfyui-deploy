@@ -40,6 +40,7 @@ def manager_path(path):
 class Controller:
     def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
                  warmed_cpu=None, extensions=None, other_workers=None, cpu_worker=None):
+        """Create the controller's journal, locks and background-task state."""
         self.worker = worker  # Default worker exposed to existing controller extensions.
         self.session_gpu = os.environ.get("SPLIT_SESSION_GPU", gpu.DEFAULT)
         self.workers = {self.session_gpu: worker, **(other_workers or {})}
@@ -128,6 +129,7 @@ class Controller:
                 "expired_jobs", "receipts", "environments", "temporary_files")})
 
     def background_work(self):
+        """Report work that must keep the CPU alive, including candidate preparation."""
         data = self.journal.data
         return bool(self.prepare_task or self.model_hash_task or data["session"] or any(
             job["status"] in {"queued", "dispatching", "running"}
@@ -207,6 +209,7 @@ class Controller:
         await self.volumes["data"].commit.aio()
 
     async def start(self, app):
+        """Recover durable state and interrupted preparations before starting CPU services."""
         self.client = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
         await asyncio.to_thread(initialize_environment)
         await self.volumes["environment"].commit.aio()
@@ -305,6 +308,7 @@ class Controller:
             await self.pin_cpu(False)
 
     async def close(self, app):
+        """Cancel background tasks and stop ComfyUI before closing the HTTP client."""
         for extension in self.plugins:
             await extension.close()
         await self.close_candidate_relays()
@@ -644,6 +648,7 @@ class Controller:
         return web.json_response({"mode": desired, "transitioning": True}, status=202)
 
     async def ensure_candidate(self, *, restore_image_browsing=False):
+        """Ensure an editable candidate under the caller's lock, persisting preparation failures."""
         if restore_image_browsing and self.journal.data["candidate"]:
             raise ValueError("既存の環境更新を完了または破棄してから修復してください。")
         if not self.journal.data["candidate"]:
@@ -788,6 +793,7 @@ class Controller:
             await self.cpu.start(self.journal.data["environment"], cpu=True)
 
     async def manager(self, request, path):
+        """Proxy Manager requests, staging edits and rejecting restarts during preparation."""
         body = await request.read() if request.can_read_body else None
         if path.endswith("/queue/task") and body:
             task = json.loads(body)
@@ -879,6 +885,7 @@ class Controller:
         await self.persist()
 
     async def handle(self, request):
+        """Route CPU control requests and reject candidate discard during preparation."""
         path = api_path(request.path)
         try:
             if path.startswith("/_remote_mcp/review/"):

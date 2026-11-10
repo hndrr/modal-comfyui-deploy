@@ -55,6 +55,7 @@ async def manager(c, method, path, **kwargs):
 
 
 async def queue_status(c):
+    """Skip Manager reads while the candidate is creating or failed."""
     if (c.journal.data["candidate"] or {}).get("status") in {"creating", "failed"}:
         return None
     if c.candidate.process and c.candidate.process.returncode is None:
@@ -147,6 +148,7 @@ async def hash_in_background(c, row, args, root):
 
 
 async def poll(c, row):
+    """Refresh an operation receipt; background preparation updates its own result."""
     if row["status"] in ACTIVE:
         if row["tool"] == "prepare_environment":
             return receipt(row)
@@ -183,6 +185,7 @@ async def poll(c, row):
 
 
 async def prepare_in_background(c, row):
+    """Prepare a reserved candidate outside the controller lock, then persist its receipt."""
     try:
         await c.create_candidate()
     except Exception:
@@ -245,6 +248,7 @@ async def change(c, a, row):
 
 
 async def mutate(c, name, a, row):
+    """Apply a recorded admin mutation under the caller's lock, enqueueing slow preparation."""
     data = c.journal.data
     if name == "prepare_environment":
         if data["environment"] != a["active"]:
