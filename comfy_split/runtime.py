@@ -156,6 +156,7 @@ class ComfyProcess:
         return f"http://127.0.0.1:{self.port}"
 
     async def stop(self):
+        """Stop candidates despite archive errors; propagate archive failures for execution roles."""
         if self.process and self.process.returncode is None:
             try:
                 await asyncio.to_thread(self.archive_temp, legacy_paths=self.role in {"cpu", "candidate"})

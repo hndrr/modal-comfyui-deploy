@@ -129,6 +129,7 @@ class StartupLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.close(None)
 
     async def test_interrupted_preparation_is_not_restarted_or_left_pinned(self):
+        """Recovery must mark interrupted preparation unknown and release its reservation."""
         c = self.controller
         c.journal.data["candidate"] = {"version": None, "status": "creating"}
         c.journal.data["admin_operations"] = {

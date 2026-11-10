@@ -36,6 +36,7 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
         return await admin.handle(self.c, name, args)
 
     async def test_failed_candidate_discard_survives_unreachable_manager_and_archive_failure(self):
+        """A failed candidate must remain discardable when both Manager and archiving fail."""
         c = self.c
         c.journal.data["candidate"] = {"version": "env-failed", "status": "failed"}
         child = SimpleNamespace(pid=123, returncode=None, wait=AsyncMock(return_value=0))
@@ -56,6 +57,7 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
             request_id="discard-failed"), result)
 
     async def test_failed_reservation_commit_does_not_leave_a_candidate_without_a_task(self):
+        """An uncommitted reservation must not block later work or start a preparation task."""
         self.c.volumes["data"].commit.aio.side_effect = [None, OSError("commit failed"), None]
         result = await self.run_op("prepare_environment", active="base", request_id="failed-reservation")
         self.assertEqual(result["status"], "unknown")
@@ -65,6 +67,7 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
         self.c.journal.assert_idle()
 
     async def test_browser_relay_failure_does_not_fail_preparation_or_block_other_relays(self):
+        """One failed browser relay must leave the candidate editable and allow reconnection."""
         socket = AsyncMock()
         socket.__aiter__.return_value = []
         self.c.sockets = {"first": set(), "second": set()}
@@ -85,6 +88,7 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
         await self.c.close_candidate_relays()
 
     async def test_slow_candidate_copy_returns_receipt_without_blocking_reads_or_model_import(self):
+        """Slow preparation must preserve responsive management reads and idempotent receipts."""
         started, release = asyncio.Event(), threading.Event()
         booting, ready = asyncio.Event(), asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -144,6 +148,7 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.run_op("prepare_environment", **args), result)
 
     async def test_candidate_preparation_failures_are_persisted_and_leave_active_environment(self):
+        """Copy and startup failures must preserve the active version and release CPU work."""
         for failure in ("copy", "startup"):
             with self.subTest(failure=failure):
                 self.c.journal.data["candidate"] = None
