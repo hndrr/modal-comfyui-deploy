@@ -148,7 +148,7 @@
 
 インストール済みクラスの確認は `list_nodes`、追加パックの検索は `search_custom_nodes` を使用します。変更は必ず検証用の「候補環境」で行います。
 
-1. **候補環境の作成**: `get_split_status` で稼働中のバージョン（`active`）を取得し、`prepare_environment(active, request_id)` で検証用コピー（`candidate`）を作成します（※候補環境が存在する間、通常生成は受け付けません）。
+1. **候補環境の作成**: `get_split_status` で稼働中のバージョン（`active`）を取得し、`prepare_environment(active, request_id)` で検証用コピーの作成を開始します。`status: "running"` は準備中を示すため、同じ `request_id` の `get_admin_operation` で完了を確認し、`status: "completed"` の結果に含まれる `candidate` を使用してください（※準備中・候補環境が存在する間、通常生成は受け付けません）。
 2. **ノードの操作**: `change_node(candidate, action: "install" または "update", node, request_id)` にパック ID を渡して実行します。結果は `get_admin_operation(request_id)` で確認します（`running` はまだ処理中を示します）。
 3. **反映または破棄**: `apply_environment(candidate, request_id)` で候補環境を CPU および GPU で検証し、成功時のみ有効環境を切り替えます。反映しない場合は `discard_environment` で破棄できます。
 

@@ -40,6 +40,7 @@ def manager_path(path):
 class Controller:
     def __init__(self, worker, events, commands, volumes, root=storage.STATE, *, ui_function=None,
                  warmed_cpu=None, extensions=None, other_workers=None, cpu_worker=None):
+        """Create the controller's journal, locks and background-task state."""
         self.worker = worker  # Default worker exposed to existing controller extensions.
         self.session_gpu = os.environ.get("SPLIT_SESSION_GPU", gpu.DEFAULT)
         self.workers = {self.session_gpu: worker, **(other_workers or {})}
@@ -52,6 +53,7 @@ class Controller:
         self.sockets = {}
         self.task = None
         self.apply_task = None
+        self.prepare_task = None
         self.model_hash_task = None
         self.client = None
         self.candidate_relays = {}
@@ -127,8 +129,9 @@ class Controller:
                 "expired_jobs", "receipts", "environments", "temporary_files")})
 
     def background_work(self):
+        """Report work that must keep the CPU alive, including candidate preparation."""
         data = self.journal.data
-        return bool(self.model_hash_task or data["session"] or any(
+        return bool(self.prepare_task or self.model_hash_task or data["session"] or any(
             job["status"] in {"queued", "dispatching", "running"}
             for job in data["jobs"].values()) or
             (data["candidate"] and data["candidate"]["status"] in {"creating", "validating"}))
@@ -206,6 +209,7 @@ class Controller:
         await self.volumes["data"].commit.aio()
 
     async def start(self, app):
+        """Recover durable state and interrupted preparations before starting CPU services."""
         self.client = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
         await asyncio.to_thread(initialize_environment)
         await self.volumes["environment"].commit.aio()
@@ -214,11 +218,15 @@ class Controller:
         for operation in self.journal.data.get("admin_operations", {}).values():
             if operation.get("_hash") and operation["status"] == "running":
                 operation.update(status="unknown", error="CPU restarted during file verification.")
+            if operation["tool"] == "prepare_environment" and operation["status"] in {"dispatching", "running"}:
+                operation.update(status="unknown", error="CPU restarted during environment preparation.")
         candidate = self.journal.data["candidate"]
         session = self.journal.data["session"]
         if candidate and candidate["status"] in {"creating", "validating"}:
             if not (session and session.get("operation") == "validate"):
                 candidate.update(status="failed", error="環境更新中にCPUが再起動しました。旧環境を維持しています。")
+                if candidate["version"] is None:
+                    self.journal.data["candidate"] = None
         await self.persist()
         await self.refresh_node_packs()
         self.startup_phase = "starting_comfy"
@@ -300,10 +308,11 @@ class Controller:
             await self.pin_cpu(False)
 
     async def close(self, app):
+        """Cancel background tasks and stop ComfyUI before closing the HTTP client."""
         for extension in self.plugins:
             await extension.close()
         await self.close_candidate_relays()
-        for task in (self.task, self.apply_task):
+        for task in (self.task, self.apply_task, self.prepare_task):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -639,23 +648,45 @@ class Controller:
         return web.json_response({"mode": desired, "transitioning": True}, status=202)
 
     async def ensure_candidate(self, *, restore_image_browsing=False):
+        """Ensure an editable candidate under the caller's lock, persisting preparation failures."""
         if restore_image_browsing and self.journal.data["candidate"]:
             raise ValueError("既存の環境更新を完了または破棄してから修復してください。")
         if not self.journal.data["candidate"]:
             self.journal.assert_idle()
             # Reserve before any subprocess/network operation can yield.
             self.journal.data["candidate"] = {"status": "creating", "version": None}
+            try:
+                await self.persist()
+                await self.create_candidate(restore_image_browsing=restore_image_browsing)
+            except Exception:
+                candidate = self.journal.data["candidate"]
+                candidate["status"] = "failed"
+                if candidate["version"] is None:
+                    self.journal.data["candidate"] = None
+                await self.persist()
+                raise
+            self.journal.data["candidate"]["status"] = "editing"
             await self.persist()
-            options = {"restore_image_browsing": True} if restore_image_browsing else {}
-            version = await asyncio.to_thread(create_environment, self.journal.data["environment"], **options)
-            self.journal.data["candidate"] = {"status": "editing", "version": version}
-            await self.volumes["environment"].commit.aio()
-            await self.persist()
+            return
         candidate = self.journal.data["candidate"]
         if candidate["status"] != "editing":
             raise ValueError("環境更新処理中です。状態画面を確認してください。")
         await self.candidate.start(candidate["version"], cpu=True, manager=True)
-        for sid in self.sockets:
+        for sid in tuple(self.sockets):
+            await self.attach_candidate(sid)
+
+    async def create_candidate(self, *, restore_image_browsing=False):
+        """Build and start the reserved candidate without depending on browser relays."""
+        # The caller reserves a creating candidate before releasing the lock.
+        # Copying a Volume and importing nodes can take minutes; MCP runs this
+        # outside its request and the controller lock so reads stay responsive.
+        candidate = self.journal.data["candidate"]
+        options = {"restore_image_browsing": True} if restore_image_browsing else {}
+        version = await asyncio.to_thread(create_environment, self.journal.data["environment"], **options)
+        candidate["version"] = version
+        await self.volumes["environment"].commit.aio()
+        await self.candidate.start(version, cpu=True, manager=True)
+        for sid in tuple(self.sockets):
             await self.attach_candidate(sid)
 
     async def close_candidate_relays(self):
@@ -666,10 +697,15 @@ class Controller:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def attach_candidate(self, sid):
+        """Leave a failed browser connection available for a later relay retry."""
         if sid in self.candidate_relays and not self.candidate_relays[sid].done():
             return
-        socket = await self.client.ws_connect(self.candidate.url + "/ws",
-                                              params={"clientId": sid}, compress=0)
+        try:
+            socket = await self.client.ws_connect(self.candidate.url + "/ws",
+                                                  params={"clientId": sid}, compress=0)
+        except (ClientError, OSError, asyncio.TimeoutError):
+            log.warning("Could not attach browser relay to candidate; retry on reconnect", exc_info=True)
+            return
         async def relay():
             try:
                 async for message in socket:
@@ -757,6 +793,7 @@ class Controller:
             await self.cpu.start(self.journal.data["environment"], cpu=True)
 
     async def manager(self, request, path):
+        """Proxy Manager requests, staging edits and rejecting restarts during preparation."""
         body = await request.read() if request.can_read_body else None
         if path.endswith("/queue/task") and body:
             task = json.loads(body)
@@ -767,6 +804,8 @@ class Controller:
             return web.json_response({"error": "ComfyUI本体は固定バージョンです。再デプロイで更新します。"}, status=409)
         if path.endswith(("/reboot", "/restart")):
             async with self.lock:
+                if self.prepare_task:
+                    raise ValueError("候補環境の準備完了を待ってください。")
                 if self.journal.data["candidate"]:
                     if self.apply_task and not self.apply_task.done():
                         return web.json_response({"status": "validating"}, status=202)
@@ -846,6 +885,7 @@ class Controller:
         await self.persist()
 
     async def handle(self, request):
+        """Route CPU control requests and reject candidate discard during preparation."""
         path = api_path(request.path)
         try:
             if path.startswith("/_remote_mcp/review/"):
@@ -881,7 +921,7 @@ class Controller:
                 return await self.mode(request)
             if path == "/split/environment/discard" and request.method == "POST":
                 async with self.lock:
-                    if self.journal.data["session"] or (self.apply_task and not self.apply_task.done()):
+                    if self.prepare_task or self.journal.data["session"] or (self.apply_task and not self.apply_task.done()):
                         raise ValueError("更新処理の完了を待ってください。")
                     await self.close_candidate_relays()
                     await self.candidate.stop()

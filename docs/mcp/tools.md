@@ -144,7 +144,7 @@ ComfyUIのLoRA選択肢を確認する例：
 | `list_nodes` | 任意で `query`・`offset`・`limit` | 現在の環境で登録されているノードクラス名・表示名・カテゴリ | ComfyUI CPU。詳しい入力仕様は `create_workflow(node_info)` |
 | `search_custom_nodes` | `action: search / details`。検索は `query`、詳細は `id` | 公開Comfy Registryのパック候補・リリース情報 | ComfyUI CPU → artokun → Registry。インストールしない |
 | `get_split_status` | なし | 稼働版 `active`、候補 `candidate`、GPU台数、処理・Managerキューの状態 | ComfyUI CPU。GPUは起こさないが、この照会自身がCPUを起こす |
-| `prepare_environment` | `active`・`request_id` | 指定した稼働版の検証用コピー `candidate` を用意 | ComfyUI CPU。候補がある間は通常の生成受付を止める |
+| `prepare_environment` | `active`・`request_id` | 指定した稼働版の検証用コピーを非同期で準備。`get_admin_operation` の完了結果から `candidate` を取得 | ComfyUI CPU。準備中・候補がある間は通常の生成受付を止める |
 | `change_node` | `candidate`・`action: install / update`・`node`・`request_id`。`install` は任意で `version` | 指定したRegistryパックを候補環境にインストール・更新 | ComfyUI CPU。候補のコード・依存を変更。稼働版はまだ切り替えない |
 | `apply_environment` | `candidate`・`request_id` | 候補をCPU/GPUで検証し、成功時だけ稼働版に切り替える | **ComfyUI CPUとGPU**。画像生成を依頼しなくても検証でGPUを起こす |
 | `discard_environment` | `candidate`・`request_id` | 指定した非稼働の候補を破棄 | ComfyUI CPU。稼働版は維持 |
