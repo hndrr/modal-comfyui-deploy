@@ -3,6 +3,7 @@
 import asyncio
 import configparser
 import json
+import logging
 import os
 import shutil
 import signal
@@ -156,7 +157,14 @@ class ComfyProcess:
 
     async def stop(self):
         if self.process and self.process.returncode is None:
-            await asyncio.to_thread(self.archive_temp, legacy_paths=self.role in {"cpu", "candidate"})
+            try:
+                await asyncio.to_thread(self.archive_temp, legacy_paths=self.role in {"cpu", "candidate"})
+            except OSError:
+                if self.role != "candidate":
+                    raise
+                # Candidates cannot execute jobs; an archive failure must not
+                # leave their process running after a failed startup or discard.
+                logging.getLogger(__name__).exception("Could not archive candidate temporary outputs; stopping process")
             os.killpg(self.process.pid, signal.SIGTERM)
             try:
                 await asyncio.wait_for(self.process.wait(), 15)

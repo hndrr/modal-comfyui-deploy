@@ -55,7 +55,7 @@ async def manager(c, method, path, **kwargs):
 
 
 async def queue_status(c):
-    if (c.journal.data["candidate"] or {}).get("status") == "creating":
+    if (c.journal.data["candidate"] or {}).get("status") in {"creating", "failed"}:
         return None
     if c.candidate.process and c.candidate.process.returncode is None:
         state = await manager(c, "GET", "manager/queue/status")

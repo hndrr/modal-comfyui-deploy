@@ -2,6 +2,7 @@ import asyncio
 import tempfile
 import threading
 import subprocess
+import signal
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from uuid import uuid4
 from aiohttp import ClientConnectionError, web
 from PIL import Image
 
-from comfy_split import gateway, model_files as models, production as media, split_admin as admin
+from comfy_split import gateway, model_files as models, production as media, runtime, split_admin as admin
 from comfy_split.gateway import Controller
 from comfy_split.storage import MOUNTS
 from tests.split.support import volume_mocks
@@ -33,6 +34,26 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
 
     async def run_op(self, name, **args):
         return await admin.handle(self.c, name, args)
+
+    async def test_failed_candidate_discard_survives_unreachable_manager_and_archive_failure(self):
+        c = self.c
+        c.journal.data["candidate"] = {"version": "env-failed", "status": "failed"}
+        child = SimpleNamespace(pid=123, returncode=None, wait=AsyncMock(return_value=0))
+        c.candidate.process = child
+        with patch.object(admin, "manager", AsyncMock(side_effect=ClientConnectionError("unreachable"))) as manager, \
+                patch.object(c.candidate, "archive_temp", side_effect=OSError("archive failed")), \
+                patch.object(runtime.os, "killpg") as kill, \
+                self.assertLogs("comfy_split.runtime", level="ERROR"):
+            result = await self.run_op("discard_environment", candidate="env-failed", request_id="discard-failed")
+            self.assertEqual(result["status"], "completed")
+        manager.assert_not_awaited()
+        kill.assert_called_once_with(123, signal.SIGTERM)
+        child.wait.assert_awaited_once()
+        self.assertIsNone(c.candidate.process)
+        self.assertIsNone(c.journal.data["candidate"])
+        self.assertEqual(c.journal.data["environment"], "base")
+        self.assertEqual(await self.run_op("discard_environment", candidate="env-failed",
+            request_id="discard-failed"), result)
 
     async def test_failed_reservation_commit_does_not_leave_a_candidate_without_a_task(self):
         self.c.volumes["data"].commit.aio.side_effect = [None, OSError("commit failed"), None]
