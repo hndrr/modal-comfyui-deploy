@@ -159,6 +159,43 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 409)
         self.assertEqual(self.control.journal.data["candidate"]["version"], "env-existing")
 
+    async def test_browser_candidate_failure_is_saved_and_can_be_discarded(self):
+        """Browser failures must leave a discardable state and preserve the active version."""
+        c = self.control
+        for stage in ("copy", "startup"):
+            with self.subTest(stage=stage):
+                with patch("comfy_split.gateway.create_environment", return_value="env-copy",
+                        side_effect=OSError("copy failed") if stage == "copy" else None), \
+                        patch.object(c.candidate, "start", AsyncMock(side_effect=RuntimeError("startup failed"))):
+                    async with c.lock:
+                        with self.assertRaisesRegex((OSError, RuntimeError), "failed"):
+                            await c.ensure_candidate()
+                self.assertEqual(Journal(Path(self.temp.name)).data["candidate"], c.journal.data["candidate"])
+                if stage == "copy":
+                    self.assertIsNone(c.journal.data["candidate"])
+                else:
+                    self.assertEqual(c.journal.data["candidate"], {"version": "env-copy", "status": "failed"})
+                    response = await self.client.post("/split/environment/discard")
+                    self.assertEqual(response.status, 200)
+                    self.assertIsNone(c.journal.data["candidate"])
+                self.assertEqual(c.journal.data["environment"], "base")
+                self.assertFalse(c.background_work())
+
+    async def test_browser_cannot_discard_or_apply_candidate_while_mcp_prepares_it(self):
+        """Browser actions must not replace the candidate owned by an ongoing MCP preparation."""
+        self.control.journal.data["candidate"] = {"version": None, "status": "creating"}
+        self.control.prepare_task = asyncio.create_task(asyncio.Event().wait())
+        try:
+            for path in ("/split/environment/discard", "/manager/reboot"):
+                response = await self.client.post(path)
+                self.assertEqual(response.status, 409)
+                self.assertEqual(self.control.journal.data["candidate"]["status"], "creating")
+                self.assertIsNone(self.control.apply_task)
+        finally:
+            self.control.prepare_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await self.control.prepare_task
+
     async def test_image_browsing_repair_rejects_queued_generation(self):
         self.control.journal.enqueue({"prompt": {"1": {}}})
         response = await self.client.post("/api/split/environment/repair-image-browsing")

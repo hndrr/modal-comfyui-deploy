@@ -127,3 +127,21 @@ class StartupLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.controller.cleanup_storage.assert_not_awaited()
         self.assertGreater(self.controller.cleanup_due, 0)
         await self.controller.close(None)
+
+    async def test_interrupted_preparation_is_not_restarted_or_left_pinned(self):
+        """Recovery must mark interrupted preparation unknown and release its reservation."""
+        c = self.controller
+        c.journal.data["candidate"] = {"version": None, "status": "creating"}
+        c.journal.data["admin_operations"] = {
+            "prepare": {"tool": "prepare_environment", "status": "running", "request_id": "prepare"}}
+        c.refresh_node_packs = AsyncMock()
+        c.cpu.start = AsyncMock()
+        c.dispatch = AsyncMock()
+        with patch("comfy_split.gateway.initialize_environment"):
+            await c.start(None)
+        self.assertEqual(c.journal.data["admin_operations"]["prepare"]["status"], "unknown")
+        self.assertIsNone(c.journal.data["candidate"])
+        self.assertIsNone(c.prepare_task)
+        self.assertFalse(c.background_work())
+        self.assertEqual(c.journal.data["environment"], "base")
+        await c.close(None)
