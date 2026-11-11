@@ -1,7 +1,7 @@
-// Stream authenticated HTTPS first; private MCP chunks are a fallback.
+// Use MCP authentication for bounded playback; large files retain the browser stream.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v7.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v8.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
 export const playerHtml = (browserOrigin:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -47,6 +47,7 @@ function show(parts,info){
 function play(){
   const info=current;if(!info)return;
   version++;retry.hidden=true;
+  if(info.delivery==="player" && info.size<=limit){void load();return;}
   if(!link.hidden){
     const raw=new URL(link.href);raw.pathname="/api/view";
     label.textContent="動画を読み込み中…";player.hidden=false;
@@ -82,7 +83,7 @@ async function load(){
       if(!meta || meta.prompt_id!==info.prompt_id || meta.index!==(info.index??0))throw Error("指定した動画の応答ではありません。");
       if(info.delivery==="starting"){
         current=info={...meta,delivery:"player"};setLink(info);
-        if(!link.hidden){play();return;}
+        if(info.size>limit && !link.hidden){play();return;}
       }
       if(!Number.isSafeInteger(info.size) || info.size<=0 || info.size>limit)throw Error("この動画は128 MiBを超えます。保存ページで開いてください。");
       if(meta.filename!==info.filename || meta.mimeType!=="video/mp4" || meta.size!==info.size || meta.byte_offset!==offset ||
@@ -132,6 +133,6 @@ addEventListener("message",e=>{
 });
 function resize(){const height=document.body.scrollHeight;if(initialized && height!==lastHeight){lastHeight=height;send({method:"ui/notifications/size-changed",params:{height}});}}
 new ResizeObserver(resize).observe(document.body);
-send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"7"},appCapabilities:{}}});
+send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"8"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;

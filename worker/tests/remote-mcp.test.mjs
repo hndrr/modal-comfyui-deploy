@@ -46,7 +46,9 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.deepEqual(videoPart._meta.ui.visibility,["app"]);
   assert.equal(videoPart._meta["openai/visibility"],"private");
   const playback=await (await request(jwt,"resources/read",{uri:video._meta.ui.resourceUri})).json();
-  assert.deepEqual(playback.result.contents[0]._meta.ui.csp,{connectDomains:[],resourceDomains:["https://"+split]});
+  assert.deepEqual(playback.result.contents[0]._meta.ui.csp,{connectDomains:[],resourceDomains:["https://"+split,"blob:"]});
+  assert.deepEqual(playback.result.contents[0]._meta["openai/widgetCSP"],
+    {connect_domains:[],resource_domains:["https://"+split,"blob:"]});
   const audio=list.result.tools.find(t=>t.name==="get_audio"),
     part=list.result.tools.find(t=>t.name==="read_audio_part");
   assert.deepEqual(part._meta.ui.visibility,["app"]);

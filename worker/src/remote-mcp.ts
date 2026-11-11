@@ -178,14 +178,14 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     description:"View a saved PNG, JPEG or WebP using its history filename. Shows an image viewer and always returns an authenticated link to open or save the image. Include that link in your reply; do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
-  const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin]}},
-    "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin]}};
+  const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},
+    "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())
     server.registerResource(i===0?"video-player":"previous-video-player-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
       contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin),_meta:videoCsp}],
     }));
   server.registerTool("get_video",{title:"Show the video player",
-    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. The player streams authenticated HTTPS first and uses private chunks only if needed. Prefer the player; opening the authenticated link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. Up to 128 MiB, the player uses private MCP reads without a separate website login. Larger or range-unsupported files use the authenticated website stream. Prefer the player; opening the link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI,"openai/widgetAccessible":true},
     annotations:read,inputSchema:videoInputs,outputSchema:videoOutput}, a=>call("get_video",a,browserOrigin));
   server.registerTool("read_video_part",{description:"Read the next verified chunk for the video player.",
