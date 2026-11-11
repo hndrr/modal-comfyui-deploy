@@ -23,11 +23,13 @@ const ranged = (range) => {
   const end=Math.min(+b,mp4.length-1);
   return new Response(mp4.subarray(+a,end+1),{status:206,headers:{"Content-Range":`bytes ${a}-${end}/${mp4.length}`}});
 };
-test("completed job gives the widget the original MP4 without a host attachment, and CLI downloads keep the bytes", async () => {
+test("completed job returns compact player metadata while CLI downloads keep the original bytes", async () => {
   const items = [{...src,type:"input"},{...src,filename:"../other.mp4"},
     {...src,subfolder:"../inputs"},{...src,filename:"file.png"},src];
   const r=await getVideo(upstream(job(items),ranged),origin,{prompt_id:id});
-  assert.deepEqual(Buffer.from(r._meta["split/video"],"base64"),mp4);
+  assert.equal(r._meta,undefined);
+  assert.equal(r.structuredContent.delivery,"player");
+  assert.ok(JSON.stringify(r).length<2048);
   assert.deepEqual(r.content.map(c=>c.type),["text"]);
   assert.equal(new URL(r.structuredContent.url).searchParams.get("filename"),src.filename);
   const download=await getVideo(upstream(job(items),ranged),origin,{prompt_id:id,byte_offset:0});
@@ -36,7 +38,7 @@ test("completed job gives the widget the original MP4 without a host attachment,
   assert.deepEqual(Buffer.from(resource.blob,"base64"),mp4);
   assert.equal(new URL(resource.uri).searchParams.get("filename"),src.filename);
   assert.equal(r.structuredContent.video_count,1);
-  assert.equal(r.structuredContent.next_offset,null);
+  assert.equal(download.structuredContent.next_offset,null);
 });
 test("client can reconstruct a file from separate MCP calls", async () => {
   let offset=0;
@@ -50,13 +52,14 @@ test("client can reconstruct a file from separate MCP calls", async () => {
   } while (offset!==null);
   assert.deepEqual(Buffer.concat(chunks),mp4);
 });
-test("large output produces a protected link without buffering the file",async()=>{
-  let cancelled=false;
-  const large=()=>new Response(new ReadableStream({cancel(){cancelled=true;}}),
-    {status:206,headers:{"Content-Range":"bytes 0-4194303/9000000"}});
+test("large output still gets a player and reads only the signature",async()=>{
+  const large=range=>{
+    assert.equal(range,"bytes=0-15");
+    return new Response(mp4.subarray(0,16),{status:206,headers:{"Content-Range":"bytes 0-15/9000000"}});
+  };
   const r=await getVideo(upstream(job([src]),large),origin,{prompt_id:id});
-  assert.equal(r.content[1].type,"resource_link"); assert.equal(r.structuredContent.size,9000000);
-  assert.equal(cancelled,true);
+  assert.equal(r.structuredContent.delivery,"player");assert.equal(r.structuredContent.size,9000000);
+  assert.ok(JSON.stringify(r).length<2048);assert.equal(r._meta,undefined);
 });
 test("missing jobs, failed jobs and invalid output selections never fetch a file",async()=>{
   for (const [history,args] of [[{},{prompt_id:id}],[job([]),{prompt_id:id}],
@@ -78,5 +81,20 @@ test("rejected redirects, wrong ranges, truncation and non-video responses are n
 test("an initializing CPU cannot reach video history or submit a prompt",async()=>{
   const res=await callSplit(async(path)=>{assert.equal(path,"/split/startup");throw new DOMException("starting","TimeoutError");},
     "get_video",{prompt_id:id},origin);
-  assert.match(res.content[0].text,/starting/i);
+  assert.match(res.content[0].text,/start/i);
+  assert.equal(res.structuredContent.delivery,"starting");
+});
+test("private video chunks reconstruct the file without model-visible bytes",async()=>{
+  const bytes=Buffer.alloc(512*1024+7);mp4.copy(bytes);let offset=0;const parts=[];
+  do{
+    const res=await callSplit(()=>{throw Error("ComfyUI must not start");},"read_video_part",
+      {prompt_id:id,byte_offset:offset},origin,undefined,upstream(job([src]),range=>{
+        const end=Math.min(offset+512*1024,bytes.length)-1;
+        assert.equal(range,`bytes=${offset}-${offset+512*1024-1}`);
+        return new Response(bytes.subarray(offset,end+1),{status:206,headers:{"Content-Range":`bytes ${offset}-${end}/${bytes.length}`}});
+      }));
+    assert.deepEqual(res.content,[]);parts.push(Buffer.from(res._meta["split/videoPart"],"base64"));
+    offset=res.structuredContent.next_offset;
+  }while(offset!==null);
+  assert.deepEqual(Buffer.concat(parts),bytes);
 });

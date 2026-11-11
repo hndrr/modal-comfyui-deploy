@@ -16,18 +16,22 @@ export const videoInputs = {...commonInputs, index:outputIndex.describe("Zero-ba
 export const audioInputs = {...commonInputs, index:outputIndex.describe("Zero-based audio file index (default 0)")};
 export const videoSchema = z.object(videoInputs);
 export const audioSchema = z.object(audioInputs);
-export const audioOutput = {
+const mediaOutput = {
   prompt_id:z.uuid(), index:z.number().int().nonnegative(),
   delivery:z.enum(["player","starting","link","inline","chunk"]),
   filename:z.string().optional(), mimeType:z.string().optional(), url:z.url().optional(),
-  audio_count:z.number().int().positive().optional(), size:z.number().int().positive().optional(),
+  size:z.number().int().positive().optional(),
   byte_offset:z.number().int().nonnegative().optional(), byte_length:z.number().int().positive().optional(),
   next_offset:z.number().int().nonnegative().nullable().optional(),
 };
+export const audioOutput = {...mediaOutput, audio_count:z.number().int().positive().optional()};
+export const videoOutput = {...mediaOutput, video_count:z.number().int().positive().optional()};
 // A bounded read for the audio widget. Its payload goes only to the app.
 export const audioPartInputs = {prompt_id:commonInputs.prompt_id, index:outputIndex,
   byte_offset:commonInputs.byte_offset.unwrap()};
 export const AUDIO_PART_BYTES = 128 * 1024;
+export const videoPartInputs = audioPartInputs;
+export const VIDEO_PART_BYTES = 512 * 1024;
 type Kind = "audio" | "video";
 type Format = {mime: string; min: number; matches: (b: Uint8Array) => boolean};
 const tag = (b: Uint8Array, at: number, value: string) =>
@@ -106,18 +110,12 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   const path = "/view?" + new URLSearchParams({type:"output", filename, subfolder});
   const url = new URL(path, publicOrigin).href;
   const chunks = byte_offset !== undefined || chunk_bytes !== undefined;
-  // Never put an audio block or base64 in a normal chat turn. Check just
-  // the file signature and total size; the iframe reads bytes privately.
-  const player = kind === "audio" && !chunks;
+  // Never put media bytes or base64 in a normal chat turn. Check just
+  // the file signature and total size; the iframe loads authenticated media.
+  const player = !chunks;
   const offset = byte_offset ?? 0, length = player ? 16 : chunk_bytes ?? MAX_PART;
   const file = await get(path, {Range:`bytes=${offset}-${offset + length - 1}`});
   const metadata = {prompt_id, filename, index, [kind + "_count"]:files.length, mimeType:format.mime, url};
-  const link = (size?: number): CallToolResult => ({
-    structuredContent:{...metadata, delivery:"link", size},
-    content:[{type:"text",text:"Open the " + kind + " after signing in: " + url +
-      "\nFor MCP-only download, call get_" + kind + " with byte_offset: 0 and follow next_offset."},
-      {type:"resource_link", uri:url, name:filename, mimeType:format.mime, size}],
-  });
   if (file.status !== 200 && file.status !== 206) {
     await file.body?.cancel();
     return fail(file.status === 416 ? "Byte offset is outside this file." :
@@ -132,7 +130,6 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
       return fail("Invalid upstream byte range.");
     }
     expected = Math.min(length, total - offset);
-    if (!chunks && !player && total > length) { await file.body?.cancel(); return link(total); }
   } else if (offset > 0) {
     await file.body?.cancel();
     return fail("Upstream ignored the byte offset. Open the authenticated file URL: " + url);
@@ -140,24 +137,27 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   const data = await readAtMost(file, player && file.status === 200 ? MAX_PART : length);
   if (!data) {
     if (player) return {structuredContent:{...metadata,delivery:"link"},
-      content:[{type:"text",text:"Open the signed-in audio player: " + url}]};
-    return chunks ? fail("Upstream did not honor the byte range. Open the authenticated file URL: " + url) : link();
+      content:[{type:"text",text:"Open the signed-in " + kind + " player: " + url}]};
+    return fail("Upstream did not honor the byte range. Open the authenticated file URL: " + url);
   }
   if (!data.length || (expected !== undefined && expected !== data.length))
     return fail("Incomplete media response.");
   total ??= data.length;
   if (total < format.min || (offset === 0 && data.length >= format.min && !format.matches(data)))
     return fail("File content does not match the expected format: " + format.mime + ".");
+  // A Range-ignoring video cannot be read privately beyond one player chunk.
+  if (player && kind === "video" && file.status === 200 && total > VIDEO_PART_BYTES)
+    return {structuredContent:{...metadata,delivery:"link",size:total},
+      content:[{type:"text",text:filename + " — use the video player. It streams the authenticated file URL: " + url}]};
   if (player) return {structuredContent:{...metadata,delivery:"player",size:total},
-    content:[{type:"text",text:filename + " — play in the audio player or open: " + url}]};
+    content:[{type:"text",text:filename + " — use the " + kind + " player. The player loads authenticated media. " +
+      "Retrieval success alone does not confirm that the player is visible. Give this link only if playback is unavailable or opening/saving is requested (website login required): " + url}]};
   const complete = offset === 0 && data.length === total;
   const next = offset + data.length < total ? offset + data.length : null;
   const info = {...metadata, delivery:complete ? "inline" : "chunk", size:total,
     byte_offset:offset, byte_length:data.length, next_offset:next};
   const blob = base64(data);
-  if (forPlayer) return {structuredContent:info, content:[], _meta:{"split/audioPart":blob}};
-  if (kind === "video" && !chunks) return {structuredContent:info, _meta:{"split/video":blob},
-    content:[{type:"text",text:filename + " — play in the video player or open after signing in: " + url}]};
+  if (forPlayer) return {structuredContent:info, content:[], _meta:{["split/" + kind + "Part"]:blob}};
   return {structuredContent:info, content:[
     {type:"text", text:JSON.stringify(info)},
     complete && kind === "audio" ? {type:"audio", mimeType:format.mime, data:blob} :

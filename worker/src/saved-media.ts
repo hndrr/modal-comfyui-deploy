@@ -1,11 +1,11 @@
 import type {CallToolResult} from "@modelcontextprotocol/sdk/types.js";
 import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
-import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, videoSchema} from "./media.ts";
+import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
 
 type Send = (path:string, init:RequestInit) => Promise<Response>;
 const failure=(text:string):CallToolResult=>({isError:true,content:[{type:"text",text}]});
-export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","list_outputs"]);
+export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","read_video_part","list_outputs"]);
 export const imageOutput={filename:z.string(),mimeType:z.enum(["image/png","image/jpeg","image/webp"]),
   url:z.url(),delivery:z.enum(["inline","link"])};
 
@@ -54,7 +54,9 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
   const url=new URL(path,origin).href;
   // This URL requires browser Access login; an MCP host cannot materialize it as an attachment.
   const result:CallToolResult={structuredContent:{filename,mimeType:mime,url,delivery:bytes?"inline":"link"},
-    content:[{type:"text",text:"Open or save the image after signing in: "+url}]};
+    content:[{type:"text",text:bytes ?
+      filename+" — use the inline image viewer; no separate website login is needed. Give this link only if the viewer is unavailable or opening/saving is requested (website login required): "+url :
+      "This image exceeds 8 MiB. Open or save it after signing in: "+url}]};
   if (!bytes) return result;
   const tag=(at:number,s:string)=>s.split("").every((c,i)=>bytes[at+i]===c.charCodeAt(0));
   if (!(ext==="png" ? bytes[0]===137 && tag(1,"PNG\r\n\x1a\n") :
@@ -79,6 +81,8 @@ export async function callSavedMedia(send:Send,name:string,args:Record<string,un
     }
     if (name==="read_audio_part") return await getMedia("audio",send,origin,
       {...z.object(audioPartInputs).parse(args),chunk_bytes:AUDIO_PART_BYTES},true);
+    if (name==="read_video_part") return await getMedia("video",send,origin,
+      {...z.object(videoPartInputs).parse(args),chunk_bytes:VIDEO_PART_BYTES},true);
     return name==="get_audio" ? await getMedia("audio",send,origin,audioSchema.parse(args)) :
       await getMedia("video",send,origin,videoSchema.parse(args));
   } catch {
