@@ -15,7 +15,7 @@ import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
 import { IMAGE_VIEWER_URI, imageViewerHtml } from "./image-viewer.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
-import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, videoInputs, videoSchema } from "./media.ts";
+import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
 const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsWith("/") &&
@@ -79,10 +79,12 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
           const result=JSON.parse(new TextDecoder().decode(bytes));
           return {isError:!r.ok || (Object.hasOwn(adminTools,name) && ["failed","unknown"].includes(result?.status)),content:[{type:"text",text:JSON.stringify(result)}]};
         }
-        if (name === "get_video" || name === "get_audio" || name === "read_audio_part") {
+        if (name === "get_video" || name === "get_audio" || name === "read_audio_part" || name === "read_video_part") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           if (name === "read_audio_part") return await getMedia("audio", send, browserOrigin,
             {...z.object(audioPartInputs).parse(args), chunk_bytes:AUDIO_PART_BYTES}, true);
+          if (name === "read_video_part") return await getMedia("video", send, browserOrigin,
+            {...z.object(videoPartInputs).parse(args), chunk_bytes:VIDEO_PART_BYTES}, true);
           return name === "get_audio"
             ? await getMedia("audio", send, browserOrigin, audioSchema.parse(args))
             : await getMedia("video", send, browserOrigin, videoSchema.parse(args));
@@ -109,16 +111,16 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
         }
         return await r.json<CallToolResult>();
       }
-      if (name==="get_audio" && args.byte_offset===undefined && args.chunk_bytes===undefined) break;
+      if ((name==="get_audio" || name==="get_video") && args.byte_offset===undefined && args.chunk_bytes===undefined) break;
       await new Promise(resolve=>setTimeout(resolve,Math.min(1500,Math.max(0,deadline-Date.now()))));
     }
-    if (name==="get_audio" && args.byte_offset===undefined && args.chunk_bytes===undefined) {
+    if ((name==="get_audio" || name==="get_video") && args.byte_offset===undefined && args.chunk_bytes===undefined) {
       const {prompt_id,index=0}=audioSchema.parse(args);
       return {structuredContent:{delivery:"starting",prompt_id,index},content:[{type:"text",
-        text:"The audio player is waiting for split to start. No generation was submitted. Clients without a player can retry get_audio."}]};
+        text:"The media player is waiting for split to start. No generation was submitted. Clients without a player can retry " + name + "."}]};
     }
     const waiting=failure("Split CPU is starting. Retry after 2 seconds; keep the same request_id. No tool was executed.");
-    return name==="read_audio_part" ? {...waiting,_meta:{"split/starting":true}} : waiting;
+    return name==="read_audio_part" || name==="read_video_part" ? {...waiting,_meta:{"split/starting":true}} : waiting;
   } catch {
     return failure(name==="enqueue_workflow" ?
       "No receipt available. Retry only with the SAME request_id and unchanged workflow." : "Split CPU request failed; retry the read.");
@@ -182,10 +184,13 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     server.registerResource(i===0?"video-player":"previous-video-player-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
       contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin),_meta:videoCsp}],
     }));
-  server.registerTool("get_video",{title:"Retrieve a generated video",
-    description:"Play a saved MP4. In chat call with prompt_id and optional index; include the returned signed-in playback link as a fallback. For binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
-    _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI},
-    annotations:read,inputSchema:videoInputs}, a=>call("get_video",a,browserOrigin));
+  server.registerTool("get_video",{title:"Show the video player",
+    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. The player retrieves video bytes privately. Prefer the player; the authenticated link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI,"openai/widgetAccessible":true},
+    annotations:read,inputSchema:videoInputs,outputSchema:videoOutput}, a=>call("get_video",a,browserOrigin));
+  server.registerTool("read_video_part",{description:"Read the next verified chunk for the video player.",
+    _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
+    annotations:read,inputSchema:videoPartInputs,outputSchema:videoOutput}, a=>call("read_video_part",a,browserOrigin));
   server.registerTool("get_audio",{title:"Retrieve generated audio",
     description:"Play saved audio. In chat, call with only prompt_id and optional index: show the player and include the returned authenticated link as a fallback. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
     _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI,"openai/widgetAccessible":true},

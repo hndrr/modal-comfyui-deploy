@@ -1,11 +1,11 @@
 import type {CallToolResult} from "@modelcontextprotocol/sdk/types.js";
 import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
-import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, videoSchema} from "./media.ts";
+import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
 
 type Send = (path:string, init:RequestInit) => Promise<Response>;
 const failure=(text:string):CallToolResult=>({isError:true,content:[{type:"text",text}]});
-export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","list_outputs"]);
+export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","read_video_part","list_outputs"]);
 export const imageOutput={filename:z.string(),mimeType:z.enum(["image/png","image/jpeg","image/webp"]),
   url:z.url(),delivery:z.enum(["inline","link"])};
 
@@ -79,6 +79,8 @@ export async function callSavedMedia(send:Send,name:string,args:Record<string,un
     }
     if (name==="read_audio_part") return await getMedia("audio",send,origin,
       {...z.object(audioPartInputs).parse(args),chunk_bytes:AUDIO_PART_BYTES},true);
+    if (name==="read_video_part") return await getMedia("video",send,origin,
+      {...z.object(videoPartInputs).parse(args),chunk_bytes:VIDEO_PART_BYTES},true);
     return name==="get_audio" ? await getMedia("audio",send,origin,audioSchema.parse(args)) :
       await getMedia("video",send,origin,videoSchema.parse(args));
   } catch {
