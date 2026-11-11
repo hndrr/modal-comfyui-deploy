@@ -110,6 +110,7 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
 
         for name, module in (("HyperFlowLoader", "custom_nodes.comfyui-hyperflow-flash"),
                              ("NewLocalNode", "custom_nodes.new-pack"),
+                             ("ComfySkillsLoader", "custom_nodes.ComfyUI-Skills-Loader"),
                              ("NewCoreNode", "comfy_extras.nodes_new")):
             with self.subTest(name=name):
                 graph = {"1": {"class_type": name, "inputs": {}}}
@@ -143,6 +144,8 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             {"python_module": "comfy_api_nodes.nodes_gemini"},
             {"python_module": "custom_nodes.comfyui-geminitools"},
             {"python_module": "custom_nodes.comfyui-jev"},
+            {"python_module": "custom_nodes.ComfyUI-AgentRuntime"},
+            {"python_module": "custom_nodes.ComfyUI-AgentBridge"},
         )):
             self.control.objects.return_value = web.json_response({"NewAPI": definition})
             graph = {"1": {"class_type": "NewAPI", "inputs": {}, "api_node": False,
