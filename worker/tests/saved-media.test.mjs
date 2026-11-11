@@ -22,7 +22,8 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
       new URL(path,host).searchParams.get("filename")==="v.mp4"?video:png);
   };
   for(const [name,args] of [["get_audio",{prompt_id:id.toUpperCase()}],["read_audio_part",{prompt_id:id.toUpperCase(),byte_offset:0}],
-    ["get_video",{prompt_id:id.toUpperCase()}],["get_image",{filename:"画像.png"}],["list_outputs",{prompt_id:id.toUpperCase()}]]) {
+    ["get_video",{prompt_id:id.toUpperCase()}],["read_video_part",{prompt_id:id.toUpperCase(),byte_offset:0}],
+    ["get_image",{filename:"画像.png"}],["list_outputs",{prompt_id:id.toUpperCase()}]]) {
     const r=await callSplit(split,name,args,host,undefined,media);
     assert.ok(!r.isError,JSON.stringify(r));
     if(name==="get_image"){
@@ -34,7 +35,7 @@ test("all saved-output tools bypass ComfyUI readiness and upstream MCP",async()=
     }
   }
   assert.ok(paths.every(p=>!p.includes("startup")));
-  for(const name of ["get_audio","get_video","read_audio_part","get_image","list_outputs"]){
+  for(const name of ["get_audio","get_video","read_audio_part","read_video_part","get_image","list_outputs"]){
     const r=await callSplit(split,name,{prompt_id:id,filename:"a.png",byte_offset:0},host,undefined,
       ()=>{throw new Error("media unavailable");});
     assert.equal(r.isError,true);assert.match(r.content[0].text,/delivery is unavailable/);

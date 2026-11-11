@@ -41,6 +41,10 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.match(viewer.result.contents[0].mimeType,/profile=mcp-app/);
   assert.match(viewer.result.contents[0].text,/<img hidden/);
   const video=list.result.tools.find(t=>t.name==="get_video");
+  assert.deepEqual(video.outputSchema.required.sort(),["delivery","index","prompt_id"]);
+  const videoPart=list.result.tools.find(t=>t.name==="read_video_part");
+  assert.deepEqual(videoPart._meta.ui.visibility,["app"]);
+  assert.equal(videoPart._meta["openai/visibility"],"private");
   const playback=await (await request(jwt,"resources/read",{uri:video._meta.ui.resourceUri})).json();
   assert.deepEqual(playback.result.contents[0]._meta.ui.csp,{connectDomains:[],resourceDomains:["https://"+split]});
   const audio=list.result.tools.find(t=>t.name==="get_audio"),
