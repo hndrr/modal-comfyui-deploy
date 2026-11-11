@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {runInNewContext} from "node:vm";
 import {playerHtml} from "../src/video-player.ts";
-import {VIDEO_PART_BYTES} from "../src/media.ts";
+import {getMedia,VIDEO_PART_BYTES} from "../src/media.ts";
 
 test("the player reads a video larger than 4 MiB privately and preserves it when the host repeats the result",async()=>{
   const handlers={},calls=[],messages=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
@@ -47,4 +47,26 @@ test("a mismatched private video response is rejected before it can play",async(
   await new Promise(r=>setImmediate(r));
   assert.equal(elements.video.src,undefined);assert.equal(elements.button.hidden,false);
   assert.match(elements.span.textContent,/指定した動画/);
+});
+
+test("a range-ignoring upstream keeps link-only results playable without private chunk retries",async()=>{
+  const id="00000000-0000-4000-8000-000000000001",origin="https://split.example.com";
+  const result=await getMedia("video",async path=>path.startsWith("/history/") ?
+    Response.json({[id]:{status:{status_str:"success",completed:true},outputs:{"1":{video:[{filename:"clip.mp4",type:"output"}]}}}}) :
+    new Response(null,{status:200,headers:{"Content-Length":"9000000"}}),origin,{prompt_id:id});
+  assert.equal(result.structuredContent.delivery,"link");assert.equal(result.structuredContent.size,undefined);
+  const handlers={},calls=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
+    pause(){},load(){},removeAttribute(k){delete this[k];}}]));
+  runInNewContext(playerHtml(origin).split("<script>")[1].split("</script>")[0],
+    {window:{openai:{callTool:async(name)=>{calls.push(name);return {isError:true};}}},parent:{postMessage(){}},
+      document:{querySelector:k=>elements[k],body:{scrollHeight:100}},URL,Blob,Uint8Array,atob,setTimeout,clearTimeout,
+      ResizeObserver:class{observe(){}},addEventListener:(n,f)=>handlers[n]=f});
+  handlers["openai:set_globals"]({detail:{globals:{toolOutput:result.structuredContent}}});
+  await new Promise(r=>setImmediate(r));
+  assert.deepEqual(calls,[]);assert.equal(elements.video.hidden,false);
+  assert.equal(elements.video.src,"https://split.example.com/api/view?type=output&filename=clip.mp4&subfolder=");
+  elements.video.onloadeddata();assert.equal(elements.span.textContent,"clip.mp4");
+  elements.video.onerror();assert.equal(elements.button.hidden,true);
+  assert.match(elements.span.textContent,/保存ページ/);assert.doesNotMatch(elements.span.textContent,/128 MiB/);
+  assert.equal(elements.a.hidden,false);assert.deepEqual(calls,[]);
 });
