@@ -49,12 +49,15 @@ test("a mismatched private video response is rejected before it can play",async(
   assert.match(elements.span.textContent,/指定した動画/);
 });
 
-test("a range-ignoring upstream keeps link-only results playable without private chunk retries",async()=>{
+for (const size of [VIDEO_PART_BYTES+1,4*1024*1024,9000000])
+test(`a range-ignoring upstream keeps a ${size}-byte video playable without private chunk retries`,async()=>{
   const id="00000000-0000-4000-8000-000000000001",origin="https://split.example.com";
+  const bytes=size<=4*1024*1024 ? Buffer.alloc(size) : null;
+  bytes?.write("ftyp",4);
   const result=await getMedia("video",async path=>path.startsWith("/history/") ?
     Response.json({[id]:{status:{status_str:"success",completed:true},outputs:{"1":{video:[{filename:"clip.mp4",type:"output"}]}}}}) :
-    new Response(null,{status:200,headers:{"Content-Length":"9000000"}}),origin,{prompt_id:id});
-  assert.equal(result.structuredContent.delivery,"link");assert.equal(result.structuredContent.size,undefined);
+    new Response(bytes,{status:200,headers:{"Content-Length":String(size)}}),origin,{prompt_id:id});
+  assert.equal(result.structuredContent.delivery,"link");assert.equal(result.structuredContent.size,bytes?.length);
   const handlers={},calls=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
     pause(){},load(){},removeAttribute(k){delete this[k];}}]));
   runInNewContext(playerHtml(origin).split("<script>")[1].split("</script>")[0],
