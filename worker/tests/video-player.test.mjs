@@ -4,7 +4,7 @@ import {runInNewContext} from "node:vm";
 import {playerHtml} from "../src/video-player.ts";
 import {getMedia,VIDEO_PART_BYTES} from "../src/media.ts";
 
-test("HTTPS failure falls back to private chunks and repeated results preserve the video",async()=>{
+test("MCP playback avoids browser Access and repeated results preserve the video",async()=>{
   const handlers={},calls=[],messages=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
     pause(){},load(){},removeAttribute(k){delete this[k];}}]));
   const bytes=Buffer.alloc(4*1024*1024+9);bytes.write("ftyp",4);
@@ -26,17 +26,14 @@ test("HTTPS failure falls back to private chunks and repeated results preserve t
       setTimeout,clearTimeout,ResizeObserver:class{observe(){}},addEventListener:(n,f)=>handlers[n]=f});
   handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});
   await new Promise(r=>setImmediate(r));
-  assert.equal(calls.length,0);assert.equal(elements.video.src,"https://split.example.com/api/view?filename=clip.mp4");
-  elements.video.onerror();
-  await new Promise(r=>setImmediate(r));
   assert.equal(elements.video.hidden,false);assert.equal(elements.video.src,"blob:video");
   assert.deepEqual(Buffer.from(await file.arrayBuffer()),bytes);
   assert.equal(calls.length,9);assert.ok(calls.every(c=>c.name==="read_video_part"));
   handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});
   assert.equal(calls.length,9);assert.equal(revoked,false);assert.equal(elements.video.src,"blob:video");
   elements.video.onerror();assert.equal(elements.button.hidden,false);
-  elements.button.onclick();assert.equal(calls.length,9);
-  assert.equal(elements.video.src,"https://split.example.com/api/view?filename=clip.mp4");
+  elements.button.onclick();await new Promise(r=>setImmediate(r));assert.equal(calls.length,18);
+  assert.equal(elements.video.src,"blob:video");
   handlers.message({source:parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:3,method:"ui/resource-teardown"}});
   assert.equal(revoked,true);assert.equal(elements.video.hidden,true);
 });
