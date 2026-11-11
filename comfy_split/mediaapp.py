@@ -1,4 +1,4 @@
-"""Saved-file delivery and catalog: scripts/modal.sh deploy mediaapp.py.
+"""Saved-file delivery and catalog: scripts/modal.sh deploy -m comfy_split.mediaapp.
 
 Separate app and image so deploying this endpoint never rebuilds ComfyUI.
 Proxy Auth is mandatory. Reads output, model and job/user-data Volumes only.

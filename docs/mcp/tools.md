@@ -13,7 +13,7 @@ ChatGPT Web・Claude Code・Codex が同じ HTTPS `/mcp` で使う **32ツール
 | 表の表記 | 実際に動くもの | GPU |
 | --- | --- | --- |
 | Worker のみ | 認証・MCP 初期化・ツール一覧・`ping`・プレイヤー HTML | 起動しない。Modal CPU も起動しない |
-| 配信用 CPU | `mediaapp.py`。Volume の保存データを読む。ComfyUI・artokun MCP は起動しない | 起動しない |
+| 配信用 CPU | `comfy_split/mediaapp.py`。Volume の保存データを読む。ComfyUI・artokun MCP は起動しない | 起動しない |
 | ComfyUI CPU | `splitapp.py` の CPU。現在のノード情報・ジョブ管理・素材保存・上流ツールを扱う | その操作だけでは起動しない |
 | モデル取得 CPU | ComfyUI CPU が依頼するダウンロード用の別関数 | 起動しない |
 | CPU実行ワーカー | CPU対応済みAPI・軽い素材入出力、または明示的なCPU試行 | 起動しない |
