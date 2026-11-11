@@ -5,7 +5,7 @@ split ホストにブラウザでログインし、`/assets` を開くと入力�
 **ホストへの設定**：既存の split と同じ Modal プロファイルを使い、以下を実行します。`<SPLIT_PUBLIC_ORIGIN>` は、Cloudflare Worker の Custom Domain に登録した split の公開ホスト名に `https://` を付けた URL です。パスや末尾の `/` は付けません。
 
 ```sh
-SPLIT_GUI_PUBLIC_ORIGIN="<SPLIT_PUBLIC_ORIGIN>" scripts/modal.sh deploy split_guis.py
+SPLIT_GUI_PUBLIC_ORIGIN="<SPLIT_PUBLIC_ORIGIN>" scripts/modal.sh deploy -m comfy_split.split_guis
 ```
 
 両方の Web 関数は Modal Proxy Auth が必須で、アイドル時の最小台数は 0 です。保存ジョブには既存の `huggingface-secret` が必要です。Worker の `SPLIT_ADMIN_GUIS` Secret に JSON で `hostname`（既存の `SPLIT_UI_ORIGIN` のホスト）、`owner_email`（許可する本人）、`models_origin`・`assets_origin`（各 web 関数の HTTPS origin）、`key`・`secret`（この Modal 環境の Proxy Auth）を登録して Worker をデプロイします。実際の値は Git に置きません。

@@ -1,4 +1,4 @@
-"""CPU-only model saving and asset management for the split deployment."""
+"""Split CPU GUIs: scripts/modal.sh deploy -m comfy_split.split_guis."""
 import os
 import subprocess
 import sys

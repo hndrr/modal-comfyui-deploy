@@ -112,14 +112,14 @@
 
 ## 保存済みメディア配信用 CPU（mediaapp）の設定
 
-過去の生成画像・音声・動画の参照を独立した配信用 CPU（`mediaapp.py`）へ分離することで、ComfyUI 本体の CPU を起動させずにメディアを高速配信できます。
+過去の生成画像・音声・動画の参照を独立した配信用 CPU（`comfy_split/mediaapp.py`）へ分離することで、ComfyUI 本体の CPU を起動させずにメディアを高速配信できます。
 
-`<MEDIA_MODAL_ORIGIN>` は `mediaapp.py` のデプロイ出力に表示される Web URL です（パスと末尾の `/` は除きます）。
+`<MEDIA_MODAL_ORIGIN>` は `comfy_split/mediaapp.py` のデプロイ出力に表示される Web URL です（パスと末尾の `/` は除きます）。
 
 ### 構築手順
 1. **索引の作成と mediaapp デプロイ**:
    - 既存の split と同じ Modal プロファイル・環境で、更新済みの `splitapp.py` をデプロイし、一度 CPU を起動します（起動時に既存台帳からジョブ別の保存記録と索引を作成します）。
-   - 続いて `scripts/modal.sh deploy mediaapp.py` を実行します（既存の output / data / models Volume を参照し、モデルはメタデータのみ読み込みます）。
+   - 続いて `scripts/modal.sh deploy -m comfy_split.mediaapp` を実行します（既存の output / data / models Volume を参照し、モデルはメタデータのみ読み込みます）。
 2. **Worker のデプロイ**: Worker のテスト・型検査後、新しいコードをデプロイします。
 3. **Worker へのシークレット登録**:
    Worker のシークレット `SPLIT_MEDIA_ORIGIN` に以下を登録します（認証情報は既存 split の Proxy Auth を再利用します）。

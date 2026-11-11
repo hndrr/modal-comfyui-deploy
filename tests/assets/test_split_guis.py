@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-DEPLOY_FILE = Path(__file__).resolve().parents[2] / "split_guis.py"
+DEPLOY_FILE = Path(__file__).resolve().parents[2] / "comfy_split" / "split_guis.py"
 
 
 class SplitGuiDeploymentTests(unittest.TestCase):

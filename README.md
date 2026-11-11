@@ -96,7 +96,8 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 | ドキュメント | 内容 |
 | --- | --- |
 | [MCP の経路図](docs/design/split-mcp-routing.md) | 操作ごとの実行先と CPU・GPU を起動する条件 |
-| [メディア配信](docs/design/split-media-delivery.md) | 現在の参照用 CPU と、未実装の R2 配信案 |
+| [メディア配信](docs/design/split-media-delivery.md) | 現在の参照用 CPU による原本の取得・配信 |
+| [メディア配信アダプタ](docs/design/media-delivery-adapter-plan.md) | 外部配信先との任意の API 連携と、MCP の照会・生成結果への組み込み（未実装） |
 | [split のストレージ](docs/design/split-storage.md) | 保存先の役割と当時の一度限りの移行方針 |
 | [split の実行環境とストレージ](docs/design/runtime-and-storage.md) | Volume とイメージの使い分け |
 | [Access と Worker](docs/design/cloudflare-access.md) | 認証・WebSocket 中継・迂回経路の遮断 |
@@ -115,14 +116,14 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 .
 ├── comfyapp.py                     # 通常構成の Modal アプリ（CPU/GPU 同一コンテナ）
 ├── splitapp.py                     # CPU/GPU 分離構成の Modal アプリ（オンデマンド GPU）
-├── mediaapp.py                     # split の保存済みメディア配信専用 CPU アプリ
-├── split_guis.py                   # split の /models・/assets 用 Web GUI
 ├── preserve_model.py               # モデル保存処理と Modal 上の Web GUI
 ├── preserve_model_gui.py           # ローカル環境のモデル保存 GUI
 ├── asset_manager.py                # Modal Volume 操作ツール
 ├── asset_rpc.py                    # 資産管理画面と Python バックエンド間の RPC
 │
 ├── comfy_split/                    # split 構成のバックエンド実装
+│   ├── mediaapp.py                 # 保存済みメディア配信専用 CPU アプリ
+│   ├── split_guis.py               # /models・/assets 用 Web GUI
 │   ├── gateway.py                  # HTTP/WebSocket 受付とリクエスト中継
 │   ├── modal_proxy.py              # ASGI パス再エンコードと認証付きプロキシ
 │   ├── worker.py                   # オンデマンド GPU ワーカーの実行処理
