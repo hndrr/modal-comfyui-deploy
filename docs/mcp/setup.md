@@ -120,7 +120,7 @@
 1. **索引の作成と mediaapp デプロイ**:
    - 既存の split と同じ Modal プロファイル・環境で、更新済みの `splitapp.py` をデプロイし、一度 CPU を起動します（起動時に既存台帳からジョブ別の保存記録と索引を作成します）。
    - 続いて `scripts/modal.sh deploy mediaapp.py` を実行します（既存の output / data / models Volume を参照し、モデルはメタデータのみ読み込みます）。
-2. **Worker のデプロイ**: Worker のテスト・型検査後、新しいコードをデプロイします。
+2. **Worker のデプロイ**: テスト・型検査後、`worker/` で `npm run deploy` を実行します。ビューアーも自動でビルドされます。
 3. **Worker へのシークレット登録**:
    Worker のシークレット `SPLIT_MEDIA_ORIGIN` に以下を登録します（認証情報は既存 split の Proxy Auth を再利用します）。
    ```json
@@ -136,39 +136,12 @@
   - 画像: PNG, JPEG, WebP, GIF
   - 音声: MP3, WAV, FLAC, Ogg, Opus, M4A
   - 動画: MP4, MOV, WebM, MKV
-  - 3D: GLB（`model/gltf-binary`）, SPZ（`application/octet-stream`）
-- **ComfyUI経路の対象**: SVGなど未対応の形式、入力・一時プレビュー・画像変換処理、および `.split-temp` 配下はComfyUI CPUへ送ります。配信用CPUは隠しパスを拒否し、MCPの保存済み3D取得も一時出力を含めません。一時ファイルの保持・清掃方針は変更しません（詳細は [メディア配信の設計](../design/split-media-delivery.md) を参照）。
+  - 3D: GLB, SPZ
+- **ComfyUI経路の対象**: SVGなど未対応の形式、入力・一時プレビュー・`.split-temp` 配下・画像変換処理は従来のComfyUI経路で配信します（詳細は [メディア配信の設計](../design/split-media-delivery.md) を参照）。
 - **履歴読み込みの軽量化**:
   - 保存済み履歴は `data/state/saved-jobs.jsonl` と `data/state/saved-jobs/` を使用してジョブ単位で取得されます。
   - これにより、台帳ファイル `controller.json` が 32 MiB を超えている場合でも安全に取得できます（旧形式の互換読み込み上限は 32 MiB）。
 - **切り戻し**: `SPLIT_MEDIA_ORIGIN` を削除すると、メディア取得時に ComfyUI CPU を使用する旧経路へ戻ります。
-
-### GLB/SPZビューアーの更新とローカル確認
-
-GLBのPBR表示にはThree.js 0.180.0、SPZ表示にはSpark 2.4.0を使い、Workerビルド時にデコーダー等も同梱します。保存済みファイルの表示には、重みのダウンロードや推論環境の追加設定は不要です。`npm test`・`npm run typecheck`・`npm run dev`・`npm run deploy` は、それぞれ `pretest`・`pretypecheck`・`predev`・`predeploy` から `build:viewer` を自動実行します。
-
-開発用のローカル確認は次のコマンドで起動します。
-
-```bash
-cd worker
-npm run build:viewer
-node --experimental-strip-types scripts/preview-3d.mjs
-```
-
-`http://127.0.0.1:8767` で、次を確認できます。
-
-- 通常のブラウザページ: [GLBサンプル](http://127.0.0.1:8767/view?type=output&filename=sample.glb)・[SPZサンプル](http://127.0.0.1:8767/view?type=output&filename=sample.spz)
-- 模擬MCPホスト: [GLB](http://127.0.0.1:8767/mcp-test?filename=sample.glb)・[SPZ](http://127.0.0.1:8767/mcp-test?filename=sample.spz)
-- CSP制限時のリンク案内: [SPZの制限付きホスト](http://127.0.0.1:8767/mcp-test?filename=sample.spz&restricted=1)
-
-これはローカル素材と模擬MCPホストによる確認です。実際のChatGPT・Claude・CodexやAccess認証での検証ではありません。MCPビューアーは最大128 MiBを `read_3d_part` の512 KiB分割取得で読み、Access URLを直接fetchしません。ホストのCSP・WebGL制約やサイズ超過時はブラウザ用リンクを案内します。
-
-クラウド反映は別作業として、次の順序で行います（上記の画像取得経路の移行とは別の更新です）。
-
-1. **必要な場合はsplitを更新**: 3Dの `inspect_media`・再利用拒否、または配信用CPU未設定時の経路を更新する場合は、ルートで `scripts/modal.sh deploy splitapp.py` を実行します。
-2. **配信用CPUを更新**: 配信用CPUを使う構成では、ルートで `scripts/modal.sh deploy mediaapp.py` を実行し、GLB/SPZに対応させます。
-3. **Workerを更新**: 対象テスト・型検査後、`worker/` で `npm run deploy` を実行します。
-4. **接続先で確認**: ツール一覧を更新して `get_3d` を確認し、通常保存されたGLB/SPZ、認証付き `/view` ページ、原本を返す `/api/view`、未認証アクセスの拒否を確認します。ローカル確認だけで実クライアントでの表示成功とは判断しません。
 
 ---
 
