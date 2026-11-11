@@ -145,6 +145,10 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   total ??= data.length;
   if (total < format.min || (offset === 0 && data.length >= format.min && !format.matches(data)))
     return fail("File content does not match the expected format: " + format.mime + ".");
+  // A Range-ignoring video cannot be read privately beyond one player chunk.
+  if (player && kind === "video" && file.status === 200 && total > VIDEO_PART_BYTES)
+    return {structuredContent:{...metadata,delivery:"link",size:total},
+      content:[{type:"text",text:filename + " — use the video player. It streams the authenticated file URL: " + url}]};
   if (player) return {structuredContent:{...metadata,delivery:"player",size:total},
     content:[{type:"text",text:filename + " — use the " + kind + " player. The player retrieves the media privately. " +
       "Retrieval success alone does not confirm that the player is visible. Fallback link: " + url}]};
