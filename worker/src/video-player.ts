@@ -1,7 +1,7 @@
 // Video bytes travel through authenticated MCP calls, never through the model.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v5.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v6.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
 export const playerHtml = (browserOrigin:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -86,6 +86,15 @@ function render(result){
   if(key===nextKey)return;
   clearVideo();key=nextKey;current=info;setLink(info);
   if(info.delivery==="chunk"){label.textContent="動画の一部を取得しました。";return;}
+  if(info.delivery==="link"){
+    if(link.hidden){label.textContent="動画の再生URLを確認できません。";return;}
+    // Range support and size are unknown; stream the authenticated URL without chunk reads.
+    const raw=new URL(link.href);raw.pathname="/api/view";
+    label.textContent="動画を読み込み中…";player.hidden=false;
+    player.onloadeddata=()=>{label.textContent=info.filename;};
+    player.onerror=()=>{label.textContent="動画を再生できません。保存ページで開いてください。";};
+    player.src=raw.href;return;
+  }
   if(info.size>limit){label.textContent="この動画は128 MiBを超えます。保存ページで開いてください。";return;}
   // Previously saved inline results can still hydrate the current resource.
   const data=result._meta?.["split/video"] ?? result.content?.find(x=>x.type==="resource" && x.resource?.mimeType==="video/mp4")?.resource.blob;
@@ -118,6 +127,6 @@ addEventListener("message",e=>{
 });
 function resize(){const height=document.body.scrollHeight;if(initialized && height!==lastHeight){lastHeight=height;send({method:"ui/notifications/size-changed",params:{height}});}}
 new ResizeObserver(resize).observe(document.body);
-send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"5"},appCapabilities:{}}});
+send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"6"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;
