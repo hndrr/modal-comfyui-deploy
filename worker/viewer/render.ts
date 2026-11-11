@@ -123,10 +123,13 @@ export function createViewer(container: HTMLElement, onError: (error: unknown) =
         spark = new SparkRenderer({renderer, onDirty: draw});
         scene.add(spark);
         splats = new SplatMesh({fileBytes: bytes, fileName: "model.spz", lod: false});
+        // ComfyUI splats use Y-down/Z-forward; Three.js uses Y-up/Z-back.
+        splats.rotation.x = Math.PI;
         scene.add(splats);
         await splats.initialized;
         if (disposed) return;
-        bounds.copy(splats.getBoundingBox());
+        splats.updateMatrixWorld(true);
+        bounds.copy(splats.getBoundingBox()).applyMatrix4(splats.matrixWorld);
       }
       if (bounds.isEmpty() || !Number.isFinite(bounds.min.length() + bounds.max.length()))
         throw Error("表示できる3Dデータがありません。");
