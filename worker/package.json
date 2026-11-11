@@ -4,19 +4,28 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "build:viewer": "node scripts/build-viewer.mjs",
+    "pretest": "npm run build:viewer",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "predev": "npm run build:viewer",
     "dev": "wrangler dev",
+    "predeploy": "npm run build:viewer",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "typecheck": "tsc --noEmit"
+    "pretypecheck": "npm run build:viewer",
+    "typecheck": "tsc --noEmit && tsc -p viewer/tsconfig.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@sparkjsdev/spark": "2.4.0",
     "jose": "^6.2.8",
+    "three": "0.180.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260804.1",
+    "@types/three": "0.180.0",
+    "esbuild": "0.28.2",
     "typescript": "^5.8.3",
     "wrangler": "^4.157.0"
   }

@@ -71,11 +71,17 @@ class RetentionTests(unittest.TestCase):
 
     def test_history_references_and_temporary_file_age(self):
         self.data["jobs"]["recent"]["history"] = {"outputs": {"1": {"images": [
-            {"filename": "keep.png", "subfolder": ".split-temp/session", "type": "output"}]}}}
+            {"filename": "keep.png", "subfolder": ".split-temp/session", "type": "output"}], "3d": [
+            {"filename": name, "subfolder": ".split-temp/session", "type": "output"}
+            for name in ("keep.glb", "keep.spz")]}}}
         temporary = [{"path": path, "mtime": mtime} for path, mtime in (
-            ("session/keep.png", 0), ("session/delete.png", self.now - storage.TEMP_SECONDS),
+            ("session/keep.png", 0), ("session/keep.glb", 0), ("session/keep.spz", 0),
+            ("session/delete.glb", self.now - storage.TEMP_SECONDS),
+            ("session/delete.spz", self.now - storage.TEMP_SECONDS),
+            ("session/delete.png", self.now - storage.TEMP_SECONDS),
             ("session/new.png", self.now - storage.TEMP_SECONDS + 1), ("../outside.png", 0))]
-        self.assertEqual(self.plan(temporary=temporary)["temporary_files"], ["session/delete.png"])
+        self.assertEqual(self.plan(temporary=temporary)["temporary_files"],
+                         ["session/delete.glb", "session/delete.png", "session/delete.spz"])
         self.data["jobs"]["old"]["status"] = "unknown"
         self.assertEqual(self.plan(temporary=temporary)["temporary_files"], [])
 

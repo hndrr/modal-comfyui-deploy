@@ -25,6 +25,7 @@ FORMATS = {
     "opus": ("audio", "audio/ogg"), "m4a": ("audio", "audio/mp4"),
     "mp4": ("video", "video/mp4"), "mov": ("video", "video/quicktime"),
     "webm": ("video", "video/webm"), "mkv": ("video", "video/x-matroska"),
+    "glb": ("3d", "model/gltf-binary"), "spz": ("3d", "application/octet-stream"),
 }
 BLOCK = 256 * 1024
 JSON_LIMIT = 32 * 1024 * 1024

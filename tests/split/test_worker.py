@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
 
-from comfy_split import worker as worker_module
+from comfy_split import runtime, worker as worker_module
 from comfy_split.config import Settings
 from tests.split.support import remote_mock, volume_mocks
 
@@ -24,6 +25,9 @@ class WorkerProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_comfy_protocol_submits_once_relays_and_interrupts(self):
         state = {"submitted": 0, "interrupted": False, "history_reads": 0}
         sockets = []
+        process = runtime.ComfyProcess("gpu", 8188)
+        output = {"3d": [{"filename": "preview.glb", "subfolder": "nested", "type": "temp"}],
+                  "camera_info": [{"position": [1, 2, 3]}], "model_3d_info": [{"scale": [1, 1, 1]}]}
 
         async def ws(request):
             socket = web.WebSocketResponse()
@@ -55,6 +59,8 @@ class WorkerProtocolTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.02)
                 for socket in sockets:
                     await socket.send_json({"type": "progress", "data": {"value": 2, "max": 2}})
+                    await socket.send_json({"type": "executed", "data": {
+                        "node": "1", "prompt_id": "job-1", "output": output}})
                     await socket.send_json({"type": "executing", "data": {"node": None, "prompt_id": "job-1"}})
             asyncio.create_task(tail())
             return web.json_response({"job-1": {"outputs": {}, "status": {
@@ -68,7 +74,7 @@ class WorkerProtocolTests(unittest.IsolatedAsyncioTestCase):
         server = TestServer(app)
         await server.start_server()
         try:
-            fake_process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x, url=str(server.make_url("/"))[:-1],
+            fake_process = SimpleNamespace(archive_temp=Mock(), durable_outputs=process.durable_outputs, url=str(server.make_url("/"))[:-1],
                                            process=SimpleNamespace(returncode=None))
             emit = AsyncMock()
             with patch.object(worker_module, "process", fake_process):
@@ -85,6 +91,11 @@ class WorkerProtocolTests(unittest.IsolatedAsyncioTestCase):
             progress = [call.args[0]["event"]["data"]["value"] for call in emit.call_args_list
                         if call.args[0].get("event", {}).get("type") == "progress"]
             self.assertEqual(progress, [1, 2])
+            executed = [call.args[0]["event"]["data"]["output"] for call in emit.call_args_list
+                        if call.args[0].get("event", {}).get("type") == "executed"]
+            expected = {**output, "3d": [{"filename": "preview.glb", "type": "output",
+                         "subfolder": f".split-temp/{process.temp_namespace}/nested"}]}
+            self.assertEqual(executed, [expected])
         finally:
             await server.close()
 
@@ -97,6 +108,7 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x,
             url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
         self.generate = AsyncMock(return_value={"status": "completed"})
+        self.events = SimpleNamespace(put=remote_mock())
         self.enterContext(patch.object(worker_module, "process", self.process))
         self.enterContext(patch.object(worker_module, "JOBS", self.root))
         self.enterContext(patch.object(worker_module, "generate", self.generate))
@@ -104,16 +116,53 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def run_job(self):
         return await worker_module.run_worker(
             {"id": "job", "environment": "base", "operation": "generate"},
-            SimpleNamespace(put=remote_mock()), SimpleNamespace(get_many=remote_mock([])), self.volumes)
+            self.events, SimpleNamespace(get_many=remote_mock([])), self.volumes)
 
     async def test_result_receipt_is_written_after_outputs_committed(self):
         sequence = []
-        self.volumes["output"].commit.aio.side_effect = lambda: sequence.append("output")
+        process = runtime.ComfyProcess("gpu", 8188)
+        output = {"3d": [{"filename": name, "subfolder": "nested", "type": "temp"}
+                         for name in ("preview.glb", "preview.spz")],
+                  "camera_info": [{"position": [1, 2, 3], "target": [0, 0, 0]}],
+                  "model_3d_info": [{"rotation": [0, 1, 0], "scale": [1, 1, 1]}]}
+        original = deepcopy(output)
+        expected = deepcopy(output)
+        for item in expected["3d"]:
+            item.update(type="output", subfolder=f".split-temp/{process.temp_namespace}/nested")
+        self.generate.return_value = {"status": "completed", "history": {"outputs": {"1": output}}}
+        self.process.archive_temp = process.archive_temp
+        self.process.durable_outputs = process.durable_outputs
+
+        def commit_outputs():
+            self.assertFalse((self.root / "job.json").exists())
+            for item in expected["3d"]:
+                path = self.root / "output" / item["subfolder"] / item["filename"]
+                self.assertEqual(path.read_bytes(), item["filename"].encode())
+            sequence.append("output")
+
+        def notify(event, **kwargs):
+            self.assertEqual(event, {"type": "result_ready"})
+            receipt = json.loads((self.root / "job.json").read_text())
+            self.assertEqual(receipt["history"]["outputs"], {"1": expected})
+            sequence.append("result_ready")
+
+        self.volumes["output"].commit.aio.side_effect = commit_outputs
         self.volumes["data"].commit.aio.side_effect = lambda: sequence.append("result")
-        result = await self.run_job()
-        self.assertEqual(sequence, ["result", "output", "result"])
-        self.assertEqual(json.loads((self.root / "job.json").read_text())["status"], "completed", result)
+        self.events.put.aio.side_effect = notify
+        with tempfile.TemporaryDirectory() as directory:
+            process.temp_root = Path(directory)
+            source = process.temp_root / "temp/nested"
+            source.mkdir(parents=True)
+            for item in output["3d"]:
+                (source / item["filename"]).write_bytes(item["filename"].encode())
+            with patch.object(runtime, "TEMP_ARCHIVE", self.root / "output/.split-temp"):
+                result = await self.run_job()
+        self.assertEqual(sequence, ["result", "output", "result", "result_ready"])
         self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(output, original)
+        for item in expected["3d"]:
+            path = self.root / "output" / item["subfolder"] / item["filename"]
+            self.assertEqual(path.read_bytes(), item["filename"].encode())
 
     async def test_preempted_input_with_start_receipt_is_not_reexecuted(self):
         (self.root / "job.started.json").write_text("{}")

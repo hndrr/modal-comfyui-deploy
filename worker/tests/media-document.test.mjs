@@ -34,3 +34,22 @@ test("document cannot interpret a filename as HTML",async()=>{
   const html=await r.text();
   assert.ok(!html.includes("<script>") && html.includes("&lt;script&gt;"));
 });
+
+test("3D documents embed the renderer; API, Range and temporary requests remain files",async()=>{
+  for(const ext of ["glb","SPZ"]){
+    const url="/view?type=output&filename=model."+ext+"&subfolder=3d/ComfyUI";
+    const response=get(url),html=await response.text();
+    assert.match(html,/id="viewport"/);
+    assert.match(html,/ブラウザで開く/);
+    assert.ok(html.includes('"filename":"model.'+ext+'"'));
+    assert.match(response.headers.get("Content-Security-Policy"),/worker-src blob:/);
+    assert.match(response.headers.get("Content-Security-Policy"),/frame-ancestors 'none'/);
+    for(const [path,headers] of [["/api"+url,navigation],[url,{}],[url,{...navigation,Range:"bytes=0-"}],
+      [url.replace("output","temp"),navigation],[url.replace("3d/ComfyUI",".split-temp/run"),navigation]])
+      assert.equal(get(path,headers),null);
+  }
+  const injected=await get("/view?type=output&filename=%3C%2Fscript%3E.glb");
+  assert.equal(injected,null);
+  const encoded=await get("/view?type=output&filename=%3Cimg%3E.glb").text();
+  assert.ok(encoded.includes('\\u003cimg>') && !encoded.includes('<img>.glb'));
+});
