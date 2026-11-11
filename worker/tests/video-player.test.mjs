@@ -4,7 +4,7 @@ import {runInNewContext} from "node:vm";
 import {playerHtml} from "../src/video-player.ts";
 import {getMedia,VIDEO_PART_BYTES} from "../src/media.ts";
 
-test("the player reads a video larger than 4 MiB privately and preserves it when the host repeats the result",async()=>{
+test("HTTPS failure falls back to private chunks and repeated results preserve the video",async()=>{
   const handlers={},calls=[],messages=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
     pause(){},load(){},removeAttribute(k){delete this[k];}}]));
   const bytes=Buffer.alloc(4*1024*1024+9);bytes.write("ftyp",4);
@@ -26,13 +26,36 @@ test("the player reads a video larger than 4 MiB privately and preserves it when
       setTimeout,clearTimeout,ResizeObserver:class{observe(){}},addEventListener:(n,f)=>handlers[n]=f});
   handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});
   await new Promise(r=>setImmediate(r));
+  assert.equal(calls.length,0);assert.equal(elements.video.src,"https://split.example.com/api/view?filename=clip.mp4");
+  elements.video.onerror();
+  await new Promise(r=>setImmediate(r));
   assert.equal(elements.video.hidden,false);assert.equal(elements.video.src,"blob:video");
   assert.deepEqual(Buffer.from(await file.arrayBuffer()),bytes);
   assert.equal(calls.length,9);assert.ok(calls.every(c=>c.name==="read_video_part"));
   handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});
   assert.equal(calls.length,9);assert.equal(revoked,false);assert.equal(elements.video.src,"blob:video");
+  elements.video.onerror();assert.equal(elements.button.hidden,false);
+  elements.button.onclick();assert.equal(calls.length,9);
+  assert.equal(elements.video.src,"https://split.example.com/api/view?filename=clip.mp4");
   handlers.message({source:parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:3,method:"ui/resource-teardown"}});
   assert.equal(revoked,true);assert.equal(elements.video.hidden,true);
+});
+
+test("HTTPS playback skips private chunks, including videos above the fallback memory limit",async()=>{
+  const handlers={},calls=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
+    pause(){},load(){},removeAttribute(k){delete this[k];}}]));
+  const info={prompt_id:"00000000-0000-4000-8000-000000000001",index:0,filename:"clip.mp4",size:128*1024*1024+1,
+    delivery:"player",url:"https://split.example.com/view?filename=clip.mp4"};
+  runInNewContext(playerHtml("https://split.example.com").split("<script>")[1].split("</script>")[0],
+    {window:{openai:{callTool:async name=>{calls.push(name);throw Error("unexpected chunk");}}},parent:{postMessage(){}},
+      document:{querySelector:k=>elements[k],body:{scrollHeight:100}},URL,Blob,Uint8Array,atob,setTimeout,clearTimeout,
+      ResizeObserver:class{observe(){}},addEventListener:(n,f)=>handlers[n]=f});
+  handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});
+  elements.video.onloadeddata();assert.equal(elements.span.textContent,"clip.mp4");
+  assert.equal(elements.video.src,"https://split.example.com/api/view?filename=clip.mp4");
+  assert.equal(elements.video.hidden,false);assert.deepEqual(calls,[]);
+  elements.video.onerror();await new Promise(r=>setImmediate(r));
+  assert.match(elements.span.textContent,/128 MiB/);assert.deepEqual(calls,[]);
 });
 
 test("a mismatched private video response is rejected before it can play",async()=>{

@@ -185,7 +185,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
       contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin),_meta:videoCsp}],
     }));
   server.registerTool("get_video",{title:"Show the video player",
-    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. The player retrieves video bytes privately. Prefer the player; the authenticated link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. The player streams authenticated HTTPS first and uses private chunks only if needed. Prefer the player; opening the authenticated link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI,"openai/widgetAccessible":true},
     annotations:read,inputSchema:videoInputs,outputSchema:videoOutput}, a=>call("get_video",a,browserOrigin));
   server.registerTool("read_video_part",{description:"Read the next verified chunk for the video player.",
