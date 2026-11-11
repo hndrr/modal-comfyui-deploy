@@ -99,8 +99,8 @@ CLI の転送は、`upload_id + filename` で開始・再開位置を確認し�
 | ツール | 主な引数 | できること・返るもの | 実行先 |
 | --- | --- | --- | --- |
 | `list_outputs` | `prompt_id`、任意で `offset`・`limit` | 出力の `filename`・`subfolder`・種類・再利用用 `index` | 配信用 CPU |
-| `get_image` | `filename`、任意で `subfolder` | PNG・JPEG・WebPを画像ビューアに表示し、常に認証付き閲覧リンクも返す。8 MiB超はリンクのみ | 配信用 CPU。ビューアHTML自体はWorker |
-| `get_audio` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | MP3・WAV・FLAC・Ogg・Opus。通常はプレイヤー情報と認証付きリンク。明示的な部分取得では音声データ | 配信用 CPU。プレイヤーHTML自体はWorker |
+| `get_image` | `filename`、任意で `subfolder` | 8 MiB以下のPNG・JPEG・WebPをMCP認証でチャット内表示。サイトへの追加ログインは不要。上限超過・表示不可・保存時だけ認証付き閲覧リンクを案内 | 配信用 CPU。ビューアHTML自体はWorker |
+| `get_audio` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | MP3・WAV・FLAC・Ogg・OpusをMCP認証でチャット内再生。サイトへの追加ログインは不要。上限超過・再生不可・保存時だけ認証付きリンクを案内。明示的な部分取得では音声データ | 配信用 CPU。プレイヤーHTML自体はWorker |
 | `get_video` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | 最大128 MiBのMP4をMCP認証の非公開分割取得で再生。サイトへの追加ログインは不要。上限超過・Range非対応時はブラウザ認証付き配信を使う。バイナリ取得は `byte_offset: 0` から | 配信用 CPU。プレイヤーHTML自体はWorker |
 
 `get_audio` の `index` は音声だけ、`get_video` の `index` はMP4だけを数えた0始まりの番号です。`list_outputs` の `index` は全種類を通した番号で、`reuse_output` と `inspect_media` に渡します。複数種類の出力があるときは混同しないでください。

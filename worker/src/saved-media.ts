@@ -54,7 +54,9 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
   const url=new URL(path,origin).href;
   // This URL requires browser Access login; an MCP host cannot materialize it as an attachment.
   const result:CallToolResult={structuredContent:{filename,mimeType:mime,url,delivery:bytes?"inline":"link"},
-    content:[{type:"text",text:"Open or save the image after signing in: "+url}]};
+    content:[{type:"text",text:bytes ?
+      filename+" — use the inline image viewer; no separate website login is needed. Give this link only if the viewer is unavailable or opening/saving is requested (website login required): "+url :
+      "This image exceeds 8 MiB. Open or save it after signing in: "+url}]};
   if (!bytes) return result;
   const tag=(at:number,s:string)=>s.split("").every((c,i)=>bytes[at+i]===c.charCodeAt(0));
   if (!(ext==="png" ? bytes[0]===137 && tag(1,"PNG\r\n\x1a\n") :
