@@ -96,6 +96,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 | ドキュメント | 内容 |
 | --- | --- |
 | [MCP の経路図](docs/design/split-mcp-routing.md) | 操作ごとの実行先と CPU・GPU を起動する条件 |
+| [Split の外部通信・実行環境の隔離案](docs/design/split-network-isolation.md) | プロンプトからの追加操作を維持するマルウェア対策の検討案（未実装） |
 | [メディア配信](docs/design/split-media-delivery.md) | 現在の参照用 CPU と、未実装の R2 配信案 |
 | [split のストレージ](docs/design/split-storage.md) | 保存先の役割と当時の一度限りの移行方針 |
 | [split の実行環境とストレージ](docs/design/runtime-and-storage.md) | Volume とイメージの使い分け |
