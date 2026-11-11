@@ -27,7 +27,7 @@ flowchart TD
 | 操作 | 起動するもの |
 | --- | --- |
 | MCP 初期化・ツール一覧・静的プレイヤー HTML | Worker のみ |
-| `get_image`・`get_audio`・`get_video`・`read_audio_part`・`list_outputs` | 配信用 CPU のみ |
+| `get_image`・`get_audio`・`get_video`・`read_audio_part`・`read_video_part`・`list_outputs` | 配信用 CPU のみ |
 | `list_models` の既定の保存ファイル一覧 | 参照用 CPU のみ。ComfyUI の認識確認ではない |
 | `get_workflow(list)`、`get(format:ui)`、保存済み API グラフの `get` | 参照用 CPU のみ |
 | `get_history(list/diagnose)`・`get_job_workflow` | 参照用 CPU のみ。保存時点の記録 |

@@ -2,7 +2,7 @@
 
 このページは、**Split app（`splitapp.py`）の MCP を開発する人・ツールを直接呼ぶ人向け**のリファレンスです。チャットでの使い方を知りたい場合は[利用ガイド](usage.md)を参照してください。
 
-ChatGPT Web・Claude Code・Codex が同じ HTTPS `/mcp` で使う **32ツール**と、音声プレイヤー専用の内部ツール1件をまとめています。接続方法と依頼例は[利用ガイド](usage.md)、通信先と起動の分岐は[経路図](../design/split-mcp-routing.md)、artokun 版の全機能との比較は[上流との対応表](upstream.md)を参照してください。
+ChatGPT Web・Claude Code・Codex が同じ HTTPS `/mcp` で使う **32ツール**と、音声・動画プレイヤー専用の内部ツール2件をまとめています。接続方法と依頼例は[利用ガイド](usage.md)、通信先と起動の分岐は[経路図](../design/split-mcp-routing.md)、artokun 版の全機能との比較は[上流との対応表](upstream.md)を参照してください。
 
 この一覧はリポジトリの実装を説明します。接続先で実際に使える名前・入力項目は MCP の `tools/list` が返すスキーマで確認してください。外部送信の承認は、Worker と split の対応版・設定を両方適用して使う機能です。OAuth 接続が成功しただけでは有効化を確認できません。[管理手順](setup.md)に適用条件があります。
 
@@ -99,9 +99,9 @@ CLI の転送は、`upload_id + filename` で開始・再開位置を確認し�
 | ツール | 主な引数 | できること・返るもの | 実行先 |
 | --- | --- | --- | --- |
 | `list_outputs` | `prompt_id`、任意で `offset`・`limit` | 出力の `filename`・`subfolder`・種類・再利用用 `index` | 配信用 CPU |
-| `get_image` | `filename`、任意で `subfolder` | PNG・JPEG・WebPを画像ビューアに表示し、常に認証付き閲覧リンクも返す。8 MiB超はリンクのみ | 配信用 CPU。ビューアHTML自体はWorker |
-| `get_audio` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | MP3・WAV・FLAC・Ogg・Opus。通常はプレイヤー情報と認証付きリンク。明示的な部分取得では音声データ | 配信用 CPU。プレイヤーHTML自体はWorker |
-| `get_video` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | 4 MiB以下のMP4をチャット内で再生。大きい動画は認証付き再生ページで開く。バイナリ取得は `byte_offset: 0` から | 配信用 CPU。プレイヤーHTML自体はWorker |
+| `get_image` | `filename`、任意で `subfolder` | 8 MiB以下のPNG・JPEG・WebPをMCP認証でチャット内表示。サイトへの追加ログインは不要。上限超過・表示不可・保存時だけ認証付き閲覧リンクを案内 | 配信用 CPU。ビューアHTML自体はWorker |
+| `get_audio` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | MP3・WAV・FLAC・Ogg・OpusをMCP認証でチャット内再生。サイトへの追加ログインは不要。上限超過・再生不可・保存時だけ認証付きリンクを案内。明示的な部分取得では音声データ | 配信用 CPU。プレイヤーHTML自体はWorker |
+| `get_video` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | 最大128 MiBのMP4をMCP認証の非公開分割取得で再生。サイトへの追加ログインは不要。上限超過・Range非対応時はブラウザ認証付き配信を使う。バイナリ取得は `byte_offset: 0` から | 配信用 CPU。プレイヤーHTML自体はWorker |
 
 `get_audio` の `index` は音声だけ、`get_video` の `index` はMP4だけを数えた0始まりの番号です。`list_outputs` の `index` は全種類を通した番号で、`reuse_output` と `inspect_media` に渡します。複数種類の出力があるときは混同しないでください。
 
@@ -164,10 +164,11 @@ ComfyUIのLoRA選択肢を確認する例：
 
 一覧で `next_offset` が返った場合、その値を次の `offset` に指定します。`null` なら末尾です。`get_workflow(list)` は保存名の一覧、`get_history` は `limit` による直近件数の指定で、`offset` は受け付けません。
 
-## プレイヤー専用の内部ツール（1件）
+## プレイヤー専用の内部ツール（2件）
 
 | ツール | 引数 | 用途・実行先 |
 | --- | --- | --- |
 | `read_audio_part` | `prompt_id`・`byte_offset`、任意で `index` | 音声プレイヤーが検証付き128 KiB分割データを読む。配信用 CPU。エージェント向けではなくアプリ向けとして登録 |
+| `read_video_part` | `prompt_id`・`byte_offset`、任意で `index` | 動画プレイヤーが検証付き512 KiB分割データを読む。配信用 CPU。アプリ専用で、本体はモデル向け本文に含めない |
 
 プレイヤーのHTML取得はMCPリソースで、ツール数には含めません。HTMLだけならWorkerで応答し、再生データの要求時に配信用CPUを使います。クライアントの表示機能によってプレイヤーが使えない場合も、`get_audio`・`get_video` のリンクまたは部分取得を利用できます。
