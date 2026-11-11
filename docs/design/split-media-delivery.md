@@ -27,22 +27,34 @@ flowchart TD
 | 操作 | 起動するもの |
 | --- | --- |
 | MCP 初期化・ツール一覧・静的プレイヤー HTML | Worker のみ |
-| `get_image`・`get_audio`・`get_video`・`read_audio_part`・`read_video_part`・`list_outputs` | 配信用 CPU のみ |
+| `get_image`・`get_audio`・`get_video`・`get_3d`・`read_audio_part`・`read_video_part`・`read_3d_part`・`list_outputs` | 配信用 CPU のみ |
 | `list_models` の既定の保存ファイル一覧 | 参照用 CPU のみ。ComfyUI の認識確認ではない |
 | `get_workflow(list)`、`get(format:ui)`、保存済み API グラフの `get` | 参照用 CPU のみ |
 | `get_history(list/diagnose)`・`get_job_workflow` | 参照用 CPU のみ。保存時点の記録 |
 | `list_models(source:runtime)`、UI→API 変換、グラフ解析・検証 | 従来の split CPU。現在のノード定義を使う |
 | `/view`・`/api/view` の元の output ファイル（下記の対応形式） | 配信用 CPU のみ |
-| GLB・SVGなど配信未対応形式の `/view` | 従来の split CPU |
-| 入力・一時画像、`preview` / `channel` 付き変換、ノード・ライブ進捗照会 | 従来の split CPU |
+| SVGなど配信未対応形式の `/view` | 従来の split CPU |
+| 入力・一時プレビュー・`.split-temp` 配下、`preview` / `channel` 付き変換、ノード・ライブ進捗照会 | 従来の split CPU |
 | 生成 | 従来の split CPU と GPU |
 
 配信用 CPU は 0.25 CPU / 512 MiB、最小0台・最大1台。起動待ちは実際のファイル要求で処理し、
 `/split/startup` を呼ばない。リクエスト終了後は自動縮退する。30秒は停止待ち設定であり起動・停止時間の保証ではない。
 再生中の転送には CPU を使う。読み込み済みデータの再生や、クライアントが停止した後の keep-alive は追加しない。
 
-配信対象はPNG・JPEG・WebP・GIF、MP3・WAV・FLAC・Ogg・Opus・M4A、MP4・MOV・WebM・MKV。
+配信対象はPNG・JPEG・WebP・GIF、MP3・WAV・FLAC・Ogg・Opus・M4A、MP4・MOV・WebM・MKV、GLB・SPZ。
 Workerは拡張子で経路を選ぶ。これ以外の出力も従来のComfyUIから開ける。対応形式の配信が失敗した場合にComfyUIへ送り直す仕組みではない。
+
+### 保存済み3Dの取得と表示
+
+通常保存されたGLB/SPZは `list_outputs` に `kind: "3d"` として含め、`get_3d(filename, subfolder?)` で形式・MIME・サイズ・閲覧URLとビューアーを返す。MIMEはGLBが `model/gltf-binary`、SPZが `application/octet-stream`。`inspect_media` はファイル名・種類・形式・サイズだけを返し、ffprobeを使わない。3Dのアップロード・再利用や `list_inputs` の対象拡張は行わない。
+
+GLBのPBR描画はThree.js 0.180.0、SPZ Gaussian splatの描画はSpark 2.4.0を使う。Workerビルド時に描画コード・デコーダーを同梱し、重みの取得や推論環境の設定を必要としない。MCPではアプリ専用の `read_3d_part` が最大512 KiBずつ読み、バイト列は `_meta["split/3dPart"]` だけに格納する。チャット内表示の上限は128 MiBで、Accessのブラウザ用URLへ直接fetchしない。ホストのCSP・WebGL等の制約やサイズ超過時は、ブラウザ認証付きの閲覧・保存リンクを案内する。
+
+ブラウザから通常のページ遷移で `/view?type=output&filename=…&subfolder=…` を開くと、Workerが認証後に3DビューアーHTMLを返す。`/api/view` は原本バイトを返し、GET / HEAD / Rangeの意味を維持する。MCPツールの成功だけで実クライアントの描画成功とは判断しない。
+
+一時プレビューのアーカイブ先 `.split-temp` は隠しパスのまま保ち、ブラウザの要求はComfyUI CPUへ送る。配信用CPUとMCPの保存済み3D取得・出力一覧では対象外とする。既存の一時ファイルの保持・清掃方針は変更しない。ローカルの模擬ホストと別途行うデプロイの手順は[設定ガイド](../mcp/setup.md#glbspzビューアーの更新とローカル確認)を参照。
+
+### 配信と保存データの読み取り
 
 ファイルは256 KiBずつ送り、全体をメモリに載せない。GET / HEAD、単一 Range（途中・末尾）、
 ETag / If-Range に対応する。範囲外は416、削除済みは404、ストレージのI/O障害は再試行可能な503。途中でファイルが置き換わったら配信を中断し、
@@ -69,7 +81,7 @@ API 形式で保存されていれば直接返す。UI→API 変換は現在の�
 失敗を優先する。`get_job_workflow` は投入したグラフだけを返し、認証用 extra_data は返さない。
 
 `prompt_id` で取得する操作は既存ジョブ記録の保持期間（7日）に従う。記録が期限切れでも、
-原本が残っていればファイル名によるブラウザ取得や `get_image` は可能。今回、独立した永続ライブラリ索引は追加しない。
+通常保存された原本が残っていればファイル名によるブラウザ取得や `get_image`・`get_3d` は可能。今回、独立した永続ライブラリ索引は追加しない。
 
 ## 将来案：R2 に配信用コピーを置く（未実装）
 

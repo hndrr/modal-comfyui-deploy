@@ -14,6 +14,8 @@ import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
 import { IMAGE_VIEWER_URI, imageViewerHtml } from "./image-viewer.ts";
+import {THREE_VIEWER_URI, threeViewerHtml} from "./three-viewer.ts";
+import {get3D, threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema } from "./media.ts";
 
@@ -57,6 +59,10 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
+        if (name === "get_3d" || name === "read_3d_part") {
+          if (!browserOrigin) return failure("Missing split browser origin.");
+          return get3D(send,browserOrigin,args,name === "read_3d_part");
+        }
         if (name === "get_image") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           return callSavedMedia(send,name,args,browserOrigin);
@@ -178,6 +184,21 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
+  server.registerResource("3d-viewer",THREE_VIEWER_URI,{mimeType:PLAYER_MIME},async()=>({
+    contents:[{uri:THREE_VIEWER_URI,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin),_meta:{
+      ui:{csp:{connectDomains:["blob:"],resourceDomains:["blob:","data:"]}},
+      "openai/widgetCSP":{connect_domains:["blob:"],resource_domains:["blob:","data:"]},
+    }}],
+  }));
+  server.registerTool("get_3d",{title:"View a saved 3D model",
+    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering, the file is too large, or opening/saving is requested, give the signed-in browser viewer link. Does not generate. Tool success alone does not confirm that the model is displayed.",
+    annotations:read,inputSchema:threeInputs,outputSchema:threeOutput,
+    _meta:{ui:{resourceUri:THREE_VIEWER_URI},"openai/outputTemplate":THREE_VIEWER_URI,"openai/widgetAccessible":true}},
+    a=>call("get_3d",a,browserOrigin));
+  server.registerTool("read_3d_part",{description:"Read the next bounded private chunk for the 3D viewer.",
+    annotations:read,inputSchema:threePartInputs,outputSchema:threeOutput,
+    _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
+    a=>call("read_3d_part",a,browserOrigin));
   const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},
     "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())
