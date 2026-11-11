@@ -12,60 +12,15 @@ from comfy_split.production import parts, regular
 from comfy_split.state import body_digest
 from comfy_split.storage import MOUNTS
 
-# Trust installed class provenance, not names supplied by the workflow. New packs
-# require an explicit review; merely appearing in object_info is not authorization.
-LOCAL_MODULES = {"nodes"} | {
-    "comfy_extras.nodes_" + name
-    for name in [
-        "advanced_samplers",
-        "audio",
-        "chroma_radiance",
-        "clip_sdxl",
-        "compositing",
-        "controlnet",
-        "cosmos",
-        "custom_sampler",
-        "differential_diffusion",
-        "flux",
-        "hunyuan",
-        "hypernetwork",
-        "image_compare",
-        "images",
-        "latent",
-        "mask",
-        "minimax_h3",
-        "minimax_music",
-        "model_advanced",
-        "model_merging",
-        "model_merging_model_specific",
-        "model_patch",
-        "photomaker",
-        "post_processing",
-        "qwen",
-        "sd3",
-        "stable_cascade",
-        "upscale_model",
-        "video",
-        "wan",
-    ]
-}
-LOCAL_PACKS = {
-    "custom_nodes.comfyui-videohelpersuite": {"VHS_VideoCombine"},
-    "custom_nodes.comfyui-minimax-h3-motioncache-fastvae": {
-        "MiniMaxH3MotionCache",
-        "MiniMaxH3FastVAEDecode",
-    },
-    "custom_nodes.comfyui-kjnodes": {
-        "MiniMaxH3MemoryEfficientSageAttentionPatch",
-    },
-    "custom_nodes.comfyui-geminitools": {
-        "GeminiToolsBBoxOverlay",
-        "GeminiToolsImageRegionCrop",
-        "GeminiToolsImageRegionComposite",
-        "GeminiToolsTrackBatchPack",
-        "GeminiToolsTrackBatchUnpack",
-        "GeminiToolsSaveAudio",
-    },
+# Ordinary installed nodes need no MCP registry. These helpers are the local
+# subset of a known direct-API pack; unknown API operations still fail closed.
+GEMINI_LOCAL_NODES = {
+    "GeminiToolsBBoxOverlay",
+    "GeminiToolsImageRegionCrop",
+    "GeminiToolsImageRegionComposite",
+    "GeminiToolsTrackBatchPack",
+    "GeminiToolsTrackBatchUnpack",
+    "GeminiToolsSaveAudio",
 }
 DIRECT_GEMINI = {"GeminiToolsLLM", "GeminiToolsImageGeneration", "GeminiToolsMusicGeneration"}
 PARTNERS = {
@@ -127,11 +82,18 @@ def classification(name, definition, inputs):
         return "Google Gemini", "Google Gemini API（サーバー設定の Google API キー）"
     if module == "custom_nodes.comfyui-jev" and name == "OpenRouterText":
         return "OpenRouter", "OpenRouter アカウント（サーバー設定の OpenRouter API キー）"
-    if not definition.get("api_node") and (
-        module in LOCAL_MODULES or name in LOCAL_PACKS.get(module, ())
+    if (
+        definition.get("api_node")
+        or module.startswith("comfy_api_nodes.")
+        or module == "custom_nodes.comfyui-jev"
+        or (module == "custom_nodes.comfyui-geminitools" and name not in GEMINI_LOCAL_NODES)
     ):
+        raise ValueError(f"{name}: 外部への送信内容を確認できないノードです。")
+    # Definitions come from the installed environment, never the submitted graph.
+    # Device eligibility is decided separately by gpu.select_gpu.
+    if module == "nodes" or module.startswith(("comfy_extras.", "custom_nodes.")):
         return None
-    raise ValueError(f"{name}: 実行先を確認できないノードです。MCP からは実行できません。")
+    raise ValueError(f"{name}: インストール済みノードの実装元を確認できません。")
 
 
 def reject_secrets(inputs):
