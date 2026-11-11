@@ -94,15 +94,83 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             path, headers=self.review_headers, data={"csrf": csrf, "decision": decision}
         )
 
-    async def test_local_immediate_and_untrusted_modules_rejected(self):
+    async def test_local_immediate_and_unknown_provenance_rejected(self):
         self.assertEqual((await self.send("render", LOCAL)).status, 200)
         receipt = await (await self.send("render", LOCAL)).json()
         self.assertEqual(list(self.control.journal.data["jobs"]), [receipt["prompt_id"]])
         disguised = {"1": {"class_type": "EmptyImage", "inputs": {}, "python_module": "nodes"}}
         self.control.objects.return_value = web.json_response(
-            {"EmptyImage": {"python_module": "custom_nodes.other"}}
+            {"EmptyImage": {}}
         )
         self.assertEqual((await self.send("spoof", disguised)).status, 409)
+
+    async def test_installed_custom_nodes_reach_gpu_without_mcp_registration(self):
+        from unittest.mock import MagicMock
+        from comfy_split import worker
+
+        for name, module in (("HyperFlowLoader", "custom_nodes.comfyui-hyperflow-flash"),
+                             ("NewLocalNode", "custom_nodes.new-pack"),
+                             ("ComfySkillsLoader", "custom_nodes.ComfyUI-Skills-Loader"),
+                             ("NewCoreNode", "comfy_extras.nodes_new")):
+            with self.subTest(name=name):
+                graph = {"1": {"class_type": name, "inputs": {}}}
+                definitions = {name: {"python_module": module}}
+                self.control.objects.return_value = web.json_response(definitions)
+                for choice, expected in (("auto", "RTX-PRO-6000"), ("auto-speed", "RTX-PRO-6000"),
+                                         ("L40S", "L40S")):
+                    key = name + choice
+                    response = await self.send(key, graph, gpu=choice)
+                    self.assertEqual(response.status, 200, await response.text())
+                    receipt = await response.json()
+                    self.assertEqual(receipt["gpu"], expected)
+                    self.assertEqual(await (await self.send(key, graph, gpu=choice)).json(), receipt)
+                job = self.control.journal.data["jobs"][receipt["prompt_id"]]
+                self.assertEqual(job["mcp_guard"]["routes"], [])
+                client = MagicMock()
+                response = MagicMock()
+                response.json = AsyncMock(return_value=definitions)
+                client.get.return_value.__aenter__.return_value = response
+                with patch.object(worker, "generate", new_callable=AsyncMock) as run:
+                    await worker.generate_with_extensions(
+                        {"id": receipt["prompt_id"], "body": job["body"], "mcp_guard": job["mcp_guard"]},
+                        client, None, None)
+                    run.assert_awaited_once()
+        self.assertFalse(self.control.journal.data["mcp_reviews"])
+
+    async def test_custom_node_fallback_preserves_external_api_boundaries(self):
+        for i, definition in enumerate((
+            {"python_module": "custom_nodes.new", "api_node": True},
+            {"python_module": "comfy_api_nodes.nodes_new", "api_node": True},
+            {"python_module": "comfy_api_nodes.nodes_gemini"},
+            {"python_module": "custom_nodes.comfyui-geminitools"},
+            {"python_module": "custom_nodes.comfyui-jev"},
+        )):
+            self.control.objects.return_value = web.json_response({"NewAPI": definition})
+            graph = {"1": {"class_type": "NewAPI", "inputs": {}, "api_node": False,
+                           "python_module": "custom_nodes.local"}}
+            denied = await self.send("unknown-api-" + str(i), graph)
+            self.assertEqual(denied.status, 409, await denied.text())
+            self.assertIn("外部への送信内容", (await denied.json())["error"])
+        self.assertFalse(self.control.journal.data["jobs"])
+
+        for name, module in (("AgentRuntimeRun", "custom_nodes.ComfyUI-AgentRuntime"),
+                             ("AgentRuntimeBridgeText", "custom_nodes.ComfyUI-AgentBridge")):
+            self.assertEqual(policy.plan(
+                {"1": {"class_type": name, "inputs": {"prompt": "hello"}}},
+                {name: {"python_module": module}}), ([], {}))
+
+        for name, module in (("GeminiToolsLLM", "custom_nodes.comfyui-geminitools"),
+                             ("OpenRouterText", "custom_nodes.comfyui-jev")):
+            self.control.objects.return_value = web.json_response({
+                name: {"python_module": module},
+                "LocalPostProcess": {"python_module": "custom_nodes.new-pack"},
+            })
+            graph = {"1": {"class_type": name, "inputs": {"prompt": "hello"}},
+                     "2": {"class_type": "LocalPostProcess", "inputs": {"input": ["1", 0]}}}
+            _, _, html = await self.pending("direct-" + name, graph)
+            self.assertIn("RTX-PRO-6000", html)
+            self.assertIn("hello", html)
+            self.assertFalse(self.control.journal.data["jobs"])
 
     async def test_unregistered_api_still_needs_approval_for_gpu_or_cpu_trial(self):
         with patch.dict(gpu.CPU_API_NODES, {}, clear=True):
