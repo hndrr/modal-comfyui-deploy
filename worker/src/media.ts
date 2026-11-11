@@ -111,7 +111,7 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   const url = new URL(path, publicOrigin).href;
   const chunks = byte_offset !== undefined || chunk_bytes !== undefined;
   // Never put media bytes or base64 in a normal chat turn. Check just
-  // the file signature and total size; the iframe reads bytes privately.
+  // the file signature and total size; the iframe loads authenticated media.
   const player = !chunks;
   const offset = byte_offset ?? 0, length = player ? 16 : chunk_bytes ?? MAX_PART;
   const file = await get(path, {Range:`bytes=${offset}-${offset + length - 1}`});
@@ -150,7 +150,7 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
     return {structuredContent:{...metadata,delivery:"link",size:total},
       content:[{type:"text",text:filename + " — use the video player. It streams the authenticated file URL: " + url}]};
   if (player) return {structuredContent:{...metadata,delivery:"player",size:total},
-    content:[{type:"text",text:filename + " — use the " + kind + " player. The player retrieves the media privately. " +
+    content:[{type:"text",text:filename + " — use the " + kind + " player. The player loads authenticated media. " +
       "Retrieval success alone does not confirm that the player is visible. Fallback link: " + url}]};
   const complete = offset === 0 && data.length === total;
   const next = offset + data.length < total ? offset + data.length : null;

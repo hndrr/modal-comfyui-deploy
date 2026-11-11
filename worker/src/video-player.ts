@@ -1,7 +1,7 @@
-// Video bytes travel through authenticated MCP calls, never through the model.
+// Stream authenticated HTTPS first; private MCP chunks are a fallback.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v6.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v7.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
 export const playerHtml = (browserOrigin:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -41,16 +41,29 @@ function show(parts,info){
   if(objectUrl)URL.revokeObjectURL(objectUrl);
   objectUrl=URL.createObjectURL(blob);player.hidden=false;
   player.onloadeddata=()=>{label.textContent=info.filename;};
-  // A host may disallow blob: media. The existing protected HTTPS route is a fallback.
-  player.onerror=()=>{
-    player.onerror=()=>{label.textContent="動画を再生できません。再取得してください。";retry.hidden=false;};
-    if(link.hidden){player.onerror();return;}
-    const raw=new URL(link.href);raw.pathname="/api/view";player.src=raw.href;
-  };
+  player.onerror=()=>{label.textContent="動画を再生できません。再取得するか保存ページで開いてください。";retry.hidden=false;};
   player.src=objectUrl;
+}
+function play(){
+  const info=current;if(!info)return;
+  version++;retry.hidden=true;
+  if(!link.hidden){
+    const raw=new URL(link.href);raw.pathname="/api/view";
+    label.textContent="動画を読み込み中…";player.hidden=false;
+    player.onloadeddata=()=>{label.textContent=info.filename;};
+    player.onerror=()=>{
+      player.onerror=null;
+      if(info.delivery==="link"){label.textContent="動画を再生できません。保存ページで開いてください。";return;}
+      void load();
+    };
+    player.src=raw.href;
+  }else if(info.delivery==="link")label.textContent="動画の再生URLを確認できません。";
+  else void load();
 }
 async function load(){
   let info=current;if(!info)return;
+  if(info.size>limit){label.textContent="この動画は128 MiBを超えます。保存ページで開いてください。";return;}
+  if(!initialized && !window.openai?.callTool){label.textContent="動画を読み込めます。";retry.hidden=false;return;}
   const run=++version,until=Date.now()+110000;retry.hidden=true;label.textContent="動画を取得中…";
   try{
     const parts=[];let offset=0;
@@ -67,7 +80,10 @@ async function load(){
       }
       const meta=result.structuredContent,data=result._meta?.["split/videoPart"];
       if(!meta || meta.prompt_id!==info.prompt_id || meta.index!==(info.index??0))throw Error("指定した動画の応答ではありません。");
-      if(info.delivery==="starting"){current=info={...meta,delivery:"player"};setLink(info);}
+      if(info.delivery==="starting"){
+        current=info={...meta,delivery:"player"};setLink(info);
+        if(!link.hidden){play();return;}
+      }
       if(!Number.isSafeInteger(info.size) || info.size<=0 || info.size>limit)throw Error("この動画は128 MiBを超えます。保存ページで開いてください。");
       if(meta.filename!==info.filename || meta.mimeType!=="video/mp4" || meta.size!==info.size || meta.byte_offset!==offset ||
         typeof data!=="string" || data.length>4*Math.ceil(${VIDEO_PART_BYTES}/3))throw Error("動画の応答が一致しません。");
@@ -86,25 +102,14 @@ function render(result){
   if(key===nextKey)return;
   clearVideo();key=nextKey;current=info;setLink(info);
   if(info.delivery==="chunk"){label.textContent="動画の一部を取得しました。";return;}
-  if(info.delivery==="link"){
-    if(link.hidden){label.textContent="動画の再生URLを確認できません。";return;}
-    // Range support and size are unknown; stream the authenticated URL without chunk reads.
-    const raw=new URL(link.href);raw.pathname="/api/view";
-    label.textContent="動画を読み込み中…";player.hidden=false;
-    player.onloadeddata=()=>{label.textContent=info.filename;};
-    player.onerror=()=>{label.textContent="動画を再生できません。保存ページで開いてください。";};
-    player.src=raw.href;return;
-  }
-  if(info.size>limit){label.textContent="この動画は128 MiBを超えます。保存ページで開いてください。";return;}
   // Previously saved inline results can still hydrate the current resource.
   const data=result._meta?.["split/video"] ?? result.content?.find(x=>x.type==="resource" && x.resource?.mimeType==="video/mp4")?.resource.blob;
-  if(info.delivery==="inline" && typeof data==="string" && data.length===4*Math.ceil(info.size/3)){
+  if(info.delivery==="inline" && info.size<=limit && typeof data==="string" && data.length===4*Math.ceil(info.size/3)){
     try{show([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],info);return;}catch{}
   }
-  if(initialized || window.openai?.callTool)void load();
-  else{label.textContent="動画を読み込めます。";retry.hidden=false;}
+  play();
 }
-retry.onclick=()=>void load();
+retry.onclick=play;
 link.onclick=e=>{if(openLinks){e.preventDefault();request("ui/open-link",{url:link.href}).catch(e=>label.textContent=e.message);}};
 function legacy(globals){
   const meta=globals?.toolResponseMetadata,result=meta?.mcp_tool_result || meta?.call_tool_result;
@@ -118,7 +123,7 @@ addEventListener("message",e=>{
   if(m.id===1 && m.result){
     if(e.origin!=="null")peer=e.origin;initialized=true;openLinks=!!m.result.hostCapabilities?.openLinks;serverTools=!!m.result.hostCapabilities?.serverTools;
     send({method:"ui/notifications/initialized",params:{}});resize();
-    if(current && !retry.hidden)void load();
+    if(current && !retry.hidden)play();
   }else if(pending.has(m.id) && ("result" in m || "error" in m)){
     const p=pending.get(m.id);pending.delete(m.id);clearTimeout(p.timer);
     if(m.error)p.reject(Error(m.error.message));else p.resolve(m.result);
@@ -127,6 +132,6 @@ addEventListener("message",e=>{
 });
 function resize(){const height=document.body.scrollHeight;if(initialized && height!==lastHeight){lastHeight=height;send({method:"ui/notifications/size-changed",params:{height}});}}
 new ResizeObserver(resize).observe(document.body);
-send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"6"},appCapabilities:{}}});
+send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"7"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;
