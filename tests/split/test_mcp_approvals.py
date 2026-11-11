@@ -144,8 +144,6 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             {"python_module": "comfy_api_nodes.nodes_gemini"},
             {"python_module": "custom_nodes.comfyui-geminitools"},
             {"python_module": "custom_nodes.comfyui-jev"},
-            {"python_module": "custom_nodes.ComfyUI-AgentRuntime"},
-            {"python_module": "custom_nodes.ComfyUI-AgentBridge"},
         )):
             self.control.objects.return_value = web.json_response({"NewAPI": definition})
             graph = {"1": {"class_type": "NewAPI", "inputs": {}, "api_node": False,
@@ -154,6 +152,12 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(denied.status, 409, await denied.text())
             self.assertIn("外部への送信内容", (await denied.json())["error"])
         self.assertFalse(self.control.journal.data["jobs"])
+
+        for name, module in (("AgentRuntimeRun", "custom_nodes.ComfyUI-AgentRuntime"),
+                             ("AgentRuntimeBridgeText", "custom_nodes.ComfyUI-AgentBridge")):
+            self.assertEqual(policy.plan(
+                {"1": {"class_type": name, "inputs": {"prompt": "hello"}}},
+                {name: {"python_module": module}}), ([], {}))
 
         for name, module in (("GeminiToolsLLM", "custom_nodes.comfyui-geminitools"),
                              ("OpenRouterText", "custom_nodes.comfyui-jev")):
