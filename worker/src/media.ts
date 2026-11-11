@@ -151,7 +151,7 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
       content:[{type:"text",text:filename + " — use the video player. It streams the authenticated file URL: " + url}]};
   if (player) return {structuredContent:{...metadata,delivery:"player",size:total},
     content:[{type:"text",text:filename + " — use the " + kind + " player. The player loads authenticated media. " +
-      "Retrieval success alone does not confirm that the player is visible. Fallback link: " + url}]};
+      "Retrieval success alone does not confirm that the player is visible. Give this link only if playback is unavailable or opening/saving is requested (website login required): " + url}]};
   const complete = offset === 0 && data.length === total;
   const next = offset + data.length < total ? offset + data.length : null;
   const info = {...metadata, delivery:complete ? "inline" : "chunk", size:total,

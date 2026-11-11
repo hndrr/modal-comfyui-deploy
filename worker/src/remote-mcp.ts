@@ -175,7 +175,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     contents:[{uri:IMAGE_VIEWER_URI,mimeType:PLAYER_MIME,text:imageViewerHtml}],
   }));
   server.registerTool("get_image",{title:"View a generated image",
-    description:"View a saved PNG, JPEG or WebP using its history filename. Shows an image viewer and always returns an authenticated link to open or save the image. Include that link in your reply; do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
+    description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
   const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},
@@ -192,7 +192,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
     annotations:read,inputSchema:videoPartInputs,outputSchema:videoOutput}, a=>call("read_video_part",a,browserOrigin));
   server.registerTool("get_audio",{title:"Retrieve generated audio",
-    description:"Play saved audio. In chat, call with only prompt_id and optional index: show the player and include the returned authenticated link as a fallback. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    description:"Play saved audio in chat using private MCP reads, without a separate website login. Call with only prompt_id and optional index. Prefer the inline player; include the website link only if playback is unavailable or the user asks to open or save the file. Playback limits: 64 MiB source, 10 minutes, 128 MiB decoded audio; files over 4 MiB need the player's load button. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
     _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI,"openai/widgetAccessible":true},
     annotations:read,inputSchema:audioInputs,outputSchema:audioOutput}, a=>call("get_audio",a,browserOrigin));
   // Clients with cached descriptors can still read the current player at their old URI.
