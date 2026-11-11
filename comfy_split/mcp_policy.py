@@ -85,7 +85,11 @@ def classification(name, definition, inputs):
     if (
         definition.get("api_node")
         or module.startswith("comfy_api_nodes.")
-        or module == "custom_nodes.comfyui-jev"
+        or module in {
+            "custom_nodes.comfyui-jev",
+            "custom_nodes.comfyui-agentruntime",
+            "custom_nodes.comfyui-agentbridge",
+        }
         or (module == "custom_nodes.comfyui-geminitools" and name not in GEMINI_LOCAL_NODES)
     ):
         raise ValueError(f"{name}: 外部への送信内容を確認できないノードです。")
