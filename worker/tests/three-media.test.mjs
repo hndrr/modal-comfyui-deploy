@@ -7,6 +7,7 @@ import {get3D, threeInputs, threePartInputs, threeOutput, THREE_PART_BYTES, THRE
 
 const origin = "https://split.example.com";
 const args = {filename:"立体 #1.GLB", subfolder:"render/テスト"};
+const etag = '"version-1"';
 function glb(binaryBytes = 0) {
   const json = JSON.stringify({asset:{version:"2.0"}, ...(binaryBytes ? {buffers:[{byteLength:binaryBytes}]} : {})});
   const padded = json.padEnd(Math.ceil(json.length / 4) * 4, " ");
@@ -41,7 +42,7 @@ function upstream(serve, expected = args) {
     assert.equal(init.method, "GET"); assert.ok(init.signal instanceof AbortSignal);
     const range = new Headers(init.headers).get("Range");
     assert.match(range, /^bytes=\d+-\d+$/); calls.push(range);
-    return serve(range, calls.length);
+    return serve(range, calls.length, new Headers(init.headers));
   };
   return {send, calls};
 }
@@ -49,7 +50,7 @@ function ranged(bytes) {
   return range => {
     const [, a, b] = /^bytes=(\d+)-(\d+)$/.exec(range), start = Number(a), end = Math.min(Number(b), bytes.length - 1);
     return new Response(bytes.subarray(start, end + 1), {status:206, headers:{
-      "Content-Range":`bytes ${start}-${end}/${bytes.length}`, "Content-Length":String(end - start + 1)}});
+      "Content-Range":`bytes ${start}-${end}/${bytes.length}`, "Content-Length":String(end - start + 1), ETag:etag}});
   };
 }
 function valid(result) {
@@ -68,7 +69,7 @@ test("GLB retrieval exposes only metadata and an encoded public output URL", asy
   const bytes = glb(), {send, calls} = upstream(ranged(bytes));
   const result = await get3D(send, origin, {...args, byte_offset:0, chunk_bytes:1});
   assert.deepEqual(valid(result), {...args, format:"glb", mimeType:"model/gltf-binary", size:bytes.length,
-    delivery:"viewer", url:origin + "/view?" + new URLSearchParams({type:"output", ...args})});
+    delivery:"viewer", etag, url:origin + "/view?" + new URLSearchParams({type:"output", ...args})});
   assert.deepEqual(calls, ["bytes=0-4095"]);
   assert.deepEqual(result.content.map(c => c.type), ["text"]); assert.equal(result._meta, undefined);
   assert.ok(JSON.stringify(result).length < 2048);
@@ -147,7 +148,7 @@ test("viewer limit is inclusive and larger files return a link after only a 4 Ki
   assert.equal(THREE_INLINE_LIMIT, 128 * 1024 * 1024);
   for (const size of [THREE_INLINE_LIMIT, THREE_INLINE_LIMIT + 4]) {
     const prefix = Buffer.alloc(4096); glb().copy(prefix); prefix.writeUInt32LE(size, 8);
-    const {send, calls} = upstream(() => new Response(prefix, {status:206, headers:{"Content-Range":`bytes 0-4095/${size}`}}));
+    const {send, calls} = upstream(() => new Response(prefix, {status:206, headers:{"Content-Range":`bytes 0-4095/${size}`,ETag:etag}}));
     const result = await get3D(send, origin, args), metadata = valid(result);
     assert.equal(metadata.delivery, size <= THREE_INLINE_LIMIT ? "viewer" : "link");
     assert.equal(metadata.size, size); assert.equal(result._meta, undefined);
@@ -161,7 +162,7 @@ test("private 512 KiB parts reconstruct GLB/SPZ with no model-visible bytes", as
     const input = {filename}, {send, calls} = upstream(ranged(bytes), input), parts = [];
     let offset = 0;
     do {
-      const result = await get3D(send, origin, {...input, byte_offset:offset}, true), info = valid(result);
+      const result = await get3D(send, origin, {...input, byte_offset:offset, etag}, true), info = valid(result);
       assert.equal(info.delivery, "chunk"); assert.equal(info.byte_offset, offset);
       assert.equal(info.byte_length, Math.min(THREE_PART_BYTES, bytes.length - offset));
       assert.equal(calls.at(-1), `bytes=${offset}-${offset + THREE_PART_BYTES - 1}`);
@@ -174,6 +175,47 @@ test("private 512 KiB parts reconstruct GLB/SPZ with no model-visible bytes", as
   }
 });
 
+test("one ETag pins every part, rejecting same-size replacements between calls or during a call", async () => {
+  const bytes=glb(THREE_PART_BYTES),replacement=Buffer.from(bytes);replacement[replacement.length-1]^=1;
+  let current=bytes,version=etag;
+  const {send}=upstream((range,_call,headers)=>{
+    const ifRange=headers.get("If-Range");
+    if(ifRange && ifRange!==version)
+      return new Response(current,{headers:{ETag:version,"Content-Length":String(current.length)}});
+    const response=ranged(current)(range);response.headers.set("ETag",version);return response;
+  });
+  const info=valid(await get3D(send,origin,args));assert.equal(info.etag,etag);
+  const first=valid(await get3D(send,origin,{...args,byte_offset:0,etag:info.etag},true));
+  current=replacement;version='"version-2"';
+  failed(await get3D(send,origin,{...args,byte_offset:first.next_offset,etag:info.etag},true),/version changed/);
+  for(const honorIfRange of [true,false]){
+    const swapped=upstream((range,call,headers)=>{
+      assert.equal(headers.get("If-Range"),etag);
+      if(call===1)return ranged(bytes)(range);
+      const response=honorIfRange?new Response(replacement):ranged(replacement)(range);
+      response.headers.set("ETag",'"version-2"');return response;
+    });
+    failed(await get3D(swapped.send,origin,{...args,byte_offset:0,etag},true),/version changed/);
+    assert.equal(swapped.calls.length,2);
+  }
+});
+
+test("unverifiable versions fall back to browser links and continuation requires a strong ETag",async()=>{
+  for(const tag of [null,'W/"weak"']){
+    const {send}=upstream(range=>{
+      const response=ranged(glb())(range);
+      if(tag)response.headers.set("ETag",tag);else response.headers.delete("ETag");return response;
+    });
+    const result=await get3D(send,origin,args);
+    assert.equal(valid(result).delivery,"link");assert.equal(result.structuredContent.etag,undefined);
+    failed(await get3D(send,origin,{...args,byte_offset:0},true),/ETag/);
+  }
+  const noFetch=()=>assert.fail("Invalid version must not fetch");
+  failed(await get3D(noFetch,origin,{...args,byte_offset:1},true),/etag/);
+  for(const etag of ['W/"weak"','not-quoted','"unsafe\r\n"','"'+'x'.repeat(512)+'"'])
+    failed(await get3D(noFetch,origin,{...args,byte_offset:0,etag},true),/Invalid/);
+});
+
 test("malformed, inconsistent and truncated ranges are rejected for both probes and parts", async () => {
   const bytes = glb(THREE_PART_BYTES);
   for (const part of [false, true]) {
@@ -182,7 +224,7 @@ test("malformed, inconsistent and truncated ranges are rejected for both probes 
       const {send} = upstream((range, call) => {
         if (part && call === 1) return ranged(bytes)(range);
         const offset = part ? 1 : 0, length = part ? THREE_PART_BYTES : 4096, end = offset + length - 1;
-        const headers = {"Content-Range":`bytes ${offset}-${end}/${bytes.length}`};
+        const headers = {"Content-Range":`bytes ${offset}-${end}/${bytes.length}`,ETag:etag};
         let body = bytes.subarray(offset, end + 1);
         if (kind === "missing") delete headers["Content-Range"];
         if (kind === "wildcard") headers["Content-Range"] = `bytes ${offset}-${end}/*`;
@@ -197,7 +239,7 @@ test("malformed, inconsistent and truncated ranges are rejected for both probes 
         if (kind === "encoded") headers["Content-Encoding"] = "gzip";
         return new Response(body, {status:206, headers});
       });
-      failed(await get3D(send, origin, {...args, byte_offset:1}, part));
+      failed(await get3D(send, origin, {...args, byte_offset:1, etag}, part));
     }
   }
 });
@@ -208,10 +250,10 @@ test("small complete 200 responses are supported, but ignored offsets and change
     const result = await get3D(upstream(() => new Response(bytes, {headers})).send, origin, args);
     assert.equal(valid(result).size, bytes.length);
   }
-  failed(await get3D(upstream(() => new Response(bytes)).send, origin, {...args, byte_offset:1}, true), /byte range/);
+  failed(await get3D(upstream(() => new Response(bytes)).send, origin, {...args, byte_offset:1, etag}, true), /version changed/);
   const {send} = upstream((range, call) => ranged(call === 1 ? bytes : Buffer.concat([bytes, Buffer.alloc(4)]))(range));
   failed(await get3D(send, origin, {...args, byte_offset:0}, true), /size changed/);
-  failed(await get3D(upstream(ranged(bytes)).send, origin, {...args, byte_offset:bytes.length}, true), /outside/);
+  failed(await get3D(upstream(ranged(bytes)).send, origin, {...args, byte_offset:bytes.length, etag}, true), /outside/);
   for (const headers of [{"Content-Length":String(bytes.length - 1)}, {"Content-Range":`bytes 0-${bytes.length - 1}/${bytes.length}`}])
     failed(await get3D(upstream(() => new Response(bytes, {headers})).send, origin, args));
 });

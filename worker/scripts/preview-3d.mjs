@@ -14,7 +14,7 @@ const send = async (path, init) => {
   if (!range) return new Response(bytes,{headers:{"Content-Length":String(bytes.length)}});
   const start=Number(range[1]), end=Math.min(Number(range[2])+1,bytes.length);
   if(start>=bytes.length)return new Response(null,{status:416});
-  return new Response(bytes.subarray(start,end),{status:206,headers:{"Content-Range":`bytes ${start}-${end-1}/${bytes.length}`}});
+  return new Response(bytes.subarray(start,end),{status:206,headers:{"Content-Range":`bytes ${start}-${end-1}/${bytes.length}`,ETag:'"fixture-v1"'}});
 };
 const server = createServer(async(req,res)=>{
   try {
@@ -47,6 +47,6 @@ const server = createServer(async(req,res)=>{
     }
     res.writeHead(response.status,Object.fromEntries(response.headers));
     res.end(Buffer.from(await response.arrayBuffer()));
-  }catch(error){res.writeHead(500);res.end(String(error));}
+  }catch(error){console.error(error);res.writeHead(500);res.end("Preview request failed.");}
 });
 server.listen(8767,"127.0.0.1",()=>console.log("3D smoke: "+origin+"/view?type=output&filename=sample.glb (or sample.spz); /mcp-test?filename=sample.spz"));

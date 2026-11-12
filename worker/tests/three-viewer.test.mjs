@@ -14,31 +14,32 @@ const compiled=await build({entryPoints:[new URL("../viewer/app.ts",import.meta.
     b.onLoad({filter:/.*/,namespace:"stub"},()=>({contents:`export function createViewer(){return {
       async load(bytes,format){onDraw(bytes,format)},reset(){},dispose(){onDispose()}}}`,loader:"js"}));
   }}]});
-function app(info,{chunk,draw}={}){
+function app(info,{chunk,draw,browser=false,legacy=true,fetch:fetcher}={}){
   const handlers={},calls=[],messages=[],drawn=[],elements=Object.fromEntries(
     ["#viewport","#status","#name","#reset","#retry","#open","#save"].map(id=>[id,{
       hidden:true,dataset:{},removeAttribute(key){delete this[key];}}]));
   let disposed=0;
-  const parent={postMessage:m=>messages.push(m)},win={split3D:{origin},openai:{callTool:async(name,args)=>{
+  const parent={postMessage:m=>messages.push(m)},win={split3D:{origin,...(browser ? {file:{filename:info.filename,subfolder:info.subfolder}} : {})},openai:{callTool:async(name,args)=>{
     calls.push({name,args});return chunk(args);
   }}};
+  if(!legacy)delete win.openai;
   runInNewContext(compiled.outputFiles[0].text,{window:win,parent,document:{querySelector:id=>elements[id],body:{scrollHeight:400}},
-    addEventListener:(name,fn)=>handlers[name]=fn,ResizeObserver:class{observe(){}},URL,Blob,Uint8Array,atob,
-    AbortController,setTimeout,clearTimeout,fetch:()=>{throw Error("Inline viewer must not fetch Access URLs");},
+    addEventListener:(name,fn)=>handlers[name]=fn,ResizeObserver:class{observe(){}},URL,URLSearchParams,Blob,Uint8Array,atob,
+    AbortController,setTimeout,clearTimeout,fetch:fetcher || (()=>{throw Error("Inline viewer must not fetch Access URLs");}),
     onDraw:(bytes,format)=>{draw?.();drawn.push({bytes:Buffer.from(bytes),format});},onDispose:()=>disposed++});
   const render=value=>handlers["openai:set_globals"]({detail:{globals:{toolOutput:value}}});
-  render(info);
+  if(!browser)render(info);
   return {handlers,calls,messages,elements,drawn,parent,render,disposed:()=>disposed};
 }
 const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r));};
 
 test("private parts are assembled without browser authentication, repeats do not reload, teardown disposes",async()=>{
   const bytes=Buffer.alloc(THREE_PART_BYTES+17,0x61);
-  const info={filename:"mesh.glb",subfolder:"3d",format:"glb",size:bytes.length,delivery:"viewer",
+  const info={filename:"mesh.glb",subfolder:"3d",format:"glb",size:bytes.length,delivery:"viewer",etag:'"first"',
     url:origin+"/view?filename=mesh.glb&subfolder=3d&type=output"};
   const view=app(info,{chunk:args=>{
     const part=bytes.subarray(args.byte_offset,args.byte_offset+THREE_PART_BYTES),next=args.byte_offset+part.length;
-    return {structuredContent:{...info,byte_offset:args.byte_offset,byte_length:part.length,next_offset:next<bytes.length?next:null},
+    return {structuredContent:{...info,etag:args.etag,byte_offset:args.byte_offset,byte_length:part.length,next_offset:next<bytes.length?next:null},
       content:[],_meta:{"split/3dPart":part.toString("base64")}};
   }});
   await settle();
@@ -46,10 +47,14 @@ test("private parts are assembled without browser authentication, repeats do not
   assert.equal(view.elements["#viewport"].dataset.state,"ready");
   assert.equal(view.elements["#reset"].disabled,false);
   assert.equal(view.calls.length,2);assert.ok(view.calls.every(x=>x.name==="read_3d_part"));
+  assert.ok(view.calls.every(x=>x.args.etag===info.etag));
   assert.match(view.elements["#save"].href,/^blob:/);
   view.render(info);await settle();assert.equal(view.calls.length,2);
+  view.render({...info,etag:'"replacement"'});await settle();
+  assert.equal(view.calls.length,4);assert.equal(view.drawn.length,2);
+  assert.ok(view.calls.slice(2).every(x=>x.args.etag==='"replacement"'));
   view.handlers.message({source:view.parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:9,method:"ui/resource-teardown"}});
-  assert.equal(view.disposed(),1);assert.equal(view.elements["#reset"].disabled,true);
+  assert.equal(view.disposed(),2);assert.equal(view.elements["#reset"].disabled,true);
   assert.equal(view.elements["#save"].href,undefined);
 });
 
@@ -65,6 +70,40 @@ test("large files, corrupt chunks and blocked renderers retain the signed-in bro
     _meta:{"split/3dPart":Buffer.alloc(10).toString("base64")}}),draw:()=>{throw Error("描画できません。");}});
   await settle();assert.equal(blocked.disposed(),1);assert.equal(blocked.elements["#open"].href,info.url);
   assert.equal(blocked.elements["#retry"].hidden,false);
+  const changed=app({...info,etag:'"original"'},{chunk:()=>({structuredContent:{...info,etag:'"replaced"',byte_offset:0,byte_length:10,next_offset:null},
+    _meta:{"split/3dPart":Buffer.alloc(10).toString("base64")}})});
+  await settle();assert.equal(changed.drawn.length,0);assert.equal(changed.elements["#viewport"].dataset.state,"error");
+});
+
+test("hosts without serverTools or legacy callTool immediately show the browser link",async()=>{
+  const info={filename:"mesh.glb",subfolder:"",format:"glb",size:32,delivery:"viewer",etag:'"version"',url:origin+"/view?filename=mesh.glb"};
+  for(const resultFirst of [true,false]){
+    const view=app(resultFirst?info:undefined,{legacy:false});
+    view.handlers.message({source:view.parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:1,result:{hostCapabilities:{}}}});
+    if(!resultFirst)view.render(info);
+    await settle();
+    assert.equal(view.messages.some(x=>x.method==="tools/call"),false);
+    assert.equal(view.drawn.length,0);assert.equal(view.elements["#retry"].hidden,true);
+    assert.match(view.elements["#status"].textContent,/このホスト.*ブラウザ/);
+    assert.equal(view.elements["#open"].href,info.url);assert.equal(view.elements["#open"].hidden,false);
+  }
+});
+
+test("browser reads are bounded even without a truthful Content-Length and keep the save link",async()=>{
+  const info={filename:"mesh.glb",subfolder:"3d"},limit=128*1024*1024;
+  const bytes=texturedGLB(),small=app(info,{browser:true,fetch:async()=>new Response(bytes)});
+  await settle();assert.deepEqual(small.drawn[0].bytes,bytes);
+  for(const length of [String(limit+1),undefined,"1"]){
+    let cancelled=false,pulls=0;
+    const body=new ReadableStream({pull(c){pulls++;c.enqueue(new Uint8Array(1024*1024));},cancel(){cancelled=true;}});
+    const view=app(info,{browser:true,fetch:async()=>new Response(body,{headers:length?{"Content-Length":length}:{}})});
+    await settle();
+    assert.equal(cancelled,true);assert.ok(pulls<=(length===String(limit+1)?1:130));
+    assert.equal(view.drawn.length,0);assert.equal(view.elements["#reset"].disabled,true);
+    assert.match(view.elements["#status"].textContent,/128 MiB/);
+    assert.equal(view.elements["#save"].hidden,false);
+    assert.match(view.elements["#save"].href,/\/api\/view\?/);
+  }
 });
 
 test("GLB loader rejects external dependencies before any loader requests can run",()=>{
@@ -97,7 +136,8 @@ test("get_3d and private reads use only the media CPU, including real fixture he
     const send=async(path,init)=>{
       hits.push(path);const range=/bytes=(\d+)-(\d+)/.exec(new Headers(init.headers).get("Range"));
       const start=Number(range[1]),end=Math.min(Number(range[2])+1,bytes.length);
-      return new Response(bytes.subarray(start,end),{status:206,headers:{"Content-Range":`bytes ${start}-${end-1}/${bytes.length}`}});
+      if(new Headers(init.headers).has("If-Range"))assert.equal(new Headers(init.headers).get("If-Range"),'"fixture"');
+      return new Response(bytes.subarray(start,end),{status:206,headers:{"Content-Range":`bytes ${start}-${end-1}/${bytes.length}`,ETag:'"fixture"'}});
     };
     const split=()=>{throw Error("Must not start ComfyUI");};
     const result=await callSplit(split,"get_3d",{filename},origin,undefined,send);
