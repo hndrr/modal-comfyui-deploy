@@ -3,6 +3,8 @@ import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
 import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
 import {get3D} from "./three-media.ts";
+import {MediaDelivery} from "./media-delivery.ts";
+import {deliveryOutputs} from "./delivered-media.ts";
 
 type Send = (path:string, init:RequestInit) => Promise<Response>;
 const failure=(text:string):CallToolResult=>({isError:true,content:[{type:"text",text}]});
@@ -70,7 +72,7 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
   return result;
 }
 
-export async function callSavedMedia(send:Send,name:string,args:Record<string,unknown>,origin:string):Promise<CallToolResult> {
+export async function callSavedMedia(send:Send,name:string,args:Record<string,unknown>,origin:string,delivery?:MediaDelivery):Promise<CallToolResult> {
   try {
     if(typeof args.prompt_id==="string")args={...args,prompt_id:args.prompt_id.toLowerCase()};
     if (name==="get_3d" || name==="read_3d_part") return await get3D(send,origin,args,name==="read_3d_part");
@@ -82,7 +84,9 @@ export async function callSavedMedia(send:Send,name:string,args:Record<string,un
         {method:"GET",signal:AbortSignal.timeout(50_000)});
       const bytes=await readAtMost(r,1024*1024);
       if (!bytes) return failure("Output metadata exceeds the read limit.");
-      return {isError:!r.ok,content:[{type:"text",text:JSON.stringify(JSON.parse(new TextDecoder().decode(bytes)))}]};
+      const data=JSON.parse(new TextDecoder().decode(bytes));
+      const result=delivery && r.ok ? await deliveryOutputs(delivery,send,data,false,origin) : data;
+      return {isError:!r.ok,content:[{type:"text",text:JSON.stringify(result)}]};
     }
     if (name==="read_audio_part") return await getMedia("audio",send,origin,
       {...z.object(audioPartInputs).parse(args),chunk_bytes:AUDIO_PART_BYTES},true);

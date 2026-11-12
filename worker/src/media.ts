@@ -60,7 +60,7 @@ function safeSegment(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 255 &&
     value !== "." && value !== ".." && !/[/\\:\x00-\x1f\x7f]/.test(value);
 }
-function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
+export function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
   const result: Output[] = [];
   if (!record(outputs)) return result;
   for (const node of Object.values(outputs)) {

@@ -1,94 +1,79 @@
-# メディア配信アダプタの計画
+# メディア配信アダプタ
 
-状態は設計のみ。個人用メディア配信サービスを別リポジトリで先に完成させ、その API を単独で検証した後に、このリポジトリのアダプタと MCP 対応に着手する。
+実装とローカル連携確認まで対応。本番への反映は別作業とする。画像・音声・動画・GLB/SPZを、任意の外部サービスから本人用URLとMCPの表示用バイト列として取得する。
 
-## このリポジトリで扱う範囲
+## 本体と別リポジトリの境界
 
-本体が管理するのは、任意の接続設定、API 契約、原本の照会・転送、MCP 応答とプレイヤーへの組み込み、失敗時の既存経路への切り替えまで。過去作品の照会と新規生成の完了時に、同じ外部配信先から本人用 URL とバイト列を受け取る。
+本体が持つのは接続設定、以下のAPI契約、原本の照会・転送、MCP応答、プレイヤー連携まで。配信側の保存方式、保持方針、無料枠管理、手元ファイル、共有・公開、ギャラリー、デプロイは提供側リポジトリで管理する。提供側のコードやパッケージを本体へ取り込まない。
 
-配信サービス内部の保存方式、保持期限の方針、無料枠の管理、手元ファイル登録、共有・公開、ギャラリー UI、デプロイ手順は提供側の別リポジトリで設計・管理する。このリポジトリにそれらの詳細や実装計画を複製しない。
+任意のWorker Secret `MEDIA_DELIVERY` を設定する。
 
-## 接続する API の契約
+```json
+{"origin":"https://<MEDIA_DELIVERY_HOST>","source_id":"<SOURCE_ID>","token":"<SERVICE_TOKEN>"}
+```
 
-アダプタが利用する外部 API は以下の4操作。提供側の保存方式や管理画面には依存しない。サービス間のリクエストは固定 HTTPS origin に送り、`Authorization: Bearer <SERVICE_TOKEN>` で認証する。トークンは接続元の `source_id` に紐付ける。
+未設定では既存経路を使い、外部サービスへの通信は0件。設定が不正ならMCP入口で拒否する。HTTPSの単一originに固定し、パス・ポート・URL内認証情報・クエリは禁止。リダイレクトを追わず、返された本人用URLも設定originの `/media/{media_id}` と一致することを検証する。
 
-| API | リクエスト | 応答 |
+本体のOAuth本人認証を通過した後に利用する。サービス間BearerはWorker内だけで使い、利用者のCookie・JWT・Modal認証情報を外部へ渡さない。ワークフローやプロンプトも送らない。本人用URLは公開リンクではなく、配信サービス側のブラウザ認証が必要。
+
+## 利用するAPI契約
+
+すべて設定originに `Authorization: Bearer <SERVICE_TOKEN>` で接続する。`source_id` は提供側トークンの接続元と一致させる。
+
+| API | 入力 | 応答・制約 |
 | --- | --- | --- |
-| `POST /v1/media/lookup` | `source_id` と作品参照の配列 | 各項目の `ready` または `missing`。ready なら配信情報 |
-| `POST /v1/media` | 原本の参照、出力パス、ETag、ファイル名、形式、サイズ。ジョブ由来ならジョブ ID と出力番号も付ける | 既存コピーなら `ready`。転送が必要なら `upload_required` と `media_id` |
-| `PUT /v1/media/{media_id}/content` | ファイルのバイナリ本体 | 保存完了後に `ready` と配信情報 |
-| `GET /v1/media/{media_id}/content` | 必要に応じて `Range` を指定 | 本体または範囲内のバイト列。途中取得は `206` と `Content-Range` |
+| `POST /v1/media/lookup` | `source_id`, `references: [{output_path, source_etag}]` | 最大24参照。入力順の `results` |
+| `POST /v1/media` | `source_id`, `output_path`, `source_etag`, `filename`, `kind`, `mime_type`, `size_bytes` | `ready` / `pending` / `upload_required` |
+| `PUT /v1/media/{media_id}/content` | バイナリ、`Content-Type`, `Content-Length`, `X-Upload-Id` | 登録で受け取った `upload_id` を使用。完了後のコピー情報 |
+| `GET /v1/media/{media_id}/content` | `Range`, `If-Range`（配信ETag） | `206`, `Content-Range`, `ETag`, `Content-Type` と実バイト数を照合 |
 
-作品参照は「ジョブ ID・種類・種類別の番号」、または「出力パス・原本の ETag」。ジョブ由来の番号は接続元が対応付け、個人用サービスが推測しない。ready の配信情報には `media_id`、本人用 `url`、形式、サイズ、コピーの期限を含める。
+状態は以下を区別する。
 
-同じ `source_id`・出力パス・ETag の登録は同じ `media_id` に解決し、再試行でコピーを増やさない。本体の保存が完了するまで ready にしない。期限切れのコピーは lookup で missing とし、再登録を受け付ける。
+- `ready`: `media_id`, `url`, `etag`, `mime_type`, `size_bytes`, `expires_at`（null可）, `cleansed`。
+- `missing`: `reason` は `not_found` / `expired` / `upload_failed`。
+- `pending`: `media_id`, `retry_after_seconds`。まだ利用可能なURLを返さない。
+- `upload_required`: `media_id`, `upload_id`。この時だけ本体を転送する。
 
-連携先から受け取るのは作品情報とファイル本体。個人用サービスは Modal に接続せず、Modal の認証情報、利用者の Cookie・JWT、ワークフロー全体、生成プロンプトを要求しない。将来の本体から受け取るデータも、通常の非公開コピーとして登録する。
+エラーはHTTP非2xxと `error.code`、任意の `error.retry_after_seconds`。本文や上流の例外をMCPへそのまま転記しない。現在の契約は1ファイル25 MiBまで。GLBは `kind: "3d"` / `model/gltf-binary`、SPZは `kind: "3d"` / `application/octet-stream`。MOV/MKVなど提供側非対応形式や上限超過は既存の原本取得へ戻す。
 
-## 本体側の設計
+原本の識別は `source_id + output_path + source_etag` に統一する。ジョブID・種類別番号からファイルへの解決は本体で行い、提供側にはジョブ別名を登録しない。同じ参照の再登録は既存コピー・転送予約を再利用する。
 
-### 任意設定と本体の担当
+## 過去作品の取得
 
-本体の Worker に小さな配信アダプタを追加し、任意の Secret `MEDIA_DELIVERY` で有効にする。
+1. `get_image` / `get_3d` はファイル名、`get_audio` / `get_video` は完了履歴と種類別番号から原本を解決する。
+2. 原本をHEADし、ETag・サイズ・MIMEを取得する。`output_path` は出力ルート相対パスで、隠しパス・パス逸脱を拒否する。
+3. lookupがreadyならコピーを再利用する。原本の本体GET・PUTは0件。版確認のHEADは行う。
+4. missing/pendingなら登録して現在の状態・予約を確認する。upload_requiredの時だけ原本をGETし、ストリームをPUTする。GETは原本ETagを `If-Range` に指定し、取得ヘッダーを照合する。転送後にもHEADで原本の版を確認する。
+5. readyの本人用URLを本文と `structuredContent.url` に返す。原本ETagとコピーETagは別物で、表示にはAPIが返した現在のコピーのMIME・サイズ・ETagを使う。提供側でメタデータ除去により置換済みでも原本を上書き転送しない。
 
-```json
-{
-  "origin": "https://<MEDIA_DELIVERY_HOST>",
-  "source_id": "<THIS_DEPLOYMENT_ID>",
-  "token": "<SERVICE_TOKEN>"
-}
-```
+PUTの応答が失われた場合も、次回lookup/登録から再開する。生成を再投入しない。配信用CPU設定 `SPLIT_MEDIA_ORIGIN` があれば原本取得はそのCPUを使い、なければ既存のComfyUI経路を使う。
 
-アダプタは、配信用コピーの照会、必要な原本の転送、配信情報・バイト列の受け取り、MCP 応答への組み込みを担当する。接続先は設定済み origin に固定し、返された URL もその origin に限定する。
+## 新規生成と一覧
 
-本体は本人認証・生成受付・進捗・履歴・原本取得を担当する。個人用サービスを有効にしない環境では、この設定もクラウド資源も追加しない。本体のビルド・テストは個人用リポジトリへのアクセスを要求しない。
+`enqueue_workflow` の受付・承認待ちは変更しない。`get_job_progress` がcompletedの時だけ、出力一覧の最大4件を同じ準備処理へ渡す。`outputs` と `outputs_next_offset` を返し、続きは任意引数 `outputs_offset` で取得する。失敗した出力にも原本の認証付きURLと理由を残し、completedや成功済みの出力を消さない。準備中の項目は同じページを再照会する。
 
-### 過去の作品を問い合わせた時
+`list_outputs` は原本HEADと最大24件ずつのlookupだけを行う。準備済みコピーにURL・ETag・サイズ・MIMEを追加し、欠落から登録・転送は始めない。
 
-1. MCP の `get_image`・`get_audio`・`get_video` の作品参照を組み立て、個人用サービスに lookup を送る。ジョブ ID での指定は種類と種類別の番号を使う。ファイル名だけの指定では、先に原本を HEAD で確認し、出力パスと ETag で版を特定する。
-2. ready なら配信情報を再利用する。プレイヤーやバイナリ取得にも、そのコピーを使う。
-3. missing なら、本体が既存の保存済み履歴と Modal の参照用 CPU から、転送するファイルとその版を特定する。
-4. 個人用サービスに作品情報を登録し、upload_required の時だけ原本を転送する。
-5. 保存完了後、本文と `structuredContent.url` に本人用 URL を返す。画像やプレイヤーで使うデータも個人用サービスから読む。
+設定有効時だけ、コピー作成が発生する4取得ツールと `get_job_progress` に説明を追加し、`readOnlyHint: false`, `idempotentHint: true`, `openWorldHint: true` とする。
 
-音声の続きやシークは特定済みの `media_id` を使い、チャンクごとの Modal 履歴取得を避ける。`list_outputs` は一覧として扱い、準備済み項目に URL を添える。単なる一覧取得では未取得の全作品を転送しない。
+## プレイヤーと失敗時の動作
 
-### 新しく生成した時
+画像は既存のインライン表示を維持する。音声・動画・3Dの初回応答に `delivery_ref`（ファイル名・サブフォルダ・media_id・配信ETag・MIME・サイズ）を付ける。プレイヤーはこの参照を変更せず内部の `read_audio_part` / `read_video_part` / `read_3d_part` へ渡し、続きはModal履歴や原本を再取得しない。CLIの音声・動画のチャンク取得でも `delivery_ref` を引き継ぐ。
 
-1. `enqueue_workflow` は生成受付または承認待ちの結果を返す。この時点では個人用サービスを呼ばない。
-2. MCP クライアントが同じ生成依頼の処理中に `get_job_progress` で進捗を確認する。
-3. completed の時、本体が出力一覧を取得し、過去作品と同じ lookup・登録・転送の処理を行う。
-4. 完了応答に作品ごとの配信 URL を付ける。利用者が再度「取得して」と頼む操作を必要としない。
+チャンクの版・サイズ・Rangeが変わったらエラーにし、作品の再取得を案内する。原本のバイトへ途中で切り替えない。ブラウザはサービス間トークンを持たず、配信URLを直接fetchしたり `/api/view` に書き換えたりしない。本人用ページへのリンクとして扱う。3Dの描画は本体の既存ビューアーを使う。
 
-```json
-{
-  "prompt_id": "<PROMPT_ID>",
-  "status": "completed",
-  "outputs": [
-    {
-      "index": 0,
-      "filename": "clip.mp4",
-      "kind": "video",
-      "delivery_status": "ready",
-      "url": "https://<MEDIA_DELIVERY_HOST>/media/<MEDIA_ID>"
-    }
-  ],
-  "outputs_next_offset": null
-}
-```
+準備中は再試行情報を返す。初回準備の容量・形式制限、サービス障害は理由を添えて既存の原本取得へ戻す。配信コピーの読取中の障害では再取得を案内する。すでに開いた旧プレイヤーの参照なしチャンク要求は従来経路を維持する。
 
-大量の出力は最大4件ずつ準備する。`get_job_progress` に任意の `outputs_offset` を追加し、続きがあれば `outputs_next_offset` を返す。クライアントは同じ依頼の中で続きを取得する。ジョブを再投入せず、GPU の終了も転送待ちにしない。
+Secretを削除すると新しいMCP応答は既存経路へ戻る。既存コピーや外部サービスのリンクを自動削除しない。配信側の停止・削除は提供側で行う。
 
-### プレイヤー、失敗時、切り離し
+## 検証
 
-- 本体のプレイヤーで設定済み配信 origin の本人用 URL を扱えるようにする。動画の URL を `/api/view` に書き換える処理を配信先に対応させ、音声チャンクは MCP 認証経由で読む。ブラウザへサービス間トークンを渡さない。
-- 容量超過、期限切れ原本、転送失敗、個人用サービス停止は出力ごとの理由と既存の認証付き原本取得方法を返す。生成完了と成功した出力は保持し、再試行は配信だけ行う。
-- 個人用の接続設定を削除すると、新しい MCP 応答は現行の原本取得へ戻る。既発行の公開・共有リンクは個人用サービス側で停止する。
+通常は `worker/tests/media-delivery.test.mjs` と既存の認証・メディア・プレイヤーテストで完結する。未設定・設定解除、初回転送、再利用、期限切れ、pending、応答消失、原本変更、コピー置換、容量制限、接続先固定、秘密情報、最大24件lookup、4出力ページングを確認する。
 
-### アダプタの完了条件
-
-接続設定なしで従来の MCP が動き、個人用サービスへの通信が0件であることを確認する。接続後は、既存コピー、初回コピー、期限切れ、新規生成、複数出力の一部失敗を検証する。コピーが ready の作品の再取得と音声の続きでは Modal からの本体転送が0件であることを確認する。ファイル名指定の版確認に必要な HEAD は許容する。個人用サービスの障害でも再生成が0件であることを確認する。
+実APIとの確認は[独立したローカル連携手順](../../tests/README.md#外部配信アダプタのローカル連携確認)を明示実行する。本体のビルド・通常テスト・CIは別repoへ依存しない。ローカルAPIの認証拒否、PNG/WAV/MP4/GLB/SPZの登録とMCP応答、コピー再利用、チャンクの完全一致、ブラウザ表示・再生を確認する。本番Accessや実際のMCPホスト内での表示確認はデプロイ時の作業とする。
 
 ## 関連資料
 
-現在の原本取得は[保存データの配信設計](split-media-delivery.md)、MCP の実行先は[経路図](split-mcp-routing.md)を参照する。
+[保存データの配信設計](split-media-delivery.md)、[MCP経路図](split-mcp-routing.md)、[設定手順](../mcp/setup.md)。
+
+外部配信が有効な `list_outputs` は1ページ最大32件に制限し、`next_offset` で続ける。原本HEAD、24件ずつのlookup、認証・起動確認を合わせて [Workers Freeのサブリクエスト上限](https://developers.cloudflare.com/workers/platform/limits/#subrequests) に収めるための上限であり、登録・転送は行わない。

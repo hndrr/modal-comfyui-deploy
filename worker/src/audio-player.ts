@@ -2,8 +2,8 @@
 // fetch /view from the iframe, or publish an output to an unprotected URL.
 import {audioBudgetScript} from "./audio-budget.ts";
 import {AUDIO_PART_BYTES} from "./media.ts";
-export const AUDIO_PLAYER_URI = "ui://split/audio-player-v4.html";
-export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
+export const AUDIO_PLAYER_URI = "ui://split/audio-player-v5.html";
+export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
 export const audioPlayerHtml = `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した音声</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}input{flex:1;min-width:4rem}output{font-variant-numeric:tabular-nums}a{color:LinkText}</style>
@@ -11,6 +11,7 @@ p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:
 <div id="transport" role="group" aria-label="生成した音声" hidden><button id="play">再生</button><input type="range" min="0" max="0" step="0.1" value="0" aria-label="再生位置" disabled><output>0:00</output></div>
 <footer><button hidden>音声を再取得</button><a hidden target="_blank" rel="noopener noreferrer">再生・保存ページを開く</a></footer>
 <script>
+const deliveryOrigin=null;
 ${audioBudgetScript}
 const transport=document.querySelector("#transport"), play=document.querySelector("#play"), seek=document.querySelector("input"), clock=document.querySelector("output");
 const statusLabel=document.querySelector("p"), retry=document.querySelector("footer button"), link=document.querySelector("a");
@@ -65,7 +66,7 @@ function show(parts,info){
   file=blob;transport.hidden=false;statusLabel.textContent=info.filename;
 }
 function setLink(info){
-  try{const u=new URL(info.url);if(u.protocol==="https:" && u.pathname==="/view"){link.href=u.href;link.hidden=false;}}catch{}
+  try{const u=new URL(info.url);if(!u.username && !u.password && (u.protocol==="https:" && u.pathname==="/view" || (u.origin===deliveryOrigin && /^\\/media\\/[a-f0-9-]{36}$/.test(u.pathname)))){link.href=u.href;link.hidden=false;}}catch{}
 }
 function sizePolicy(info,automatic){
   if(!Number.isSafeInteger(info.size) || info.size<=0 || info.size>limit){
@@ -83,6 +84,7 @@ async function load(automatic=false){
     const parts=[];let offset=0;
     do {
       const args={prompt_id:info.prompt_id,index:info.index,byte_offset:offset};
+      if(info.delivery_ref)args.delivery_ref=info.delivery_ref;
       const result=await (serverTools || !window.openai?.callTool ? request("tools/call",{name:"read_audio_part",arguments:args}) :
         window.openai.callTool("read_audio_part",args));
       if(run!==version)return;
@@ -95,6 +97,7 @@ async function load(automatic=false){
       }
       const meta=result.structuredContent, data=result._meta?.["split/audioPart"];
       if(!meta || meta.prompt_id!==info.prompt_id || meta.index!==info.index) throw Error("指定した音声の応答ではありません。");
+      if(info.delivery_ref && (meta.delivery_ref?.media_id!==info.delivery_ref.media_id || meta.delivery_ref?.etag!==info.delivery_ref.etag))throw Error("配信コピーの版が変わりました。作品を再取得してください。");
       if(info.delivery==="starting"){
         current=info={...meta,delivery:"player"};setLink(info);
         if(!sizePolicy(info,automatic))return;
@@ -114,7 +117,7 @@ function render(result){
   const info=result.structuredContent;
   if(result.isError){clear();statusLabel.textContent=result.content?.find(x=>x.type==="text")?.text || "音声を取得できませんでした。";return;}
   if(!info?.prompt_id)return;
-  const k=JSON.stringify([info.prompt_id,info.index,info.filename,info.size]);
+  const k=JSON.stringify([info.prompt_id,info.index,info.filename,info.size,info.delivery_ref?.media_id,info.delivery_ref?.etag]);
   if(k===key)return;
   clear();key=k;current=info;
   setLink(info);
@@ -151,3 +154,5 @@ new ResizeObserver(resize).observe(document.body);
 send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-audio",version:"4"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;
+
+export const audioPlayerFor = (origin?:string) => audioPlayerHtml.replace("const deliveryOrigin=null;", "const deliveryOrigin="+JSON.stringify(origin || null).replaceAll("<","\\u003c")+";");

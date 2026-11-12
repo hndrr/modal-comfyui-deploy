@@ -1,6 +1,8 @@
 # リモート MCP の経路と、起動するCPU・GPU
 
-この図は、リポジトリのWorker・splitと配信用CPUを構成した場合の経路です。[ツール一覧](../mcp/tools.md)で操作を選び、ここで実行先を確認できます。[設定手順](../mcp/setup.md)と[保存データの配信・R2の将来案](split-media-delivery.md)は別ページです。
+この図は、リポジトリのWorker・splitと配信用CPUを構成した場合の経路です。[ツール一覧](../mcp/tools.md)で操作を選び、ここで実行先を確認できます。[設定手順](../mcp/setup.md)と[保存データの配信](split-media-delivery.md)は別ページです。
+
+`MEDIA_DELIVERY` 設定時は、初回準備だけ原本を転送し、以後の音声・動画・3Dチャンクを外部コピーから読む。生成の受付は変更しない。詳細は[配信アダプタ](media-delivery-adapter-plan.md)を参照。
 
 ## 全体の経路
 
@@ -13,6 +15,7 @@ flowchart TD
   Edge -->|"初期化・ツール一覧・ping・プレイヤーHTML"| Reply["Worker内で応答：Modalは0台のまま"]
   Edge -->|"保存データの読み取り"| Read["配信用CPU：ComfyUIを起動しない"]
   Edge -->|"現在のノード情報・編集・素材保存・ジョブ管理"| CPU["ComfyUI CPU：splitの受付・管理"]
+  Edge -->|"MEDIA_DELIVERY設定時：コピー照会・登録・取得"| Delivery["別repoの配信サービス：本人用コピー"]
   Read -->|"読む"| Store[("Modal Volume：出力・履歴・保存グラフ・モデル")]
   CPU -->|"必要な操作だけ呼ぶ"| Upstream["CPU内のartokun MCP：編集・解析・ノード照会など"]
   Upstream -->|"必要なAPIを呼ぶ"| API["CPU内のComfyUI API"]

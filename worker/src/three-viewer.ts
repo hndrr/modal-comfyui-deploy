@@ -1,9 +1,10 @@
 import {threeViewerScript} from "./generated/three-viewer.ts";
 const inlineScript = threeViewerScript.replaceAll("</script", "<\\/script");
 
-export const THREE_VIEWER_URI = "ui://split/3d-viewer-v1.html";
-export function threeViewerHtml(origin: string, file?: {filename: string; subfolder: string}): string {
-  const config = JSON.stringify({origin: new URL(origin).origin, file}).replaceAll("<", "\\u003c");
+export const THREE_VIEWER_URI = "ui://split/3d-viewer-v2.html";
+export const PREVIOUS_THREE_VIEWER_URI = "ui://split/3d-viewer-v1.html";
+export function threeViewerHtml(origin: string, file?: {filename: string; subfolder: string}, deliveryOrigin?:string): string {
+  const config = JSON.stringify({origin: new URL(origin).origin, file, deliveryOrigin}).replaceAll("<", "\\u003c");
   return `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>3Dモデル</title><style>
 :root{color-scheme:light dark;font:14px system-ui}*{box-sizing:border-box}body{margin:0;padding:12px}

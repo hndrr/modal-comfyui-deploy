@@ -23,8 +23,13 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
     headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream',Authorization:'Bearer do-not-forward',
       Cookie:'private=secret','CF-Access-Jwt-Assertion':jwt},
     body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})}),cfg);
-  for (const jwt of ['',await sign('ui-aud','owner@example.com'),await sign('mcp-aud','another@example.com'),await sign('mcp-aud','owner@example.com','https://wrong.example.com')])
-    assert.equal((await request(jwt)).status,403);
+  for(const configured of [false,true]) {
+    if(configured)cfg.MEDIA_DELIVERY=JSON.stringify({origin:'https://media.example.test',source_id:'test',token:'x'.repeat(64)});
+    for (const jwt of ['',await sign('ui-aud','owner@example.com'),await sign('mcp-aud','another@example.com'),await sign('mcp-aud','owner@example.com','https://wrong.example.com')])
+      assert.equal((await request(jwt)).status,403);
+    assert.equal(hits.length,0);
+  }
+  delete cfg.MEDIA_DELIVERY;
   const jwt=await sign('mcp-aud','owner@example.com');
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');

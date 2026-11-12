@@ -35,3 +35,7 @@ MODAL_SECRET=
 # <MCP_ACCESS_AUD>: MCP 専用 Access アプリの Application Audience (AUD) Tag。
 # <OWNER_EMAIL>: MCP 専用 Access アプリの Allow に登録する本人のメールアドレス。
 # SPLIT_REMOTE_MCP={"hostname":"<SPLIT_PUBLIC_HOST>","split_hostname":"<SPLIT_PUBLIC_HOST>","origin":"<SPLIT_MODAL_ORIGIN>","audience":"<MCP_ACCESS_AUD>","owner_email":"<OWNER_EMAIL>"}
+
+# Optional personal delivery service. No requests are sent while unset.
+# HTTPS origin only; source_id must match the service-side token configuration.
+# MEDIA_DELIVERY={"origin":"https://<MEDIA_DELIVERY_HOST>","source_id":"<SOURCE_ID>","token":"<SERVICE_TOKEN>"}

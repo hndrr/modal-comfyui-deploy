@@ -1,6 +1,8 @@
 import {receiptLink} from "./job-review.ts";
 import {callSavedMedia, imageOutput, savedMediaTools} from "./saved-media.ts";
 import {callSavedCatalog, savedCatalogRequest} from "./saved-catalog.ts";
+import {MediaDelivery, deliveryOutput, deliveryRefSchema} from "./media-delivery.ts";
+import {callDeliveredMedia, deliveredTools, deliveryOutputs} from "./delivered-media.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -13,10 +15,10 @@ import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
-import { IMAGE_VIEWER_URI, imageViewerHtml } from "./image-viewer.ts";
-import {THREE_VIEWER_URI, threeViewerHtml} from "./three-viewer.ts";
+import { IMAGE_VIEWER_URI, PREVIOUS_IMAGE_VIEWER_URI, imageViewerFor } from "./image-viewer.ts";
+import {THREE_VIEWER_URI, PREVIOUS_THREE_VIEWER_URI, threeViewerHtml} from "./three-viewer.ts";
 import {threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
-import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
+import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerFor } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
@@ -40,7 +42,12 @@ async function rejected(response: Response): Promise<CallToolResult> {
 }
 
 // Only a tool invocation may call send(). No polling survives this invocation.
-export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string, mediaSend?:Send): Promise<CallToolResult> {
+export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string, mediaSend?:Send, delivery?:MediaDelivery): Promise<CallToolResult> {
+  // Leave room under Workers Free's subrequest limit for authentication and CPU readiness.
+  if(delivery && name==="list_outputs" && (args.limit===undefined || typeof args.limit==="number" && args.limit>32))
+    args={...args,limit:32};
+  if(delivery && browserOrigin && deliveredTools.has(name) && (mediaSend || args.delivery_ref!==undefined || name.includes("3d")))
+    return callDeliveredMedia(delivery,mediaSend || send,name,args,()=>callSplit(send,name,args,browserOrigin,blobHosts,mediaSend));
   if (name === "get_3d" || name === "read_3d_part") {
     if (!browserOrigin) return failure("Missing split browser origin.");
     return callSavedMedia(mediaSend || send,name,args,browserOrigin);
@@ -50,7 +57,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
     if(result!==null)return result;
   }
   if (mediaSend && savedMediaTools.has(name))
-    return callSavedMedia(mediaSend,name,args,browserOrigin || "https://split.invalid");
+    return callSavedMedia(mediaSend,name,args,browserOrigin || "https://split.invalid",delivery);
   const deadline = Date.now() + 12_000;
   try {
     for (;;) {
@@ -63,6 +70,8 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
+        if(delivery && browserOrigin && deliveredTools.has(name))
+          return callDeliveredMedia(delivery,send,name,args,()=>callSplit(send,name,args,browserOrigin,blobHosts));
         if (name === "get_image") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           return callSavedMedia(send,name,args,browserOrigin);
@@ -74,7 +83,21 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
             body:JSON.stringify({prompt_id:args.prompt_id}),signal:AbortSignal.timeout(30_000)});
           if (r.status===409) return rejected(r);
           if (!r.ok && r.status!==404) return failure(name+" failed ("+r.status+"); check this prompt_id.");
-          return {isError:!r.ok,content:[{type:"text",text:JSON.stringify(await r.json())}]};
+          const progress=await r.json<Record<string,unknown>>();
+          if(delivery && name==="get_job_progress" && r.ok && progress.status==="completed") {
+            try {
+              const offset=z.number().int().min(0).parse(args.outputs_offset ?? 0),source=mediaSend || send;
+              const outputs=mediaSend ? await mediaSend(`/outputs/${args.prompt_id}?offset=${offset}&limit=4`,{method:"GET",signal:AbortSignal.timeout(50_000)}) :
+                await send("/_remote_mcp/operations",{method:"POST",headers:{"X-Split-Remote-Tool":"1","Content-Type":"application/json"},
+                  body:JSON.stringify({name:"list_outputs",arguments:{prompt_id:args.prompt_id,offset,limit:4}}),signal:AbortSignal.timeout(50_000)});
+              if(!outputs.ok) {await outputs.body?.cancel();throw new Error("Missing outputs");}
+              const bytes=await readAtMost(outputs,1024*1024);
+              if(!bytes) throw new Error("Oversized outputs");
+              const page=await deliveryOutputs(delivery,source,JSON.parse(new TextDecoder().decode(bytes)),true,browserOrigin!);
+              Object.assign(progress,{outputs:page.items,outputs_next_offset:page.next_offset});
+            } catch {Object.assign(progress,{delivery_status:"unavailable",delivery_reason:"output_delivery_unavailable"});}
+          }
+          return {isError:!r.ok,...(delivery && name==="get_job_progress" && r.ok ? {structuredContent:progress} : {}),content:[{type:"text",text:JSON.stringify(progress)}]};
         }
         if (name === "get_workflow" && !libraryRequest(args)) return failure("Invalid workflow operation or library filename.");
         if (Object.hasOwn(production,name) || Object.hasOwn(adminTools,name)) {
@@ -82,7 +105,9 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
             body:JSON.stringify({name,arguments:args}),signal:AbortSignal.timeout(55_000)});
           const bytes=await readAtMost(r,8*1024*1024);
           if(!bytes) return failure("Response too large; narrow the request.");
-          const result=JSON.parse(new TextDecoder().decode(bytes));
+          let result=JSON.parse(new TextDecoder().decode(bytes));
+          if(delivery && name==="list_outputs" && r.ok)
+            result=await deliveryOutputs(delivery,send,result,false,browserOrigin!);
           return {isError:!r.ok || (Object.hasOwn(adminTools,name) && ["failed","unknown"].includes(result?.status)),content:[{type:"text",text:JSON.stringify(result)}]};
         }
         if (name === "get_video" || name === "get_audio" || name === "read_audio_part" || name === "read_video_part") {
@@ -133,7 +158,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
   }
 }
 
-export async function remoteMcp(request:Request,send:Send, browserOrigin:string, blobHosts?:string, mediaSend?:Send) {
+export async function remoteMcp(request:Request,send:Send, browserOrigin:string, blobHosts?:string, mediaSend?:Send, delivery?:MediaDelivery) {
   const u = new URL(request.url);
   if (request.headers.has("Origin") && request.headers.get("Origin") !== u.origin)
     return new Response("Invalid origin",{status:403});
@@ -141,8 +166,12 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   if (request.method !== "POST") return new Response(null,{status:405,headers:{Allow:"POST"}});
   const server = new McpServer({name:"comfyui-split",version:"1.0.0"});
   const call=(name:string,args:Record<string,unknown>,origin?:string,hosts?:string)=>
-    callSplit(send,name,args,origin || browserOrigin,hosts,mediaSend);
+    callSplit(send,name,args,origin || browserOrigin,hosts,mediaSend,delivery);
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
+  const deliveryRead=delivery ? {...read,readOnlyHint:false,idempotentHint:true,openWorldHint:true} : read;
+  const deliveryNote=delivery ? " Prepares a private external delivery copy on demand. Forward delivery_ref unchanged when reading subsequent parts." : "";
+  const deliveryInput: z.ZodRawShape=delivery ? {delivery_ref:deliveryRefSchema.optional()} : {};
+  const deliveryFields: z.ZodRawShape=delivery ? deliveryOutput : {};
   server.registerTool("calculate",{description:"Calculate dimensions, seeds or a batch of numeric expressions.",annotations:read,
     inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>call("calculate",a));
   server.registerTool("search_custom_nodes",{description:"Find a node pack in the public Comfy Registry or read its release details. Does not install it.",annotations:{...read,openWorldHint:true},
@@ -152,15 +181,15 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     inputSchema:{filename,workflow:graph}},a=>call("save_workflow",{...a,action:"save"}));
   server.registerTool("visualize_workflow",{description:"Use render to turn workflow JSON into Mermaid; mermaid parses flowchart text back to JSON. Also converts workflow DSL. Does not generate.",annotations:read,inputSchema:{action:z.enum(["render","render_hierarchical","mermaid","to_dsl","from_dsl"]),workflow:graph.optional(),mermaid:z.string().optional(),dsl:z.string().optional(),show_values:z.boolean().optional(),direction:z.enum(["LR","TB"]).optional(),view:z.enum(["overview","detail","list","summary"]).optional(),section:z.string().optional()}},a=>call("visualize_workflow",a));
   for(const [name,tool] of Object.entries({...production,...adminTools})) {
-    server.registerTool(name,{description:tool.description,annotations:{readOnlyHint:!tool.write,destructiveHint:tool.write && name!=="reuse_output",openWorldHint:name==="add_model" || name==="change_node"},
+    server.registerTool(name,{description:tool.description+(delivery && name==="list_outputs" ? " Adds existing delivery copies only, without transferring files. Pages are capped at 32 outputs; follow next_offset." : ""),annotations:{readOnlyHint:!tool.write,destructiveHint:tool.write && name!=="reuse_output",openWorldHint:name==="add_model" || name==="change_node" || !!delivery && name==="list_outputs"},
       inputSchema:tool.inputs},(a:Record<string,unknown>)=>call(name,a));
   }
   server.registerTool("upload_media",{description:"Save an attached image, audio file or video (up to 256 MiB) to split inputs. Returns the loader filename. CLI clients use resumable parts; never pass local paths.",
     annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:true},
     _meta:{"openai/fileParams":["file"]},inputSchema:uploadInputs},a=>call("upload_media",a,undefined,blobHosts));
   server.registerTool("list_models",{description:"List saved model categories or files with sizes and modification times, without starting ComfyUI. Storage files are not guaranteed to be recognized by ComfyUI. Use source:runtime to check its actual registered models. Supports paging and substring search.",annotations:read,inputSchema:modelInputs}, a=>call("list_models",a));
-  server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, selected CPU/GPU and reason, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe.",annotations:read,
-    inputSchema:{prompt_id:z.uuid()}}, a=>call("get_job_progress",a));
+  server.registerTool("get_job_progress",{description:"Inspect one split prompt_id: status, selected CPU/GPU and reason, current node and reported units (value/max), wall and execution time, and failure details. Unreported values are null. Does not start a job or subscribe."+(delivery ? " When completed, prepares at most four outputs. Follow outputs_next_offset with outputs_offset in the same request; retry pending delivery without resubmitting the job." : ""),annotations:deliveryRead,
+    inputSchema:{prompt_id:z.uuid(),...(delivery ? {outputs_offset:z.number().int().nonnegative().optional()} : {})}}, a=>call("get_job_progress",a));
   server.registerTool("cancel_job",{description:"Cancel exactly one queued or running split prompt_id. cancel_requested means interruption is pending; check queue status. Finished outputs are retained.",
     annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:false},
     inputSchema:{prompt_id:z.uuid()}},a=>call("cancel_job",a));
@@ -177,53 +206,55 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   server.registerTool("get_history",{description:"Read saved job history, output filenames, errors and timing without starting ComfyUI. diagnose prefers a failed job in the recent history window. Saved records are not live progress; use get_job_progress for that.",annotations:read,
     inputSchema:{action:z.enum(["list","diagnose"]),prompt_id:z.string().optional(),limit:z.number().int().min(1).max(100).optional()}},
     a=>call("get_history",a));
-  server.registerResource("image-viewer",IMAGE_VIEWER_URI,{mimeType:PLAYER_MIME},async()=>({
-    contents:[{uri:IMAGE_VIEWER_URI,mimeType:PLAYER_MIME,text:imageViewerHtml}],
+  for(const [i,uri] of [IMAGE_VIEWER_URI,PREVIOUS_IMAGE_VIEWER_URI].entries())
+  server.registerResource("image-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
+    contents:[{uri,mimeType:PLAYER_MIME,text:imageViewerFor(delivery?.origin)}],
   }));
   server.registerTool("get_image",{title:"View a generated image",
-    description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate.",annotations:read,
+    description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate."+deliveryNote,annotations:deliveryRead,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
-    inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
-  server.registerResource("3d-viewer",THREE_VIEWER_URI,{mimeType:PLAYER_MIME},async()=>({
-    contents:[{uri:THREE_VIEWER_URI,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin),_meta:{
+    inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:{...imageOutput,...deliveryFields}},a=>call("get_image",a));
+  for(const [i,uri] of [THREE_VIEWER_URI,PREVIOUS_THREE_VIEWER_URI].entries())
+  server.registerResource("3d-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
+    contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.origin),_meta:{
       ui:{csp:{connectDomains:["blob:","data:"],resourceDomains:["blob:","data:"]}},
       "openai/widgetCSP":{connect_domains:["blob:","data:"],resource_domains:["blob:","data:"]},
     }}],
   }));
   server.registerTool("get_3d",{title:"View a saved 3D model",
-    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering or opening/saving is requested, give the signed-in browser viewer link. Files over 128 MiB cannot be previewed in chat or browser; direct the user to sign in and save the original file from the browser page. Does not generate. Tool success alone does not confirm that the model is displayed.",
-    annotations:read,inputSchema:threeInputs,outputSchema:threeOutput,
+    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering or opening/saving is requested, give the signed-in browser viewer link. Files over 128 MiB cannot be previewed in chat or browser; direct the user to sign in and save the original file from the browser page. Does not generate. Tool success alone does not confirm that the model is displayed."+deliveryNote,
+    annotations:deliveryRead,inputSchema:threeInputs,outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{resourceUri:THREE_VIEWER_URI},"openai/outputTemplate":THREE_VIEWER_URI,"openai/widgetAccessible":true}},
     a=>call("get_3d",a,browserOrigin));
   server.registerTool("read_3d_part",{description:"Read the next bounded private chunk for the 3D viewer.",
-    annotations:read,inputSchema:threePartInputs,outputSchema:threeOutput,
+    annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
     a=>call("read_3d_part",a,browserOrigin));
   const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},
     "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())
     server.registerResource(i===0?"video-player":"previous-video-player-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin),_meta:videoCsp}],
+      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.origin),_meta:videoCsp}],
     }));
   server.registerTool("get_video",{title:"Show the video player",
-    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. Up to 128 MiB, the player uses private MCP reads without a separate website login. Larger or range-unsupported files use the authenticated website stream. Prefer the player; opening the link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. Up to 128 MiB, the player uses private MCP reads without a separate website login. Larger or range-unsupported files use the authenticated website stream. Prefer the player; opening the link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate."+deliveryNote,
     _meta:{ui:{resourceUri:PLAYER_URI}, "openai/outputTemplate":PLAYER_URI,"openai/widgetAccessible":true},
-    annotations:read,inputSchema:videoInputs,outputSchema:videoOutput}, a=>call("get_video",a,browserOrigin));
+    annotations:deliveryRead,inputSchema:{...videoInputs,...deliveryInput},outputSchema:{...videoOutput,...deliveryFields}}, a=>call("get_video",a,browserOrigin));
   server.registerTool("read_video_part",{description:"Read the next verified chunk for the video player.",
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
-    annotations:read,inputSchema:videoPartInputs,outputSchema:videoOutput}, a=>call("read_video_part",a,browserOrigin));
+    annotations:read,inputSchema:{...videoPartInputs,...deliveryInput},outputSchema:{...videoOutput,...deliveryFields}}, a=>call("read_video_part",a,browserOrigin));
   server.registerTool("get_audio",{title:"Retrieve generated audio",
-    description:"Play saved audio in chat using private MCP reads, without a separate website login. Call with only prompt_id and optional index. Prefer the inline player; include the website link only if playback is unavailable or the user asks to open or save the file. Playback limits: 64 MiB source, 10 minutes, 128 MiB decoded audio; files over 4 MiB need the player's load button. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate.",
+    description:"Play saved audio in chat using private MCP reads, without a separate website login. Call with only prompt_id and optional index. Prefer the inline player; include the website link only if playback is unavailable or the user asks to open or save the file. Playback limits: 64 MiB source, 10 minutes, 128 MiB decoded audio; files over 4 MiB need the player's load button. For a binary download in a non-UI client, explicitly set byte_offset:0 and follow next_offset. Does not generate."+deliveryNote,
     _meta:{ui:{resourceUri:AUDIO_PLAYER_URI}, "openai/outputTemplate":AUDIO_PLAYER_URI,"openai/widgetAccessible":true},
-    annotations:read,inputSchema:audioInputs,outputSchema:audioOutput}, a=>call("get_audio",a,browserOrigin));
+    annotations:deliveryRead,inputSchema:{...audioInputs,...deliveryInput},outputSchema:{...audioOutput,...deliveryFields}}, a=>call("get_audio",a,browserOrigin));
   // Clients with cached descriptors can still read the current player at their old URI.
   for (const [index,uri] of [AUDIO_PLAYER_URI,...PREVIOUS_AUDIO_PLAYER_URIS].entries())
     server.registerResource(index===0?"audio-player":"previous-audio-player-"+index,uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerHtml}],
+      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerFor(delivery?.origin)}],
     }));
   server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},
-    annotations:read,inputSchema:audioPartInputs,outputSchema:audioOutput}, a=>call("read_audio_part",a,browserOrigin));
+    annotations:read,inputSchema:{...audioPartInputs,...deliveryInput},outputSchema:{...audioOutput,...deliveryFields}}, a=>call("read_audio_part",a,browserOrigin));
   const transport = new WebStandardStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
   await server.connect(transport);
   try { return await transport.handleRequest(request); } finally { await server.close(); }
