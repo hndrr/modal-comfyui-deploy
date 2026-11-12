@@ -1,4 +1,5 @@
 import {threeViewerScript} from "./generated/three-viewer.ts";
+const inlineScript = threeViewerScript.replaceAll("</script", "<\\/script");
 
 export const THREE_VIEWER_URI = "ui://split/3d-viewer-v1.html";
 export function threeViewerHtml(origin: string, file?: {filename: string; subfolder: string}): string {
@@ -17,5 +18,5 @@ body[data-browser]{padding:clamp(12px,3vw,40px)}body[data-browser] #viewport{hei
 </style><body${file ? " data-browser" : ""}><main><header><h1 id="name">3Dモデル</h1><button id="reset" disabled>視点をリセット</button></header>
 <div id="viewport" data-state="empty"></div><footer><span id="status" role="status" aria-live="polite">3Dモデルを読み込み中…</span>
 <button id="retry" hidden>再取得</button><a id="save" hidden>元のファイルを保存</a><a id="open" hidden target="_blank" rel="noopener noreferrer">ブラウザで開く</a></footer></main>
-<script>window.split3D=${config};</script><script>${threeViewerScript.replaceAll("</script", "<\\/script")}</script></body></html>`;
+<script>window.split3D=${config};</script><script>${inlineScript}</script></body></html>`;
 }

@@ -48,7 +48,7 @@ Workerは拡張子で経路を選ぶ。これ以外の出力も従来のComfyUI�
 
 通常保存されたGLB/SPZは `list_outputs` に `kind: "3d"` として含め、`get_3d(filename, subfolder?)` で形式・MIME・サイズ・閲覧URLとビューアーを返す。MIMEはGLBが `model/gltf-binary`、SPZが `application/octet-stream`。`inspect_media` はファイル名・種類・形式・サイズだけを返し、ffprobeを使わない。3Dのアップロード・再利用や `list_inputs` の対象拡張は行わない。
 
-GLBのPBR描画はThree.js 0.180.0、SPZ Gaussian splatの描画はSpark 2.4.0を使う。Workerビルド時に描画コード・デコーダーを同梱し、重みの取得や推論環境の設定を必要としない。MCPではアプリ専用の `read_3d_part` が最大512 KiBずつ読み、バイト列は `_meta["split/3dPart"]` だけに格納する。最初のETagを全プローブ・チャンクのIf-Rangeに引き継ぎ、同サイズの差し替えも中断する。ETagが取得できない場合はブラウザ用リンクを返す。チャット内表示の上限は128 MiBで、Accessのブラウザ用URLへ直接fetchしない。ホストのCSP・WebGL等の制約やツール取得の非対応時は、ブラウザ認証付きの閲覧・保存リンクを案内する。ブラウザも128 MiBで読み込みを打ち切り、超過時は元ファイルの保存リンクを残す。
+GLBのPBR描画はThree.js 0.180.0、SPZ Gaussian splatの描画はSpark 2.4.0を使う。Workerビルド時に描画コード・デコーダーを同梱し、重みの取得や推論環境の設定を必要としない。MCPではアプリ専用の `read_3d_part` が最大512 KiBずつ読み、バイト列は `_meta["split/3dPart"]` だけに格納する。最初のETagを全チャンクのIf-Rangeに引き継ぎ、同サイズの差し替えも中断する。メタデータは1バイトのRange応答から取得し、各チャンクでの再プローブやヘッダーの再検査は行わない。ファイル内容は描画時に検証する。ETagが取得できない場合はブラウザ用リンクを返す。チャット内表示の上限は128 MiBで、Accessのブラウザ用URLへ直接fetchしない。ホストのCSP・WebGL等の制約やツール取得の非対応時は、ブラウザ認証付きの閲覧・保存リンクを案内する。ブラウザも128 MiBで読み込みを打ち切り、超過時は元ファイルの保存リンクを残す。
 
 ブラウザから通常のページ遷移で `/view?type=output&filename=…&subfolder=…` を開くと、Workerが認証後に3DビューアーHTMLを返す。`/api/view` は原本バイトを返し、GET / HEAD / Rangeの意味を維持する。MCPツールの成功だけで実クライアントの描画成功とは判断しない。
 

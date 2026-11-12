@@ -12,7 +12,7 @@ const compiled=await build({entryPoints:[new URL("../viewer/app.ts",import.meta.
   format:"iife",platform:"browser",plugins:[{name:"renderer-stub",setup(b){
     b.onResolve({filter:/\.\/render\.ts$/},()=>({path:"renderer",namespace:"stub"}));
     b.onLoad({filter:/.*/,namespace:"stub"},()=>({contents:`export function createViewer(){return {
-      async load(bytes,format){onDraw(bytes,format)},reset(){},dispose(){onDispose()}}}`,loader:"js"}));
+      async load(bytes,format){await onDraw(bytes,format)},reset(){},dispose(){onDispose()}}}`,loader:"js"}));
   }}]});
 function app(info,{chunk,draw,browser=false,legacy=true,fetch:fetcher}={}){
   const handlers={},calls=[],messages=[],drawn=[],elements=Object.fromEntries(
@@ -26,12 +26,38 @@ function app(info,{chunk,draw,browser=false,legacy=true,fetch:fetcher}={}){
   runInNewContext(compiled.outputFiles[0].text,{window:win,parent,document:{querySelector:id=>elements[id],body:{scrollHeight:400}},
     addEventListener:(name,fn)=>handlers[name]=fn,ResizeObserver:class{observe(){}},URL,URLSearchParams,Blob,Uint8Array,atob,
     AbortController,setTimeout,clearTimeout,fetch:fetcher || (()=>{throw Error("Inline viewer must not fetch Access URLs");}),
-    onDraw:(bytes,format)=>{draw?.();drawn.push({bytes:Buffer.from(bytes),format});},onDispose:()=>disposed++});
+    onDraw:async(bytes,format)=>{await draw?.();drawn.push({bytes:Buffer.from(bytes),format});},onDispose:()=>disposed++});
   const render=value=>handlers["openai:set_globals"]({detail:{globals:{toolOutput:value}}});
   if(!browser)render(info);
   return {handlers,calls,messages,elements,drawn,parent,render,disposed:()=>disposed};
 }
 const settle=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r));};
+
+test("slow decoding is not timed out and save bytes are copied only on demand",async(t)=>{
+  t.mock.timers.enable({apis:["setTimeout"]});
+  let finish;
+  const decoding=new Promise(resolve=>finish=resolve);
+  const info={filename:"mesh.glb",subfolder:"",format:"glb",size:10,delivery:"viewer",etag:'"version"',url:origin+"/view?filename=mesh.glb"};
+  const view=app(info,{chunk:()=>({structuredContent:{...info,byte_offset:0,byte_length:10,next_offset:null},
+    _meta:{"split/3dPart":Buffer.alloc(10).toString("base64")}}),draw:()=>decoding});
+  await settle();t.mock.timers.tick(60_000);await settle();
+  assert.equal(view.disposed(),0);assert.equal(view.elements["#viewport"].dataset.state,"loading");
+  assert.equal(view.elements["#save"].href,info.url);
+  finish();await settle();assert.equal(view.elements["#viewport"].dataset.state,"ready");
+  view.elements["#save"].onclick();assert.match(view.elements["#save"].href,/^blob:/);
+  view.handlers.message({source:view.parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:2,method:"ui/resource-teardown"}});
+});
+
+test("a host teardown sharing a pending tool id is handled as a request",async()=>{
+  const view=app(undefined,{legacy:false});
+  view.handlers.message({source:view.parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:1,result:{hostCapabilities:{serverTools:{}}}}});
+  view.render({filename:"mesh.glb",subfolder:"",format:"glb",size:10,delivery:"viewer",etag:'"version"',url:origin+"/view?filename=mesh.glb"});
+  const request=view.messages.find(x=>x.method==="tools/call");assert.ok(request);
+  view.handlers.message({source:view.parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:request.id,method:"ui/resource-teardown"}});
+  await settle();
+  assert.ok(view.messages.some(x=>x.id===request.id && "result" in x));
+  assert.equal(view.elements["#viewport"].dataset.state,"empty");assert.equal(view.drawn.length,0);
+});
 
 test("private parts are assembled without browser authentication, repeats do not reload, teardown disposes",async()=>{
   const bytes=Buffer.alloc(THREE_PART_BYTES+17,0x61);
@@ -48,6 +74,8 @@ test("private parts are assembled without browser authentication, repeats do not
   assert.equal(view.elements["#reset"].disabled,false);
   assert.equal(view.calls.length,2);assert.ok(view.calls.every(x=>x.name==="read_3d_part"));
   assert.ok(view.calls.every(x=>x.args.etag===info.etag));
+  assert.equal(view.elements["#save"].href,info.url);
+  view.elements["#save"].onclick();
   assert.match(view.elements["#save"].href,/^blob:/);
   view.render(info);await settle();assert.equal(view.calls.length,2);
   view.render({...info,etag:'"replacement"'});await settle();
@@ -107,6 +135,14 @@ test("browser reads are bounded even without a truthful Content-Length and keep 
 });
 
 test("GLB loader rejects external dependencies before any loader requests can run",()=>{
+  for(const dataUris of [false,true]){
+    const bytes=texturedGLB({dataUris});
+    assert.doesNotThrow(()=>checkGLB(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)));
+    for(const offset of [0,4,8]){
+      const corrupt=Buffer.from(bytes);corrupt.writeUInt32LE(0,offset);
+      assert.throws(()=>checkGLB(corrupt.buffer.slice(corrupt.byteOffset,corrupt.byteOffset+corrupt.byteLength)),/GLB/);
+    }
+  }
   const original=texturedGLB();
   assert.doesNotThrow(()=>checkGLB(original.buffer.slice(original.byteOffset,original.byteOffset+original.byteLength)));
   for(const uri of ["https://elsewhere.example/texture.png","../texture.png","//elsewhere.example/model.bin"]){
@@ -130,7 +166,7 @@ test("an initial retrieval error tells the user to rerun the tool without a dead
   assert.equal(view.calls.length,0);
 });
 
-test("get_3d and private reads use only the media CPU, including real fixture headers",async()=>{
+test("get_3d and private reads bypass startup with either CPU route",async()=>{
   for(const [filename,bytes] of [["sample.glb",texturedGLB()],["sample.spz",gaussianSPZ()]]){
     const hits=[];
     const send=async(path,init)=>{
@@ -145,10 +181,10 @@ test("get_3d and private reads use only the media CPU, including real fixture he
     const part=await callSplit(split,"read_3d_part",{filename,byte_offset:0},origin,undefined,send);
     assert.deepEqual(Buffer.from(part._meta["split/3dPart"],"base64"),bytes);
     assert.ok(hits.every(x=>x.startsWith("/view?")));
-    const legacy=[];
-    const read=await callSplit(async(path,init)=>{legacy.push(path);return path==="/split/startup"?
-      Response.json({ready:true}):send(path,init);},"get_3d",{filename},origin);
-    assert.equal(read.isError,undefined);assert.equal(legacy[0],"/split/startup");
+    assert.equal(hits.length,2);
+    const read=await callSplit(send,"get_3d",{filename},origin);
+    assert.equal(read.isError,undefined);assert.equal(hits.length,3);
+    assert.ok(hits.every(x=>x.startsWith("/view?")));
     const absent=await get3D(async()=>new Response(null,{status:404}),origin,{filename});
     assert.equal(absent.isError,true);
   }

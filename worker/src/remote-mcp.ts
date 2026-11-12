@@ -15,7 +15,7 @@ import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
 import { IMAGE_VIEWER_URI, imageViewerHtml } from "./image-viewer.ts";
 import {THREE_VIEWER_URI, threeViewerHtml} from "./three-viewer.ts";
-import {get3D, threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
+import {threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerHtml } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema } from "./media.ts";
 
@@ -41,6 +41,10 @@ async function rejected(response: Response): Promise<CallToolResult> {
 
 // Only a tool invocation may call send(). No polling survives this invocation.
 export async function callSplit(send:Send, name:string, args:Record<string,unknown>, browserOrigin?:string, blobHosts?:string, mediaSend?:Send): Promise<CallToolResult> {
+  if (name === "get_3d" || name === "read_3d_part") {
+    if (!browserOrigin) return failure("Missing split browser origin.");
+    return callSavedMedia(mediaSend || send,name,args,browserOrigin);
+  }
   if (mediaSend && savedCatalogRequest(name,args)) {
     const result=await callSavedCatalog(mediaSend,name,args);
     if(result!==null)return result;
@@ -59,10 +63,6 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
-        if (name === "get_3d" || name === "read_3d_part") {
-          if (!browserOrigin) return failure("Missing split browser origin.");
-          return get3D(send,browserOrigin,args,name === "read_3d_part");
-        }
         if (name === "get_image") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           return callSavedMedia(send,name,args,browserOrigin);
@@ -186,8 +186,8 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:imageOutput},a=>call("get_image",a));
   server.registerResource("3d-viewer",THREE_VIEWER_URI,{mimeType:PLAYER_MIME},async()=>({
     contents:[{uri:THREE_VIEWER_URI,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin),_meta:{
-      ui:{csp:{connectDomains:["blob:"],resourceDomains:["blob:","data:"]}},
-      "openai/widgetCSP":{connect_domains:["blob:"],resource_domains:["blob:","data:"]},
+      ui:{csp:{connectDomains:["blob:","data:"],resourceDomains:["blob:","data:"]}},
+      "openai/widgetCSP":{connect_domains:["blob:","data:"],resource_domains:["blob:","data:"]},
     }}],
   }));
   server.registerTool("get_3d",{title:"View a saved 3D model",

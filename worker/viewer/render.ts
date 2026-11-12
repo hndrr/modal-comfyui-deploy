@@ -75,8 +75,14 @@ export function createViewer(container: HTMLElement, onError: (error: unknown) =
   resize.observe(container);
   controls.addEventListener("change", draw);
   renderer.domElement.addEventListener("webglcontextlost", event => {
-    event.preventDefault(); onError(Error("3D描画が中断されました。再取得してください。"));
+    event.preventDefault();
+    if (!disposed) onError(Error("3D描画が中断されました。再取得してください。"));
   });
+  const blockedWorker = (event: SecurityPolicyViolationEvent) => {
+    if (!disposed && event.effectiveDirective === "worker-src")
+      onError(Error("この環境ではSPZの描画用Workerを起動できません。"));
+  };
+  document.addEventListener("securitypolicyviolation", blockedWorker);
 
   function disposeObject(object: THREE.Object3D) {
     const textures = new Set<THREE.Texture>();
@@ -129,7 +135,7 @@ export function createViewer(container: HTMLElement, onError: (error: unknown) =
         await splats.initialized;
         if (disposed) return;
         splats.updateMatrixWorld(true);
-        bounds.copy(splats.getBoundingBox()).applyMatrix4(splats.matrixWorld);
+        bounds.copy(splats.getBoundingBox(false)).applyMatrix4(splats.matrixWorld);
       }
       if (bounds.isEmpty() || !Number.isFinite(bounds.min.length() + bounds.max.length()))
         throw Error("表示できる3Dデータがありません。");
@@ -139,9 +145,10 @@ export function createViewer(container: HTMLElement, onError: (error: unknown) =
       if (disposed) return;
       disposed = true;
       cancelAnimationFrame(frame); resize.disconnect(); controls.dispose();
+      document.removeEventListener("securitypolicyviolation", blockedWorker);
       splats?.dispose(); spark?.dispose();
       if (model) disposeObject(model);
-      environment?.dispose(); renderer.dispose(); renderer.domElement.remove();
+      environment?.dispose(); renderer.dispose(); renderer.forceContextLoss(); renderer.domElement.remove();
     },
   };
 }

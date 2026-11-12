@@ -4,6 +4,10 @@
   "main": "src/index.ts",
   "compatibility_flags": ["nodejs_compat"],
   "compatibility_date": "2026-08-01",
+  "build": {
+    "command": "npm run build:viewer",
+    "watch_dir": ["viewer", "scripts/build-viewer.mjs", "src/bounded-response.ts"]
+  },
 
   // カスタムドメイン以外の入口を塞ぐ。外すと Cloudflare Access を迂回できる経路が復活する。
   // docs/design/cloudflare-access.md「迂回経路を塞ぐ」を参照。

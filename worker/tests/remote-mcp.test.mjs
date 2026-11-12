@@ -48,6 +48,7 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   const threeResource=await (await request(jwt,"resources/read",{uri:three._meta.ui.resourceUri})).json();
   assert.match(threeResource.result.contents[0].text,/id="viewport"/);
   assert.ok(!threeResource.result.contents[0]._meta.ui.csp.connectDomains.includes("https://"+split));
+  assert.deepEqual(threeResource.result.contents[0]._meta.ui.csp.connectDomains,["blob:","data:"]);
   assert.deepEqual(video.outputSchema.required.sort(),["delivery","index","prompt_id"]);
   const videoPart=list.result.tools.find(t=>t.name==="read_video_part");
   assert.deepEqual(videoPart._meta.ui.visibility,["app"]);

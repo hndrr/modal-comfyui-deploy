@@ -43,6 +43,7 @@ test("3D documents embed the renderer; API, Range and temporary requests remain 
     assert.match(html,/ブラウザで開く/);
     assert.ok(html.includes('"filename":"model.'+ext+'"'));
     assert.match(response.headers.get("Content-Security-Policy"),/worker-src blob:/);
+    assert.match(response.headers.get("Content-Security-Policy"),/connect-src 'self' blob: data:/);
     assert.match(response.headers.get("Content-Security-Policy"),/frame-ancestors 'none'/);
     for(const [path,headers] of [["/api"+url,navigation],[url,{}],[url,{...navigation,Range:"bytes=0-"}],
       [url.replace("output","temp"),navigation],[url.replace("3d/ComfyUI",".split-temp/run"),navigation]])

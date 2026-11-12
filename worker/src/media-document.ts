@@ -15,7 +15,7 @@ export function mediaDocument(request:Request):Response|null {
     return new Response(threeViewerHtml(url.origin,{filename:file,subfolder:folder}),{headers:{
       "Content-Type":"text/html; charset=utf-8","Cache-Control":"private, no-store",
       "Vary":"Sec-Fetch-Dest, Sec-Fetch-Mode, Range",
-      "Content-Security-Policy":"default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:; connect-src 'self' blob:; img-src blob: data:; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      "Content-Security-Policy":"default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:; connect-src 'self' blob: data:; img-src blob: data:; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
       "X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer",
     }});
   }
