@@ -44,8 +44,8 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
     return original();
   }
   if(args.delivery_ref===undefined) {
+    if(part) return original(); // Legacy players use the original route for every part.
     if((Number(args.byte_offset) || 0)>0) return failure(new DeliveryError("delivery_reference_required"));
-    if(part) return original(); // Legacy/starting widgets choose their route at offset zero.
   }
   let file:OutputFile, ref:DeliveryRef, count:number|undefined;
   let prompt_id:string|undefined, index:number|undefined;

@@ -16,7 +16,7 @@ import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
 import { IMAGE_VIEWER_URI, PREVIOUS_IMAGE_VIEWER_URI, imageViewerFor } from "./image-viewer.ts";
-import {THREE_VIEWER_URI, PREVIOUS_THREE_VIEWER_URI, threeViewerHtml} from "./three-viewer.ts";
+import {THREE_VIEWER_URI, PREVIOUS_THREE_VIEWER_URIS, threeViewerHtml} from "./three-viewer.ts";
 import {threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerFor } from "./audio-player.ts";
 import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema } from "./media.ts";
@@ -215,7 +215,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate."+deliveryNote,annotations:deliveryRead,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:{...imageOutput,...deliveryFields}},a=>call("get_image",a));
-  for(const [i,uri] of [THREE_VIEWER_URI,"ui://split/3d-viewer-v2.html",PREVIOUS_THREE_VIEWER_URI].entries())
+  for(const [i,uri] of [THREE_VIEWER_URI,...PREVIOUS_THREE_VIEWER_URIS].entries())
   server.registerResource("3d-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
     contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.origin),_meta:{
       ui:{csp:{connectDomains:["blob:","data:"],resourceDomains:["blob:","data:"]}},
