@@ -234,7 +234,7 @@ test("unbounded and oversized upstream bodies are cancelled within the read budg
 });
 
 test("deletion, HTTP failures, redirects and transport errors never submit generation or expose error bodies", async () => {
-  for (const status of [404, 410, 416, 302, 403, 500]) {
+  for (const status of [404, 410, 416, 302, 403, 500, 503]) {
     for (const part of [false, true]) {
       let cancelled = false;
       const {send, calls} = upstream((range, call) => {
@@ -244,6 +244,7 @@ test("deletion, HTTP failures, redirects and transport errors never submit gener
       failed(result, status === 416 ? /outside/ : new RegExp(`HTTP ${status}`));
       assert.equal(cancelled, true); assert.equal(calls.length, 1);
       if ([404, 410].includes(status)) assert.match(result.content[0].text, /No generation was submitted/);
+      if (status === 503) assert.match(result.content[0].text, /temporarily unavailable.*Retry the read.*no generation was submitted/);
     }
   }
   for (const serve of [() => { throw Error("private upstream credential"); },

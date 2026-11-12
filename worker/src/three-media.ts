@@ -47,6 +47,7 @@ async function readRange(send:Send, path:string, offset:number, length:number, i
     error = response.status === 404 || response.status === 410 ?
       `Saved 3D file is missing or deleted (HTTP ${response.status}). No generation was submitted.` :
       response.status === 416 ? "Byte offset is outside the saved 3D file." :
+      response.status === 503 ? "Saved 3D delivery is temporarily unavailable (HTTP 503). Retry the read shortly; no generation was submitted." :
       `Cannot read saved 3D file (HTTP ${response.status}).`;
   } else if (ifRange && (response.status !== 206 || etag !== ifRange)) {
     error = "Saved 3D file version changed or its range could not be verified. Retry get_3d; no generation was submitted.";
@@ -94,11 +95,11 @@ export async function get3D(send:Send, origin:string, args:Record<string,unknown
   const metadata = {filename, subfolder, format, mimeType:format === "glb" ? "model/gltf-binary" : "application/octet-stream",
     size, url, ...(etag ? {etag} : {})};
   if (!part) return {structuredContent:{...metadata, delivery:etag && size <= THREE_INLINE_LIMIT ? "viewer" : "link"},
-    content:[{type:"text",text:!etag ?
-      filename + " has no verifiable file version. Open or save it after website login: " + url : size <= THREE_INLINE_LIMIT ?
+    content:[{type:"text",text:size > THREE_INLINE_LIMIT ?
+      filename + " exceeds the 128 MiB preview limit in both chat and browser. Sign in and save the original file from this page: " + url : !etag ?
+      filename + " has no verifiable file version. Open or save it after website login: " + url :
       filename + " — use the 3D viewer. Retrieval alone does not confirm the viewer is visible. " +
-        "Open or save this file after website login: " + url :
-      filename + " exceeds the 128 MiB viewer limit. Open or save it after website login: " + url}]};
+        "Open or save this file after website login: " + url}]};
   if (!etag) return failure("Saved 3D file has no verifiable ETag. Use the signed-in browser link.");
   const next = offset + bytes.length;
   return {structuredContent:{...metadata, delivery:"chunk", byte_offset:offset,

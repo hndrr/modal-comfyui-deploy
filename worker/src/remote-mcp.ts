@@ -191,7 +191,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     }}],
   }));
   server.registerTool("get_3d",{title:"View a saved 3D model",
-    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering, the file is too large, or opening/saving is requested, give the signed-in browser viewer link. Does not generate. Tool success alone does not confirm that the model is displayed.",
+    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering or opening/saving is requested, give the signed-in browser viewer link. Files over 128 MiB cannot be previewed in chat or browser; direct the user to sign in and save the original file from the browser page. Does not generate. Tool success alone does not confirm that the model is displayed.",
     annotations:read,inputSchema:threeInputs,outputSchema:threeOutput,
     _meta:{ui:{resourceUri:THREE_VIEWER_URI},"openai/outputTemplate":THREE_VIEWER_URI,"openai/widgetAccessible":true}},
     a=>call("get_3d",a,browserOrigin));
