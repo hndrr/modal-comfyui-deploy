@@ -1,11 +1,13 @@
 // Display tool-result bytes locally; the iframe never fetches an Access-protected image.
-export const IMAGE_VIEWER_URI = "ui://split/image-viewer-v1.html";
+export const IMAGE_VIEWER_URI = "ui://split/image-viewer-v2.html";
+export const PREVIOUS_IMAGE_VIEWER_URI = "ui://split/image-viewer-v1.html";
 export const imageViewerHtml = `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した画像</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 img{display:block;max-width:100%;max-height:720px;margin:auto;object-fit:contain}img[hidden]{display:none}
 footer{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.5rem 0;overflow-wrap:anywhere}a{color:LinkText}</style>
 <img hidden alt="生成した画像"><footer><span role="status">画像を読み込み中…</span><a hidden target="_blank" rel="noopener noreferrer">画像を開く・保存する</a></footer>
 <script>
+const deliveryOrigin=null;
 const image=document.querySelector("img"),label=document.querySelector("span"),link=document.querySelector("a");
 let peer="*",ready=false,openLinks=false,rpcId=2;
 function send(message){parent.postMessage({jsonrpc:"2.0",...message},peer);}
@@ -17,7 +19,7 @@ function render(result){
   if(!info || typeof info.filename!=="string"){label.textContent="画像情報を読み込めませんでした。";return;}
   try{
     const url=new URL(info.url);
-    if(url.protocol==="https:" && url.pathname==="/view"){link.href=url.href;link.hidden=false;}
+    if(!url.username && !url.password && (url.protocol==="https:" && url.pathname==="/view" || (url.origin===deliveryOrigin && /^\\/media\\/[a-f0-9-]{36}$/.test(url.pathname)))){link.href=url.href;link.hidden=false;}
   }catch{}
   label.textContent=info.filename;
   const file=result.content?.find(x=>x.type==="image");
@@ -47,3 +49,5 @@ new ResizeObserver(resize).observe(document.body);
 send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-image",version:"1"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;
+
+export const imageViewerFor = (origin?:string) => imageViewerHtml.replace("const deliveryOrigin=null;", "const deliveryOrigin="+JSON.stringify(origin || null).replaceAll("<","\\u003c")+";");

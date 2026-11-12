@@ -182,3 +182,11 @@ ComfyUIのLoRA選択肢を確認する例：
 | `read_3d_part` | `filename`・`byte_offset`、任意で `subfolder`・`etag`（継続時は必須） | 最大512 KiBずつ取得。最初のETagを全取得のIf-Rangeに使い、版が変われば中止。配信用 CPU。アプリ専用で、Base64は `_meta["split/3dPart"]` のみ。`next_offset` で継続 |
 
 プレイヤー・ビューアーのHTML取得はMCPリソースで、ツール数には含めません。HTMLだけならWorkerで応答し、データの要求時に配信用CPUを使います。クライアントの表示機能によってプレイヤーが使えない場合も、`get_audio`・`get_video` のリンクまたは部分取得、`get_3d` のブラウザ用リンクを利用できます。
+
+## 任意の外部配信が有効な場合
+
+`MEDIA_DELIVERY` 設定時、`get_image`・`get_audio`・`get_video`・`get_3d` は本人用コピーを照会し、欠落時だけ作成します。`get_job_progress` はcompleted時に最大4出力の `outputs` と `outputs_next_offset` を返し、続きは `outputs_offset` を渡します。pendingの項目は同じページを再試行し、生成を再投入しません。`list_outputs` は準備済みコピーの情報を加えるだけで転送しません。
+
+音声・動画をCLIで分割取得する時は、初回の `delivery_ref` を次回の `get_audio` / `get_video` にそのまま渡してください。内部プレイヤーの3つの `read_*_part` も同じ参照を使います。コピーのETagが変わった場合は初回取得からやり直します。`delivery_status`、`delivery_reason`、`retry_after_seconds` で準備・失敗を区別します。詳細は[アダプタ契約](../design/media-delivery-adapter-plan.md)を参照してください。
+
+外部配信が有効な `list_outputs` は1ページ最大32件に制限し、`next_offset` で続ける。原本HEAD、24件ずつのlookup、認証・起動確認を合わせて [Workers Freeのサブリクエスト上限](https://developers.cloudflare.com/workers/platform/limits/#subrequests) に収めるための上限であり、登録・転送は行わない。

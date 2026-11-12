@@ -1,9 +1,9 @@
 // Use MCP authentication for bounded playback; large files retain the browser stream.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v8.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v9.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
-export const playerHtml = (browserOrigin:string) => `<!doctype html>
+export const playerHtml = (browserOrigin:string, deliveryOrigin?:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した動画</title>
 <style>
@@ -32,11 +32,11 @@ function clearVideo(){
 }
 function setLink(info){
   try{const url=new URL(info.url);
-    if(url.origin===${JSON.stringify(new URL(browserOrigin).origin)} && url.pathname==="/view" && !url.username && !url.password){link.href=url.href;link.hidden=false;}
+    if(!url.username && !url.password && ((url.origin===${JSON.stringify(new URL(browserOrigin).origin)} && url.pathname==="/view") || (url.origin===${JSON.stringify(deliveryOrigin || null)} && /^\\/media\\/[a-f0-9-]{36}$/.test(url.pathname)))){link.href=url.href;link.hidden=false;}
   }catch{}
 }
 function show(parts,info){
-  const blob=new Blob(parts,{type:"video/mp4"});
+  const blob=new Blob(parts,{type:info.mimeType || "video/mp4"});
   if(blob.size!==info.size)throw Error("動画のサイズが一致しません。");
   if(objectUrl)URL.revokeObjectURL(objectUrl);
   objectUrl=URL.createObjectURL(blob);player.hidden=false;
@@ -48,6 +48,7 @@ function play(){
   const info=current;if(!info)return;
   version++;retry.hidden=true;
   if(info.delivery==="player" && info.size<=limit){void load();return;}
+  if(info.delivery_ref){label.textContent="保存ページで開いてください。";return;}
   if(!link.hidden){
     const raw=new URL(link.href);raw.pathname="/api/view";
     label.textContent="動画を読み込み中…";player.hidden=false;
@@ -70,6 +71,7 @@ async function load(){
     const parts=[];let offset=0;
     do{
       const args={prompt_id:info.prompt_id,index:info.index??0,byte_offset:offset};
+      if(info.delivery_ref)args.delivery_ref=info.delivery_ref;
       const result=await (serverTools || !window.openai?.callTool ? request("tools/call",{name:"read_video_part",arguments:args}) : window.openai.callTool("read_video_part",args));
       if(run!==version)return;
       if(result.isError){
@@ -81,12 +83,13 @@ async function load(){
       }
       const meta=result.structuredContent,data=result._meta?.["split/videoPart"];
       if(!meta || meta.prompt_id!==info.prompt_id || meta.index!==(info.index??0))throw Error("指定した動画の応答ではありません。");
+      if(info.delivery_ref && (meta.delivery_ref?.media_id!==info.delivery_ref.media_id || meta.delivery_ref?.etag!==info.delivery_ref.etag))throw Error("配信コピーの版が変わりました。作品を再取得してください。");
       if(info.delivery==="starting"){
         current=info={...meta,delivery:"player"};setLink(info);
         if(info.size>limit && !link.hidden){play();return;}
       }
       if(!Number.isSafeInteger(info.size) || info.size<=0 || info.size>limit)throw Error("この動画は128 MiBを超えます。保存ページで開いてください。");
-      if(meta.filename!==info.filename || meta.mimeType!=="video/mp4" || meta.size!==info.size || meta.byte_offset!==offset ||
+      if(meta.filename!==info.filename || meta.mimeType!==(info.mimeType || "video/mp4") || meta.size!==info.size || meta.byte_offset!==offset ||
         typeof data!=="string" || data.length>4*Math.ceil(${VIDEO_PART_BYTES}/3))throw Error("動画の応答が一致しません。");
       const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));offset+=bytes.length;
       if(!bytes.length || bytes.length!==meta.byte_length || offset>info.size || meta.next_offset!==(offset<info.size?offset:null))throw Error("動画データが不完全です。");
@@ -99,12 +102,12 @@ function render(result){
   const info=result.structuredContent;
   if(result.isError){clearVideo();label.textContent=result.content?.find(x=>x.type==="text")?.text || "動画を取得できませんでした。";return;}
   if(!info?.prompt_id)return;
-  const nextKey=JSON.stringify([info.prompt_id,info.index,info.filename,info.size]);
+  const nextKey=JSON.stringify([info.prompt_id,info.index,info.filename,info.size,info.delivery_ref?.media_id,info.delivery_ref?.etag]);
   if(key===nextKey)return;
   clearVideo();key=nextKey;current=info;setLink(info);
   if(info.delivery==="chunk"){label.textContent="動画の一部を取得しました。";return;}
   // Previously saved inline results can still hydrate the current resource.
-  const data=result._meta?.["split/video"] ?? result.content?.find(x=>x.type==="resource" && x.resource?.mimeType==="video/mp4")?.resource.blob;
+  const data=result._meta?.["split/video"] ?? result.content?.find(x=>x.type==="resource" && x.resource?.mimeType===(info.mimeType || "video/mp4"))?.resource.blob;
   if(info.delivery==="inline" && info.size<=limit && typeof data==="string" && data.length===4*Math.ceil(info.size/3)){
     try{show([Uint8Array.from(atob(data),c=>c.charCodeAt(0))],info);return;}catch{}
   }

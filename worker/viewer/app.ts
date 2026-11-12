@@ -2,12 +2,12 @@ import {createViewer} from "./render.ts";
 import {readAtMost} from "../src/bounded-response.ts";
 
 type Info = {filename: string; subfolder: string; format: "glb" | "spz"; size: number;
-  url: string; delivery: "viewer" | "link"; etag?: string};
+  url: string; delivery: "viewer" | "link"; etag?: string; delivery_ref?: {media_id:string; etag:string}};
 type ToolResult = {isError?: boolean; structuredContent?: unknown; content?: {type: string; text?: string}[];
   _meta?: Record<string, unknown>};
 declare global {
   interface Window {
-    split3D: {origin: string; file?: {filename: string; subfolder: string}};
+    split3D: {origin: string; deliveryOrigin?:string; file?: {filename: string; subfolder: string}};
     openai?: {callTool?: (name: string, args: unknown) => Promise<ToolResult>;
       toolOutput?: unknown; toolResponseMetadata?: Record<string, ToolResult>};
   }
@@ -62,7 +62,8 @@ function readInfo(value: unknown): Info | undefined {
       !["viewer", "link"].includes(info.delivery)) return;
   try {
     const url = new URL(info.url);
-    if (url.origin === config.origin && url.pathname === "/view" && !url.username && !url.password)
+    if (!url.username && !url.password && ((url.origin === config.origin && url.pathname === "/view") ||
+      (url.origin === config.deliveryOrigin && /^\/media\/[a-f0-9-]{36}$/.test(url.pathname))))
       return info;
   } catch { /* A malformed tool result has no usable viewer link. */ }
 }
@@ -110,7 +111,7 @@ async function load() {
       const bytes = new Uint8Array(info.size);
       let offset = 0;
       while (offset < info.size) {
-        const result = await request("read_3d_part", {filename: info.filename, subfolder: info.subfolder, byte_offset: offset, etag: info.etag});
+        const result = await request("read_3d_part", {filename: info.filename, subfolder: info.subfolder, byte_offset: offset, etag: info.etag, ...(info.delivery_ref ? {delivery_ref:info.delivery_ref} : {})});
         if (run !== version) return;
         if (result.isError) throw Error(result.content?.find(item => item.type === "text")?.text || "3Dファイルを取得できませんでした。");
         const meta = result.structuredContent as Record<string, unknown> | undefined;
@@ -118,6 +119,7 @@ async function load() {
         if (!meta || meta.filename !== info.filename || meta.subfolder !== info.subfolder || meta.size !== info.size ||
             meta.format !== info.format || meta.etag !== info.etag || meta.byte_offset !== offset || typeof data !== "string" ||
             data.length > 4 * Math.ceil(PART / 3)) throw Error("指定した3Dファイルの応答ではありません。");
+        if(info.delivery_ref && (meta.delivery_ref as Info["delivery_ref"])?.media_id !== info.delivery_ref.media_id) throw Error("配信コピーが一致しません。");
         const chunk = Uint8Array.from(atob(data), c => c.charCodeAt(0)), next = offset + chunk.length;
         if (!chunk.length || chunk.length !== meta.byte_length || next > info.size ||
             meta.next_offset !== (next < info.size ? next : null)) throw Error("3Dファイルが不完全です。");

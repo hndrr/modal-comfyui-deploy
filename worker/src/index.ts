@@ -3,6 +3,7 @@ import { splitGui } from "./split-guis.ts";
 import { mediaDocument } from "./media-document.ts";
 import { remoteMcp } from "./remote-mcp.ts";
 import {mediaSender, savedOutputRequest} from "./saved-media.ts";
+import {MediaDelivery} from "./media-delivery.ts";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 
 /**
@@ -46,6 +47,8 @@ export interface Env {
   SPLIT_REMOTE_MCP?: string;
   /** Fixed saved-output endpoint: {hostname, origin}. Uses the split's existing Proxy Auth. */
   SPLIT_MEDIA_ORIGIN?: string;
+  /** Optional external delivery service: {origin, source_id, token}. */
+  MEDIA_DELIVERY?: string;
   /** Exact verified Azure storage hosts used by ChatGPT attachments, comma separated. */
   SPLIT_ATTACHMENT_BLOB_HOSTS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
@@ -548,10 +551,12 @@ export default {
           if (payload.type !== "app" || !payload.sub || payload.common_name !== undefined ||
               typeof payload.email !== "string" || payload.email.toLowerCase() !== cfg.owner_email.toLowerCase()) throw new Error();
         } catch { return textResponse("MCP Access authentication required.",403); }
-        let media;
+        let media,delivery;
         try { if (env.SPLIT_MEDIA_ORIGIN) media=mediaSender(env.SPLIT_MEDIA_ORIGIN,cfg.split_hostname,
           buildUpstreamHeaders(new Request(url),env,splitOrigin)); }
         catch {return textResponse("Invalid saved-media binding.",500);}
+        try {if(env.MEDIA_DELIVERY) delivery=new MediaDelivery(env.MEDIA_DELIVERY);}
+        catch {return textResponse("Invalid media delivery binding.",500);}
         return remoteMcp(request, (path, init) => {
           // Build from zero: never forward a user JWT, cookie, or arbitrary header.
           const headers = buildUpstreamHeaders(new Request(url), env, splitOrigin, true);
@@ -560,7 +565,7 @@ export default {
           // workerd supports manual/follow. callSplit rejects non-2xx responses;
           // never follow a Location with Modal credentials.
           return fetch(new Request(splitOrigin + path,{...init,headers,redirect:"manual"}));
-        }, "https://" + cfg.split_hostname, env.SPLIT_ATTACHMENT_BLOB_HOSTS,media);
+        }, "https://" + cfg.split_hostname, env.SPLIT_ATTACHMENT_BLOB_HOSTS,media,delivery);
       }
     }
     if (mcpPath && splitUiHost) return textResponse("Not found.", 404);

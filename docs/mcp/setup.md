@@ -145,6 +145,23 @@
 
 ---
 
+## 任意の外部メディア配信
+
+配信側の別repoを用意した環境だけ、Worker Secret `MEDIA_DELIVERY` に以下のJSONを登録します。本番への反映は別途行います。
+
+```json
+{"origin":"https://<MEDIA_DELIVERY_HOST>","source_id":"<SOURCE_ID>","token":"<SERVICE_TOKEN>"}
+```
+
+- originはパス・ポートなしのHTTPS。source_idとtokenは配信側で発行した組み合わせを使い、値をドキュメント・Gitへ保存しません。
+- ローカルではgit管理外の `.dev.vars`、本番反映時は `worker/` で `npx wrangler secret put MEDIA_DELIVERY` の標準入力に登録します。トークンをコマンド引数に含めません。
+- 原本の配信用CPU `SPLIT_MEDIA_ORIGIN` を併用すると、保存済み作品の取得でComfyUIを起動せずに済みます。
+- 設定後はMCPツール一覧を読み直します。画像・音声・動画・GLB/SPZの取得と、生成completed時の最大4出力に配信用コピーを準備します。現在の契約は1ファイル25 MiBまでで、超過・非対応形式は原本経路を使います。
+- 本人用URLは配信側へのログインが必要です。MCP内の表示データは本体Workerがサービス認証で取得します。利用者のCookieやModal認証は配信側へ渡しません。
+- 切り戻しは `MEDIA_DELIVERY` の削除です。新しい応答は既存経路に戻り、外部への通信も止まります。配信側のコピー・リンクは残ります。
+
+[API契約と失敗時の動作](../design/media-delivery-adapter-plan.md)、[独立したローカル検証](../../tests/README.md#外部配信アダプタのローカル連携確認)を参照してください。
+
 ## カスタムノードとモデルの管理
 
 ### カスタムノードの追加・更新
