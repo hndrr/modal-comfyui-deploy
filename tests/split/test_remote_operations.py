@@ -180,18 +180,51 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
                 await media.handle(self.c, "inspect_media", {"filename": "test.wav"})
             self.assertNotIn("private", caught.exception.text)
 
-    async def test_output_indexes_match_list_outputs_when_a_gif_precedes(self):
+    async def test_output_indexes_match_list_outputs_when_gif_and_3d_precede(self):
         job = self.c.journal.enqueue({"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}})
         Image.new("RGB", (8, 8)).save(self.dirs["output"] / "a.gif")
         Image.new("RGB", (64, 64)).save(self.dirs["output"] / "b.png")
+        (self.dirs["output"] / "mesh.GLB").write_bytes(b"glTF fixture")
+        (self.dirs["output"] / "points.spz").write_bytes(b"\x1f\x8b fixture")
         job.update(status="completed", history={"outputs": {"1": {"images": [
-            {"filename": name, "subfolder": "", "type": "output"} for name in ("a.gif", "b.png")]}}})
+            {"filename": "a.gif", "subfolder": "", "type": "output"}], "3d": [
+            {"filename": name, "subfolder": "", "type": "output"} for name in ("mesh.GLB", "points.spz")]},
+            "2": {"images": [{"filename": "b.png", "subfolder": "", "type": "output"}]}}})
         read = lambda name, **a: media.handle(self.c, name, {"prompt_id": job["id"], **a})
-        self.assertEqual([r["filename"] for r in (await read("list_outputs"))["items"]], ["a.gif", "b.png"])
-        self.assertEqual((await read("inspect_media", index=1))["width"], 64)
+        rows = (await read("list_outputs"))["items"]
+        self.assertEqual([r["filename"] for r in rows], ["a.gif", "mesh.GLB", "points.spz", "b.png"])
+        self.assertEqual((await read("inspect_media", index=3))["width"], 64)
+        with patch.object(media.subprocess, "run") as probe:
+            for index in (1, 2):
+                name = rows[index]["filename"]
+                self.assertEqual(await read("inspect_media", index=index), {
+                    "filename": name, "kind": "3d", "size_bytes": (self.dirs["output"] / name).stat().st_size,
+                    "format": Path(name).suffix[1:].upper()})
+                with self.assertRaises(web.HTTPBadRequest) as caught:
+                    await read("reuse_output", index=index)
+                self.assertEqual(caught.exception.text, "3D outputs cannot be reused as inputs")
+            probe.assert_not_called()
+        self.assertEqual(list(self.dirs["input"].iterdir()), [])
+        self.c.volumes["input"].commit.aio.assert_not_awaited()
         # GIF is not an accepted input format; it must fail, not reuse b.png.
         with self.assertRaises(web.HTTPBadRequest):
             await read("reuse_output", index=0)
+
+    async def test_3d_uploads_and_input_listing_remain_unsupported(self):
+        for name in ("mesh.GLB", "points.spz", "existing.gif", "existing.wav", "existing.mp4"):
+            (self.dirs["input"] / name).write_bytes(b"fixture")
+        rows = (await media.handle(self.c, "list_inputs", {}))["items"]
+        self.assertEqual([r["filename"] for r in rows], ["existing.gif", "existing.mp4", "existing.wav"])
+        with self.assertRaises(web.HTTPBadRequest) as caught:
+            await media.handle(self.c, "list_inputs", {"kind": "3d"})
+        self.assertEqual(caught.exception.text, "Unknown media kind")
+        for name in ("mesh.GLB", "points.spz"):
+            transfer = media.media.Transfers(self.dirs["input"], "a" * 64)
+            with self.assertRaises(web.HTTPBadRequest) as caught:
+                transfer.apply("status", name)
+            self.assertEqual(caught.exception.text, "Unsupported filename extension")
+            self.assertFalse(transfer.part.exists())
+            self.assertFalse(transfer.meta.exists())
 
     async def test_job_output_reuse_preserves_bytes_and_graph_and_never_requeues(self):
         job = self.c.journal.enqueue({"prompt": {"1": {"class_type": "SaveImage", "inputs": {}}}})
