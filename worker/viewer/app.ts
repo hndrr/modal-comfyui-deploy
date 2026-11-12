@@ -68,6 +68,7 @@ function readInfo(value: unknown): Info | undefined {
 }
 function setLinks(info: Info) {
   link.href = info.url; link.hidden = browser;
+  link.textContent = info.size > LIMIT ? "ブラウザで元のファイルを保存" : "ブラウザで開く";
   const raw = new URL(info.url); raw.pathname = "/api/view";
   // Browser downloads use the existing Access session. Inline downloads are
   // offered once the MCP-authenticated bytes have been assembled into a Blob.
@@ -79,7 +80,7 @@ async function load() {
   clear(); setLinks(info);
   const run = version;
   if (!browser && (info.size > LIMIT || info.delivery === "link")) {
-    status.textContent = info.size > LIMIT ? "128 MiBを超えるモデルです。ブラウザで開いてください。" :
+    status.textContent = info.size > LIMIT ? "128 MiBを超えるモデルは自動表示の対象外です。ブラウザで元のファイルを保存してください。" :
       "このモデルはブラウザで開いてください。";
     return;
   }
