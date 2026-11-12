@@ -71,7 +71,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
         if(delivery && browserOrigin && deliveredTools.has(name))
-          return callDeliveredMedia(delivery,send,name,args,()=>callSplit(send,name,args,browserOrigin,blobHosts));
+          return callDeliveredMedia(delivery,send,name,args,()=>callSavedMedia(send,name,args,browserOrigin));
         if (name === "get_image") {
           if (!browserOrigin) return failure("Missing split browser origin.");
           return callSavedMedia(send,name,args,browserOrigin);
@@ -87,9 +87,10 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
           if(delivery && name==="get_job_progress" && r.ok && progress.status==="completed") {
             try {
               const offset=z.number().int().min(0).parse(args.outputs_offset ?? 0),source=mediaSend || send;
-              const outputs=mediaSend ? await mediaSend(`/outputs/${args.prompt_id}?offset=${offset}&limit=4`,{method:"GET",signal:AbortSignal.timeout(50_000)}) :
+              const prompt_id=z.uuid().parse(args.prompt_id).toLowerCase();
+              const outputs=mediaSend ? await mediaSend(`/outputs/${prompt_id}?offset=${offset}&limit=4`,{method:"GET",signal:AbortSignal.timeout(50_000)}) :
                 await send("/_remote_mcp/operations",{method:"POST",headers:{"X-Split-Remote-Tool":"1","Content-Type":"application/json"},
-                  body:JSON.stringify({name:"list_outputs",arguments:{prompt_id:args.prompt_id,offset,limit:4}}),signal:AbortSignal.timeout(50_000)});
+                  body:JSON.stringify({name:"list_outputs",arguments:{prompt_id,offset,limit:4}}),signal:AbortSignal.timeout(50_000)});
               if(!outputs.ok) {await outputs.body?.cancel();throw new Error("Missing outputs");}
               const bytes=await readAtMost(outputs,1024*1024);
               if(!bytes) throw new Error("Oversized outputs");

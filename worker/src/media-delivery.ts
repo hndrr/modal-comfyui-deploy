@@ -1,5 +1,6 @@
 import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
+import {mediaHeaderValid} from "./media.ts";
 
 export type MediaSend = (path:string, init:RequestInit) => Promise<Response>;
 type Fetch = (request:Request) => Promise<Response>;
@@ -27,6 +28,7 @@ const etagSchema = z.string().max(256).regex(/^"[\x21\x23-\x7e]*"$/);
 export const deliveryRefSchema = outputFileSchema.extend({
   media_id:z.uuid(), etag:etagSchema, mime_type:mimeSchema,
   size_bytes:z.number().int().positive().max(MAX_BYTES),
+  prompt_id:z.uuid().optional(), index:z.number().int().nonnegative().optional(),
 });
 export type DeliveryRef = z.infer<typeof deliveryRefSchema>;
 export const deliveryOutput = {delivery_ref:deliveryRefSchema.optional(),
@@ -49,8 +51,15 @@ export class DeliveryError extends Error {
   retry:number;
   constructor(code:string, retry = 0) {super(code);this.code=code;this.retry=retry;}
 }
-export const outputPath = (file:OutputFile) => "/view?" + new URLSearchParams({type:"output",...file});
+export const outputPath = ({filename,subfolder}:OutputFile) => "/view?" + new URLSearchParams({type:"output",filename,subfolder});
 export const mediaKind = (mime:keyof typeof mimeKinds) => mimeKinds[mime];
+const contentType = (response:Response) => response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
+// ComfyUI's Python MIME table uses these aliases; the service contract is canonical.
+const sourceType = (response:Response) => {
+  const mime=contentType(response);
+  return ({"audio/x-wav":"audio/wav","audio/vnd.wave":"audio/wav","audio/x-flac":"audio/flac",
+    "audio/opus":"audio/ogg","application/ogg":"audio/ogg"} as Record<string,string>)[mime ?? ""] ?? mime;
+};
 
 // Only this boundary knows service credentials. No bindings to the service's storage.
 export class MediaDelivery {
@@ -97,8 +106,8 @@ export class MediaDelivery {
       throw new DeliveryError("invalid_service_url");
     return parsed.data;
   }
-  async inspect(send:MediaSend, value:OutputFile):Promise<SourceMedia> {
-    const file=outputFileSchema.parse(value),path=outputPath(file);
+  async inspect(send:MediaSend, file:OutputFile):Promise<SourceMedia> {
+    const path=outputPath(file);
     const mime=extensions[file.filename.split(".").at(-1)!.toLowerCase()];
     if(!mime) throw new DeliveryError("unsupported_media");
     const response=await send(path,{method:"HEAD",signal:this.signal()});
@@ -109,7 +118,7 @@ export class MediaDelivery {
     if(size>MAX_BYTES) throw new DeliveryError("file_too_large");
     const tag=etagSchema.safeParse(response.headers.get("ETag"));
     if(!tag.success) throw new DeliveryError("source_version_unavailable");
-    const actual=response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
+    const actual=sourceType(response);
     if(actual!==mime) throw new DeliveryError("unsupported_media");
     return {...file,path,output_path:(file.subfolder ? file.subfolder+"/" : "")+file.filename,
       source_etag:tag.data,mime_type:mime,size_bytes:size,kind:mediaKind(mime)};
@@ -122,14 +131,20 @@ export class MediaDelivery {
       const data=await this.json("/v1/media/lookup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       const parsed=z.object({results:z.array(z.unknown()).length(page.length)}).safeParse(data);
       if(!parsed.success) throw new DeliveryError("invalid_service_response");
-      for(const item of parsed.data.results) results.push(this.state(item));
+      for(const [i,item] of parsed.data.results.entries()) {
+        const state=this.state(item);
+        if(state.status==="ready" && mediaKind(state.mime_type)!==page[i].kind) throw new DeliveryError("invalid_service_media");
+        results.push(state);
+      }
     }
     return results;
   }
   async prepare(send:MediaSend,file:OutputFile):Promise<DeliveryState> {
     const source=await this.inspect(send,file);
-    let state=(await this.lookup([source]))[0];
-    if(state.status!=="ready") {
+    return this.prepareSource(send,source,(await this.lookup([source]))[0]);
+  }
+  async prepareSource(send:MediaSend,source:SourceMedia,state:DeliveryState):Promise<DeliveryState> {
+    if(state.status!=="ready" && state.status!=="pending") {
       const {output_path,source_etag,filename,mime_type,size_bytes,kind}=source;
       state=this.state(await this.json("/v1/media",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({source_id:this.source,output_path,source_etag,filename,mime_type,size_bytes,kind})}));
@@ -138,30 +153,31 @@ export class MediaDelivery {
         if(![200,206].includes(response.status) || response.headers.get("ETag")!==source_etag ||
           Number(response.headers.get("Content-Length"))!==size_bytes ||
           (response.status===206 && response.headers.get("Content-Range")!==`bytes 0-${size_bytes-1}/${size_bytes}`) ||
-          response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase()!==mime_type || !response.body) {
+          sourceType(response)!==mime_type || !response.body) {
           await response.body?.cancel();throw new DeliveryError("source_changed");
         }
         // The receiver validates exact length while streaming; never hold a full file here.
         state=this.state(await this.json(`/v1/media/${state.media_id}/content`,{method:"PUT",
           headers:{"Content-Type":mime_type,"X-Upload-Id":state.upload_id,"Content-Length":String(size_bytes)},body:response.body}));
-        const after=await this.inspect(send,file);
+        const after=await this.inspect(send,source);
         if(after.source_etag!==source_etag || after.size_bytes!==size_bytes) throw new DeliveryError("source_changed");
       }
+      if(state.status==="ready" && mediaKind(state.mime_type)!==source.kind) throw new DeliveryError("invalid_service_media");
     }
-    if(state.status==="ready" && mediaKind(state.mime_type)!==source.kind) throw new DeliveryError("invalid_service_media");
     return state;
   }
   async read(ref:DeliveryRef,offset:number,length:number):Promise<Uint8Array> {
     const response=await this.request(`/v1/media/${ref.media_id}/content`,{headers:{Range:`bytes=${offset}-${offset+length-1}`,"If-Range":ref.etag}});
     if(response.status!==206 || response.headers.get("ETag")!==ref.etag ||
       response.headers.get("Content-Range")!==`bytes ${offset}-${Math.min(offset+length,ref.size_bytes)-1}/${ref.size_bytes}` ||
-      response.headers.get("Content-Type")?.split(";")[0]!==ref.mime_type ||
+      contentType(response)!==ref.mime_type ||
       (response.headers.has("Content-Encoding") && response.headers.get("Content-Encoding")!=="identity")) {
       await response.body?.cancel();
       throw new DeliveryError(response.status===503 ? "delivery_pending" : "copy_changed_or_unavailable",response.status===503 ? 60 : 0);
     }
     const bytes=await readAtMost(response,length);
     if(!bytes || bytes.length!==Math.min(length,ref.size_bytes-offset)) throw new DeliveryError("incomplete_delivery");
+    if(offset===0 && !mediaHeaderValid(ref.mime_type,bytes,ref.size_bytes)) throw new DeliveryError("invalid_media_content");
     return bytes;
   }
 }

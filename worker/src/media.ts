@@ -49,6 +49,21 @@ const formats: Record<Kind, ReadonlyMap<string, Format>> = {
     ["ogg", {mime:"audio/ogg", min:4, matches:ogg}],
   ]),
 };
+// Check a returned prefix without requiring another read for very small chunks.
+export function mediaHeaderValid(mime:string, bytes:Uint8Array, size=bytes.length):boolean {
+  const known=[...formats.audio.values(),...formats.video.values()].find(f=>f.mime===mime);
+  const format=known ?? ({
+    "image/png":{min:8,matches:(b:Uint8Array)=>b[0]===137 && tag(b,1,"PNG\r\n\x1a\n")},
+    "image/jpeg":{min:3,matches:(b:Uint8Array)=>b[0]===255 && b[1]===216 && b[2]===255},
+    "image/webp":{min:12,matches:(b:Uint8Array)=>tag(b,0,"RIFF") && tag(b,8,"WEBP")},
+    "image/gif":{min:6,matches:(b:Uint8Array)=>tag(b,0,"GIF87a") || tag(b,0,"GIF89a")},
+    "audio/mp4":{min:8,matches:(b:Uint8Array)=>tag(b,4,"ftyp")},
+    "audio/webm":{min:4,matches:(b:Uint8Array)=>[0x1a,0x45,0xdf,0xa3].every((v,i)=>b[i]===v)},
+    "video/webm":{min:4,matches:(b:Uint8Array)=>[0x1a,0x45,0xdf,0xa3].every((v,i)=>b[i]===v)},
+  } as Record<string,{min:number;matches:(b:Uint8Array)=>boolean}>)[mime];
+  // GLB/SPZ parsing remains at the existing 3D viewer boundary.
+  return !format || size>=format.min && (bytes.length<format.min || format.matches(bytes));
+}
 type Send = (path: string, init: RequestInit) => Promise<Response>;
 type Output = { filename: string; subfolder: string; format: Format };
 const fail = (text: string): CallToolResult => ({isError:true, content:[{type:"text",text}]});
