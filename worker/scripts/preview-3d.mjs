@@ -30,7 +30,7 @@ const server = createServer(async(req,res)=>{
       response=new Response(threeViewerHtml(origin),{headers:{"Content-Type":"text/html",
         "Content-Security-Policy":`default-src 'none'; script-src 'unsafe-inline' ${url.searchParams.get("restricted")==="1"?"":"'wasm-unsafe-eval'"}; style-src 'unsafe-inline'; img-src blob: data:; connect-src blob: data:; worker-src ${url.searchParams.has("restricted")?"'none'":"blob:"}`}});
     }else if(url.pathname==="/mcp-test"){
-      const filename=Object.hasOwn(files,url.searchParams.get("filename"))?url.searchParams.get("filename"):"sample.glb";
+      const filename=Object.keys(files).find(file=>file===url.searchParams.get("filename")) || "sample.glb";
       response=new Response(`<!doctype html><title>MCP 3D smoke</title><iframe title="3D MCP viewer" style="width:95vw;height:85vh;border:0" src="/widget${url.searchParams.has("restricted")?"?restricted="+(url.searchParams.get("restricted")==="worker"?"worker":"1"):""}"></iframe><script>
       const frame=document.querySelector('iframe');
       addEventListener('message',async e=>{
