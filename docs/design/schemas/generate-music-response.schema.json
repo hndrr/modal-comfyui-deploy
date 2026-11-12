@@ -1,0 +1,566 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Proposed split generate_music response",
+  "description": "Design only. Applies to calls with a valid request_id; transport/authentication/invalid-ID errors follow the existing MCP protocol. Receipt status is independent of execution status. No runtime registration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "submission_status"
+  ],
+  "properties": {
+    "request_id": {
+      "$ref": "generate-music-input.schema.json#/properties/request_id"
+    },
+    "submission_status": {
+      "enum": [
+        "accepted",
+        "rejected",
+        "unknown"
+      ]
+    },
+    "prompt_id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "Original durable job ID; never a provisional ID."
+    },
+    "job_status": {
+      "enum": [
+        "queued",
+        "dispatching",
+        "running",
+        "unknown",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "number": {
+      "type": "integer",
+      "description": "Original journal queue number; preserved on replay."
+    },
+    "model": {
+      "$ref": "generate-music-input.schema.json#/properties/model"
+    },
+    "operation": {
+      "$ref": "generate-music-input.schema.json#/properties/operation"
+    },
+    "seed": {
+      "$ref": "generate-music-input.schema.json#/properties/seed"
+    },
+    "effective_parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "duration_seconds",
+        "duration_semantics"
+      ],
+      "properties": {
+        "duration_seconds": {
+          "type": "number",
+          "maximum": 1000,
+          "description": "Resolved target or upper bound; edits use total output duration, not added duration. Not an assertion about actual output duration.",
+          "minimum": 1
+        },
+        "duration_semantics": {
+          "enum": [
+            "target_length",
+            "upper_bound"
+          ]
+        },
+        "bpm": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 300
+        },
+        "keyscale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timesignature": {
+          "enum": [
+            "2",
+            "3",
+            "4",
+            "6"
+          ]
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Warnings fixed at first admission, including Builder normalization warnings. New execution warnings remain in history."
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "preflight_failed",
+            "preflight_unavailable",
+            "idempotency_conflict",
+            "submission_unknown"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issues": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Normalized validation details; omit raw traceback, credentials and environment identifiers.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "node_id",
+              "node_type",
+              "input",
+              "code",
+              "message"
+            ],
+            "properties": {
+              "node_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "node_type": {
+                "type": "string",
+                "minLength": 1
+              },
+              "input": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "minLength": 1,
+                "description": "Input name when known; null for a node-wide error such as a missing class."
+              },
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Core validation reason or a specific Builder/policy/preflight reason; not an execution status."
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "submission_status": {
+          "const": "accepted"
+        }
+      },
+      "required": [
+        "prompt_id",
+        "job_status",
+        "number",
+        "model",
+        "operation",
+        "seed",
+        "effective_parameters",
+        "warnings"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "error"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "submission_status": {
+          "const": "rejected"
+        },
+        "error": {
+          "properties": {
+            "code": {
+              "enum": [
+                "invalid_request",
+                "preflight_failed",
+                "preflight_unavailable",
+                "idempotency_conflict"
+              ]
+            }
+          }
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "prompt_id"
+            ]
+          },
+          {
+            "required": [
+              "job_status"
+            ]
+          },
+          {
+            "required": [
+              "number"
+            ]
+          },
+          {
+            "required": [
+              "model"
+            ]
+          },
+          {
+            "required": [
+              "operation"
+            ]
+          },
+          {
+            "required": [
+              "seed"
+            ]
+          },
+          {
+            "required": [
+              "effective_parameters"
+            ]
+          },
+          {
+            "required": [
+              "warnings"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "properties": {
+        "submission_status": {
+          "const": "unknown"
+        },
+        "error": {
+          "properties": {
+            "code": {
+              "const": "submission_unknown"
+            }
+          }
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "prompt_id"
+            ]
+          },
+          {
+            "required": [
+              "job_status"
+            ]
+          },
+          {
+            "required": [
+              "number"
+            ]
+          },
+          {
+            "required": [
+              "model"
+            ]
+          },
+          {
+            "required": [
+              "operation"
+            ]
+          },
+          {
+            "required": [
+              "seed"
+            ]
+          },
+          {
+            "required": [
+              "effective_parameters"
+            ]
+          },
+          {
+            "required": [
+              "warnings"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "const": "preflight_failed"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "required": [
+              "issues"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "model"
+        ]
+      },
+      "then": {
+        "oneOf": [
+          {
+            "properties": {
+              "model": {
+                "enum": [
+                  "ace-step-1.5-xl-turbo",
+                  "ace-step-1.5-xl-base",
+                  "ace-step-1.5-xl-sft"
+                ]
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "reference",
+                  "extend",
+                  "repaint"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 1000
+                  },
+                  "duration_semantics": {
+                    "const": "target_length"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "yue2-3b"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "cover"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 900
+                  },
+                  "duration_semantics": {
+                    "const": "upper_bound"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "stable-audio-3-medium"
+              },
+              "operation": {
+                "enum": [
+                  "create"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 285
+                  },
+                  "duration_semantics": {
+                    "const": "target_length"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "stable-audio-3-small-music"
+              },
+              "operation": {
+                "enum": [
+                  "create"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 120
+                  },
+                  "duration_semantics": {
+                    "const": "target_length"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "model": {
+                "const": "minimax-music-3"
+              },
+              "operation": {
+                "enum": [
+                  "create"
+                ]
+              },
+              "effective_parameters": {
+                "properties": {
+                  "duration_seconds": {
+                    "maximum": 360
+                  },
+                  "duration_semantics": {
+                    "const": "upper_bound"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "model"
+        ],
+        "properties": {
+          "model": {
+            "enum": [
+              "ace-step-1.5-xl-turbo",
+              "ace-step-1.5-xl-base",
+              "ace-step-1.5-xl-sft"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effective_parameters": {
+            "required": [
+              "bpm",
+              "keyscale",
+              "timesignature",
+              "language"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "effective_parameters": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "bpm"
+                  ]
+                },
+                {
+                  "required": [
+                    "keyscale"
+                  ]
+                },
+                {
+                  "required": [
+                    "timesignature"
+                  ]
+                },
+                {
+                  "required": [
+                    "language"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "enum": [
+              "create",
+              "reference",
+              "cover"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "effective_parameters": {
+            "properties": {
+              "duration_seconds": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,883 @@
+{
+  "description": "Design examples only; no tool invocation or generation. Every accepted shape still requires dependency checks and generation verification. Semantic cases intentionally pass JSON Schema.",
+  "media_fixtures": {
+    "reference.wav": {
+      "duration_seconds": 30
+    },
+    "source.wav": {
+      "duration_seconds": 60
+    }
+  },
+  "valid": [
+    {
+      "name": "direct-vocal-create",
+      "arguments": {
+        "request_id": "example-direct-vocal-create",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "direct-instrumental-create",
+      "arguments": {
+        "request_id": "example-direct-instrumental-create",
+        "model": "stable-audio-3-medium",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": true,
+          "duration_seconds": 30
+        }
+      }
+    },
+    {
+      "name": "direct-timbre-reference",
+      "arguments": {
+        "request_id": "example-direct-timbre-reference",
+        "model": "ace-step-1.5-xl-turbo",
+        "operation": "reference",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30
+        },
+        "source_audio": "reference.wav"
+      }
+    },
+    {
+      "name": "direct-melody-cover",
+      "arguments": {
+        "request_id": "example-direct-melody-cover",
+        "model": "yue2-3b",
+        "operation": "cover",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 60
+        },
+        "source_audio": "source.wav"
+      }
+    },
+    {
+      "name": "direct-extend",
+      "arguments": {
+        "request_id": "example-direct-extend",
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ"
+        },
+        "source_audio": "source.wav",
+        "extend": {
+          "continue_at": 45,
+          "duration_seconds": 15
+        }
+      }
+    },
+    {
+      "name": "direct-repaint",
+      "arguments": {
+        "request_id": "example-direct-repaint",
+        "model": "ace-step-1.5-xl-base",
+        "operation": "repaint",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": true
+        },
+        "source_audio": "source.wav",
+        "repaint": {
+          "start_seconds": 12,
+          "end_seconds": 20
+        }
+      }
+    },
+    {
+      "name": "music_spec-vocal-create",
+      "arguments": {
+        "request_id": "example-music_spec-vocal-create",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 30,
+            "notes": ""
+          }
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "music_spec-instrumental-create",
+      "arguments": {
+        "request_id": "example-music_spec-instrumental-create",
+        "model": "stable-audio-3-small-music",
+        "operation": "create",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "instrumental",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "",
+            "lyrical_theme": "",
+            "duration_seconds": 30,
+            "notes": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "music_spec-timbre-reference",
+      "arguments": {
+        "request_id": "example-music_spec-timbre-reference",
+        "model": "ace-step-1.5-xl-turbo",
+        "operation": "reference",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 30,
+            "notes": ""
+          }
+        },
+        "source_audio": "reference.wav"
+      }
+    },
+    {
+      "name": "music_spec-melody-cover",
+      "arguments": {
+        "request_id": "example-music_spec-melody-cover",
+        "model": "yue2-3b",
+        "operation": "cover",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 60,
+            "notes": ""
+          }
+        },
+        "source_audio": "source.wav"
+      }
+    },
+    {
+      "name": "music_spec-extend",
+      "arguments": {
+        "request_id": "example-music_spec-extend",
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 0,
+            "notes": ""
+          }
+        },
+        "source_audio": "source.wav",
+        "extend": {
+          "continue_at": 45,
+          "duration_seconds": 15
+        }
+      }
+    },
+    {
+      "name": "music_spec-repaint",
+      "arguments": {
+        "request_id": "example-music_spec-repaint",
+        "model": "ace-step-1.5-xl-base",
+        "operation": "repaint",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "instrumental",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "",
+            "lyrical_theme": "",
+            "duration_seconds": 0,
+            "notes": ""
+          }
+        },
+        "source_audio": "source.wav",
+        "repaint": {
+          "start_seconds": 12,
+          "end_seconds": 20
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "mixed-input",
+      "rejected_by": "schema",
+      "reason": "Direct input cannot also contain MusicSpec.",
+      "arguments": {
+        "request_id": "invalid-mixed-input",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30,
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 30,
+            "notes": ""
+          }
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "instrumental-with-lyrics",
+      "rejected_by": "schema",
+      "reason": "Instrumental input must not contain lyrics.",
+      "arguments": {
+        "request_id": "invalid-instrumental-with-lyrics",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": true,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "missing-lyrics",
+      "rejected_by": "schema",
+      "reason": "Vocal generation requires caller-supplied lyrics.",
+      "arguments": {
+        "request_id": "invalid-missing-lyrics",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "",
+            "lyrical_theme": "",
+            "duration_seconds": 30,
+            "notes": ""
+          }
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "m3-reference",
+      "rejected_by": "schema",
+      "reason": "M3 has no specified reference route.",
+      "arguments": {
+        "request_id": "invalid-m3-reference",
+        "model": "minimax-music-3",
+        "operation": "reference",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30
+        },
+        "source_audio": "reference.wav"
+      }
+    },
+    {
+      "name": "m3-duration",
+      "rejected_by": "schema",
+      "reason": "M3 maximum duration is 360 seconds.",
+      "arguments": {
+        "request_id": "invalid-m3-duration",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 361,
+            "notes": ""
+          }
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "stable-vocals",
+      "rejected_by": "schema",
+      "reason": "This contract exposes Stable Audio 3 as instrumental only.",
+      "arguments": {
+        "request_id": "invalid-stable-vocals",
+        "model": "stable-audio-3-medium",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "stable-small-duration",
+      "rejected_by": "schema",
+      "reason": "Small Music contract limit is 120 seconds.",
+      "arguments": {
+        "request_id": "invalid-stable-small-duration",
+        "model": "stable-audio-3-small-music",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": true,
+          "duration_seconds": 121
+        }
+      }
+    },
+    {
+      "name": "spec-missing-field",
+      "rejected_by": "schema",
+      "reason": "MusicSpec 0.1 requires all 32 fields.",
+      "arguments": {
+        "request_id": "invalid-spec-missing-field",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 30
+          }
+        },
+        "seed": 42
+      }
+    },
+    {
+      "name": "spec-edit-duration",
+      "rejected_by": "schema",
+      "reason": "Editing derives total duration from media and edit parameters; spec duration must be unspecified (0).",
+      "arguments": {
+        "request_id": "invalid-spec-edit-duration",
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "ja",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 60,
+            "notes": ""
+          }
+        },
+        "source_audio": "source.wav",
+        "extend": {
+          "continue_at": 45,
+          "duration_seconds": 15
+        }
+      }
+    },
+    {
+      "name": "source-url",
+      "rejected_by": "schema",
+      "reason": "Use a loader filename, not a URL.",
+      "arguments": {
+        "request_id": "invalid-source-url",
+        "model": "yue2-3b",
+        "operation": "cover",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 60
+        },
+        "source_audio": "https://example.invalid/source.wav"
+      }
+    },
+    {
+      "name": "suno-controls",
+      "rejected_by": "schema",
+      "reason": "Suno-specific controls are not part of this contract.",
+      "arguments": {
+        "request_id": "invalid-suno-controls",
+        "model": "minimax-music-3",
+        "operation": "create",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+          "duration_seconds": 30
+        },
+        "seed": 42,
+        "controls": {
+          "variety": 2
+        }
+      }
+    },
+    {
+      "name": "reversed-range",
+      "rejected_by": "semantic",
+      "reason": "Repaint end must be after start; JSON Schema cannot compare sibling values.",
+      "arguments": {
+        "request_id": "invalid-reversed-range",
+        "model": "ace-step-1.5-xl-base",
+        "operation": "repaint",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": true
+        },
+        "source_audio": "source.wav",
+        "repaint": {
+          "start_seconds": 20,
+          "end_seconds": 12
+        }
+      }
+    },
+    {
+      "name": "range-past-end",
+      "rejected_by": "semantic",
+      "reason": "The synthetic source.wav fixture is 60 seconds.",
+      "arguments": {
+        "request_id": "invalid-range-past-end",
+        "model": "ace-step-1.5-xl-base",
+        "operation": "repaint",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": true
+        },
+        "source_audio": "source.wav",
+        "repaint": {
+          "start_seconds": 12,
+          "end_seconds": 61
+        }
+      }
+    },
+    {
+      "name": "extension-past-end",
+      "rejected_by": "semantic",
+      "reason": "continue_at must be within the source.",
+      "arguments": {
+        "request_id": "invalid-extension-past-end",
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ"
+        },
+        "source_audio": "source.wav",
+        "extend": {
+          "continue_at": 61,
+          "duration_seconds": 15
+        }
+      }
+    },
+    {
+      "name": "extension-too-long",
+      "rejected_by": "semantic",
+      "reason": "Computed ACE output length exceeds 1000 seconds.",
+      "arguments": {
+        "request_id": "invalid-extension-too-long",
+        "model": "ace-step-1.5-xl-sft",
+        "operation": "extend",
+        "input": {
+          "mode": "direct",
+          "style": "Warm indie electronic pop, synth bass, soft drums and electric piano.",
+          "instrumental": false,
+          "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ"
+        },
+        "source_audio": "source.wav",
+        "extend": {
+          "continue_at": 45,
+          "duration_seconds": 1000
+        }
+      }
+    },
+    {
+      "name": "ace-mixed-language",
+      "rejected_by": "semantic",
+      "reason": "ACE requires one supported language code or unknown; do not silently coerce free text.",
+      "arguments": {
+        "request_id": "invalid-ace-mixed-language",
+        "model": "ace-step-1.5-xl-turbo",
+        "operation": "reference",
+        "input": {
+          "mode": "music_spec",
+          "spec": {
+            "title": "",
+            "genre": "indie electronic pop",
+            "subgenre": "",
+            "genre_blend": "",
+            "era": "",
+            "mood": "warm and hopeful",
+            "energy": "moderate",
+            "timbre": "",
+            "instruments": "synth bass, soft drums, electric piano",
+            "rhythm": "light syncopation",
+            "bpm": 112,
+            "key": "C",
+            "scale": "major",
+            "meter": "4/4",
+            "vocal_mode": "vocal",
+            "vocal_gender": "",
+            "vocal_range": "",
+            "vocal_timbre": "",
+            "vocal_style": "",
+            "vocal_fx": "",
+            "backing_vocals": "",
+            "language": "Japanese 50%, English 50%",
+            "production": "",
+            "dynamics": "",
+            "structure": "",
+            "scenario": "",
+            "spatial_fx": "",
+            "negative": "",
+            "lyrics": "[verse]\n窓辺にひかる朝の色\n[chorus]\n歩き出そう 新しい日へ",
+            "lyrical_theme": "",
+            "duration_seconds": 30,
+            "notes": ""
+          }
+        },
+        "source_audio": "reference.wav"
+      }
+    }
+  ]
+}
