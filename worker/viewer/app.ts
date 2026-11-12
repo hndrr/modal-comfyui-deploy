@@ -2,7 +2,7 @@ import {createViewer} from "./render.ts";
 import {readAtMost} from "../src/bounded-response.ts";
 
 type Info = {filename: string; subfolder: string; format: "glb" | "spz"; size: number;
-  url: string; delivery: "viewer" | "link"; etag?: string; delivery_ref?: {media_id:string; etag:string}};
+  url: string; delivery: "viewer" | "link"; etag?: string; delivery_ref?: {media_id:string; etag:string}; delivery_route?: "original"};
 type ToolResult = {isError?: boolean; structuredContent?: unknown; content?: {type: string; text?: string}[];
   _meta?: Record<string, unknown>};
 declare global {
@@ -111,7 +111,7 @@ async function load() {
       const bytes = new Uint8Array(info.size);
       let offset = 0;
       while (offset < info.size) {
-        const result = await request("read_3d_part", {filename: info.filename, subfolder: info.subfolder, byte_offset: offset, etag: info.etag, ...(info.delivery_ref ? {delivery_ref:info.delivery_ref} : {})});
+        const result = await request("read_3d_part", {filename: info.filename, subfolder: info.subfolder, byte_offset: offset, etag: info.etag, ...(info.delivery_ref ? {delivery_ref:info.delivery_ref} : {}), ...(info.delivery_route ? {delivery_route:info.delivery_route} : {})});
         if (run !== version) return;
         if (result.isError) throw Error(result.content?.find(item => item.type === "text")?.text || "3Dファイルを取得できませんでした。");
         const meta = result.structuredContent as Record<string, unknown> | undefined;
@@ -120,6 +120,7 @@ async function load() {
             meta.format !== info.format || meta.etag !== info.etag || meta.byte_offset !== offset || typeof data !== "string" ||
             data.length > 4 * Math.ceil(PART / 3)) throw Error("指定した3Dファイルの応答ではありません。");
         if(info.delivery_ref && (meta.delivery_ref as Info["delivery_ref"])?.media_id !== info.delivery_ref.media_id) throw Error("配信コピーが一致しません。");
+        if(!info.delivery_ref && offset===0 && meta.delivery_route==="original") info.delivery_route="original";
         const chunk = Uint8Array.from(atob(data), c => c.charCodeAt(0)), next = offset + chunk.length;
         if (!chunk.length || chunk.length !== meta.byte_length || next > info.size ||
             meta.next_offset !== (next < info.size ? next : null)) throw Error("3Dファイルが不完全です。");

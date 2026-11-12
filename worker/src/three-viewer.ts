@@ -1,7 +1,7 @@
 import {threeViewerScript} from "./generated/three-viewer.ts";
 const inlineScript = threeViewerScript.replaceAll("</script", "<\\/script");
 
-export const THREE_VIEWER_URI = "ui://split/3d-viewer-v2.html";
+export const THREE_VIEWER_URI = "ui://split/3d-viewer-v3.html";
 export const PREVIOUS_THREE_VIEWER_URI = "ui://split/3d-viewer-v1.html";
 export function threeViewerHtml(origin: string, file?: {filename: string; subfolder: string}, deliveryOrigin?:string): string {
   const config = JSON.stringify({origin: new URL(origin).origin, file, deliveryOrigin}).replaceAll("<", "\\u003c");

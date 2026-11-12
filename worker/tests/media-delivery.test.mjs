@@ -72,7 +72,11 @@ test('original-route CLI chunks continue after fallback, and CPU readiness is ch
     const first=await callSplit(control,'get_audio',{prompt_id:job,byte_offset:0},browser,undefined,separate?f.send:undefined,adapter());
     assert.equal(first.isError,undefined,first.content[0].text);assert.equal(first.structuredContent.next_offset,4*1024*1024);
     assert.equal(first.structuredContent.delivery_ref,undefined);assert.equal(startups,separate?0:1);
-    const next=await callSplit(control,'get_audio',{prompt_id:job,byte_offset:first.structuredContent.next_offset},browser,undefined,separate?f.send:undefined,adapter());
+    assert.equal(first.structuredContent.delivery_route,'original');
+    // A copy becoming ready between calls must not change an original-route read.
+    await f.adapter().prepare(f.send,f.files[0]);
+    Object.assign([...f.records.values()][0],{bytes:mediaBytes('audio/wav',5*1024*1024,2),cleansed:true});
+    const next=await callSplit(control,'get_audio',{prompt_id:job,byte_offset:first.structuredContent.next_offset,delivery_route:first.structuredContent.delivery_route},browser,undefined,separate?f.send:undefined,adapter());
     assert.equal(next.isError,undefined);assert.equal(next.structuredContent.next_offset,null);
     assert.equal(startups,separate?0:2);assert.equal(external,1);
     assert.deepEqual(Buffer.from(next.content[1].resource.blob,'base64'),f.files[0].bytes.subarray(4*1024*1024));
@@ -119,8 +123,64 @@ test('source WAV aliases and normalized copy Content-Type preserve format valida
     const broken=fixture();Object.assign(broken.files[0],{kind,filename,mime,bytes:kind==='image'?png:mediaBytes(mime,32)});
     await broken.adapter().prepare(broken.send,broken.files[0]);
     [...broken.records.values()][0].bytes.fill(0);
-    const out=await callSplit(noGeneration,'get_'+kind,kind==='image'?{filename}:{prompt_id:job},browser,undefined,broken.send,broken.adapter());
-    assert.equal(out.isError,true);assert.match(out.content[0].text,/invalid_media_content/);
+    for(let attempt=0;attempt<2;attempt++) {
+      const out=await callSplit(noGeneration,'get_'+kind,kind==='image'?{filename}:{prompt_id:job},browser,undefined,broken.send,broken.adapter());
+      assert.equal(out.isError,undefined);assert.equal(out.structuredContent.delivery_reason,'invalid_media_content');
+      assert.equal(out.structuredContent.delivery_route,'original');assert.equal(new URL(out.structuredContent.url).origin,browser);
+    }
+  }
+});
+
+test('a missing copy reference never splices original bytes into an audio or video continuation',async()=>{
+  for(const [kind,mime,filename] of [['audio','audio/wav','clip.wav'],['video','video/mp4','clip.mp4']]) {
+    const f=fixture();Object.assign(f.files[0],{kind,mime,filename,bytes:mediaBytes(mime,6*1024*1024)});
+    await f.adapter().prepare(f.send,f.files[0]);
+    const copy=[...f.records.values()][0];Object.assign(copy,{bytes:mediaBytes(mime,5*1024*1024,2),cleansed:true});
+    const first=await callSplit(noGeneration,'get_'+kind,{prompt_id:job,byte_offset:0},browser,undefined,f.send,f.adapter());
+    assert.equal(first.isError,undefined);assert.equal(first.structuredContent.size,copy.bytes.length);
+    f.original.length=0;f.calls.length=0;
+    for(const name of ['get_'+kind,`read_${kind}_part`]) {
+      const missing=await callSplit(noGeneration,name,{prompt_id:job,byte_offset:first.structuredContent.next_offset},browser,undefined,f.send,f.adapter());
+      assert.equal(missing.isError,true);assert.match(missing.content[0].text,/delivery_reference_required/);
+    }
+    assert.equal(f.original.length,0);assert.equal(f.calls.length,0);
+    const next=await callSplit(noGeneration,'get_'+kind,{prompt_id:job,byte_offset:first.structuredContent.next_offset,delivery_ref:first.structuredContent.delivery_ref},browser,undefined,f.send,f.adapter());
+    assert.equal(next.isError,undefined);assert.equal(next.structuredContent.next_offset,null);
+    assert.deepEqual(Buffer.concat([first,next].map(r=>Buffer.from(r.content[1].resource.blob,'base64'))),copy.bytes);
+    assert.equal(f.original.length,0);
+  }
+});
+
+test('missing ready content falls back only before selecting a copy and explicit copy reads never fall back',async()=>{
+  const f=fixture();Object.assign(f.files[0],{kind:'audio',mime:'audio/wav',filename:'clip.wav',bytes:mediaBytes('audio/wav',64)});
+  const ready=await f.adapter().prepare(f.send,f.files[0]);
+  const adapter=()=>new MediaDelivery(config,req=>req.method==='GET'?Promise.resolve(new Response(null,{status:404})):f.fetcher(req));
+  for(const chunk of [false,true]) {
+    const result=await callSplit(noGeneration,'get_audio',{prompt_id:job,...(chunk?{byte_offset:0}:{})},browser,undefined,f.send,adapter());
+    assert.equal(result.isError,undefined);assert.equal(result.structuredContent.delivery_route,'original');
+    assert.equal(result.structuredContent.delivery_reason,'copy_changed_or_unavailable');
+  }
+  const ref={...ready,filename:'clip.wav',subfolder:'',prompt_id:job,index:0};
+  for(const offset of [0,16]) {
+    const result=await callSplit(noGeneration,'read_audio_part',{prompt_id:job,byte_offset:offset,delivery_ref:ref},browser,undefined,noGeneration,adapter());
+    assert.equal(result.isError,true);assert.match(result.content[0].text,/copy_changed_or_unavailable/);
+  }
+  const conflict=await callSplit(noGeneration,'get_audio',{prompt_id:job,byte_offset:16,delivery_route:'original',delivery_ref:ref},browser,undefined,noGeneration,adapter());
+  assert.equal(conflict.isError,true);assert.match(conflict.content[0].text,/invalid_delivery_reference/);
+});
+
+test('completed output lookup and HEAD failures preserve retry information without changing job status',async()=>{
+  const control=async path=>path==='/split/startup'?Response.json({ready:true}):Response.json({prompt_id:job,status:'completed'});
+  for(const failed of ['lookup','head']) {
+    const f=fixture(2);f.files[1].filename='unsupported.mov';
+    const adapter=new MediaDelivery(config,async()=>Response.json({error:{code:'service_unavailable',retry_after_seconds:17}},{status:503}));
+    const source=(p,i)=>{if(failed==='head' && i.method==='HEAD')throw new DOMException('timeout','TimeoutError');return f.send(p,i);};
+    const result=await callSplit(control,'get_job_progress',{prompt_id:job},browser,undefined,source,adapter);
+    assert.equal(result.structuredContent.status,'completed');
+    const [retry,unsupported]=result.structuredContent.outputs;
+    assert.equal(retry.delivery_status,'unavailable');assert.equal(retry.retry_after_seconds,failed==='lookup'?17:60);
+    assert.equal(unsupported.delivery_reason,'unsupported_media');assert.equal(unsupported.retry_after_seconds,undefined);
+    assert.equal(result.structuredContent.outputs_next_offset,null);
   }
 });
 
@@ -276,10 +336,17 @@ test('configured tool annotations, output schemas and completion paging expose t
     const {tools}=await rpc('tools/list',{},enabled?f.adapter():undefined);
     for(const name of ['get_image','get_audio','get_video','get_3d','get_job_progress'])assert.equal(tools.find(t=>t.name===name).annotations.readOnlyHint,!enabled);
     assert.equal('outputs_offset' in tools.find(t=>t.name==='get_job_progress').inputSchema.properties,enabled);
+    for(const name of ['get_audio','get_video','read_audio_part','read_video_part','read_3d_part'])
+      assert.equal('delivery_route' in tools.find(t=>t.name===name).inputSchema.properties,enabled);
     assert.equal(tools.find(t=>t.name==='visualize_workflow').annotations.readOnlyHint,true);
   }
   const result=await rpc('tools/call',{name:'get_image',arguments:{filename:f.files[0].filename}},f.adapter());
   assert.equal(result.isError,undefined,JSON.stringify(result));assert.equal(result.structuredContent.delivery_status,'ready');
+  Object.assign(f.files[0],{filename:'clip.wav',mime:'audio/wav',kind:'audio',bytes:mediaBytes('audio/wav',32)});
+  const before=f.calls.length;
+  const original=await rpc('tools/call',{name:'get_audio',arguments:{prompt_id:job,byte_offset:16,delivery_route:'original'}},f.adapter());
+  assert.equal(original.isError,undefined);assert.equal(original.structuredContent.delivery_route,'original');
+  assert.equal(original.structuredContent.byte_offset,16);assert.equal(f.calls.length,before);
 });
 
 

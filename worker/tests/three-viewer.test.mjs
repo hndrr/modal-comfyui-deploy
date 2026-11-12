@@ -65,7 +65,7 @@ test("private parts are assembled without browser authentication, repeats do not
     url:origin+"/view?filename=mesh.glb&subfolder=3d&type=output"};
   const view=app(info,{chunk:args=>{
     const part=bytes.subarray(args.byte_offset,args.byte_offset+THREE_PART_BYTES),next=args.byte_offset+part.length;
-    return {structuredContent:{...info,etag:args.etag,byte_offset:args.byte_offset,byte_length:part.length,next_offset:next<bytes.length?next:null},
+    return {structuredContent:{...info,delivery_route:'original',etag:args.etag,byte_offset:args.byte_offset,byte_length:part.length,next_offset:next<bytes.length?next:null},
       content:[],_meta:{"split/3dPart":part.toString("base64")}};
   }});
   await settle();
@@ -73,6 +73,7 @@ test("private parts are assembled without browser authentication, repeats do not
   assert.equal(view.elements["#viewport"].dataset.state,"ready");
   assert.equal(view.elements["#reset"].disabled,false);
   assert.equal(view.calls.length,2);assert.ok(view.calls.every(x=>x.name==="read_3d_part"));
+  assert.equal(view.calls[0].args.delivery_route,undefined);assert.equal(view.calls[1].args.delivery_route,'original');
   assert.ok(view.calls.every(x=>x.args.etag===info.etag));
   assert.equal(view.elements["#save"].href,info.url);
   view.elements["#save"].onclick();

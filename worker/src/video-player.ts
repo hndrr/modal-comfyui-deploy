@@ -1,7 +1,7 @@
 // Use MCP authentication for bounded playback; large files retain the browser stream.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v9.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v10.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v9.html","ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
 export const playerHtml = (browserOrigin:string, deliveryOrigin?:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -72,6 +72,7 @@ async function load(){
     do{
       const args={prompt_id:info.prompt_id,index:info.index??0,byte_offset:offset};
       if(info.delivery_ref)args.delivery_ref=info.delivery_ref;
+      if(info.delivery_route)args.delivery_route=info.delivery_route;
       const result=await (serverTools || !window.openai?.callTool ? request("tools/call",{name:"read_video_part",arguments:args}) : window.openai.callTool("read_video_part",args));
       if(run!==version)return;
       if(result.isError){
@@ -84,6 +85,7 @@ async function load(){
       const meta=result.structuredContent,data=result._meta?.["split/videoPart"];
       if(!meta || meta.prompt_id!==info.prompt_id || meta.index!==(info.index??0))throw Error("指定した動画の応答ではありません。");
       if(info.delivery_ref && (meta.delivery_ref?.media_id!==info.delivery_ref.media_id || meta.delivery_ref?.etag!==info.delivery_ref.etag))throw Error("配信コピーの版が変わりました。作品を再取得してください。");
+      if(!info.delivery_ref && offset===0 && meta.delivery_route==="original") info.delivery_route="original";
       if(info.delivery==="starting"){
         current=info={...meta,delivery:"player"};setLink(info);
         if(info.size>limit && !link.hidden){play();return;}

@@ -170,8 +170,8 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     callSplit(send,name,args,origin || browserOrigin,hosts,mediaSend,delivery);
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
   const deliveryRead=delivery ? {...read,readOnlyHint:false,idempotentHint:true,openWorldHint:true} : read;
-  const deliveryNote=delivery ? " Prepares a private external delivery copy on demand. Forward delivery_ref unchanged when reading subsequent parts." : "";
-  const deliveryInput: z.ZodRawShape=delivery ? {delivery_ref:deliveryRefSchema.optional()} : {};
+  const deliveryNote=delivery ? " Prepares a private external delivery copy on demand. Forward delivery_ref unchanged when reading subsequent parts, or delivery_route: original when returned by a fallback. Never omit the returned route/reference on continuation; restart at byte_offset 0 if lost." : "";
+  const deliveryInput: z.ZodRawShape=delivery ? {delivery_ref:deliveryRefSchema.optional(),delivery_route:deliveryOutput.delivery_route} : {};
   const deliveryFields: z.ZodRawShape=delivery ? deliveryOutput : {};
   server.registerTool("calculate",{description:"Calculate dimensions, seeds or a batch of numeric expressions.",annotations:read,
     inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>call("calculate",a));
@@ -215,7 +215,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate."+deliveryNote,annotations:deliveryRead,
     _meta:{ui:{resourceUri:IMAGE_VIEWER_URI},"openai/outputTemplate":IMAGE_VIEWER_URI},
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:{...imageOutput,...deliveryFields}},a=>call("get_image",a));
-  for(const [i,uri] of [THREE_VIEWER_URI,PREVIOUS_THREE_VIEWER_URI].entries())
+  for(const [i,uri] of [THREE_VIEWER_URI,"ui://split/3d-viewer-v2.html",PREVIOUS_THREE_VIEWER_URI].entries())
   server.registerResource("3d-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
     contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.origin),_meta:{
       ui:{csp:{connectDomains:["blob:","data:"],resourceDomains:["blob:","data:"]}},

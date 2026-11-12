@@ -2,8 +2,8 @@
 // fetch /view from the iframe, or publish an output to an unprotected URL.
 import {audioBudgetScript} from "./audio-budget.ts";
 import {AUDIO_PART_BYTES} from "./media.ts";
-export const AUDIO_PLAYER_URI = "ui://split/audio-player-v5.html";
-export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
+export const AUDIO_PLAYER_URI = "ui://split/audio-player-v6.html";
+export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v5.html","ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
 export const audioPlayerHtml = `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した音声</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}input{flex:1;min-width:4rem}output{font-variant-numeric:tabular-nums}a{color:LinkText}</style>
@@ -85,6 +85,7 @@ async function load(automatic=false){
     do {
       const args={prompt_id:info.prompt_id,index:info.index,byte_offset:offset};
       if(info.delivery_ref)args.delivery_ref=info.delivery_ref;
+      if(info.delivery_route)args.delivery_route=info.delivery_route;
       const result=await (serverTools || !window.openai?.callTool ? request("tools/call",{name:"read_audio_part",arguments:args}) :
         window.openai.callTool("read_audio_part",args));
       if(run!==version)return;
@@ -98,6 +99,7 @@ async function load(automatic=false){
       const meta=result.structuredContent, data=result._meta?.["split/audioPart"];
       if(!meta || meta.prompt_id!==info.prompt_id || meta.index!==info.index) throw Error("指定した音声の応答ではありません。");
       if(info.delivery_ref && (meta.delivery_ref?.media_id!==info.delivery_ref.media_id || meta.delivery_ref?.etag!==info.delivery_ref.etag))throw Error("配信コピーの版が変わりました。作品を再取得してください。");
+      if(!info.delivery_ref && offset===0 && meta.delivery_route==="original") info.delivery_route="original";
       if(info.delivery==="starting"){
         current=info={...meta,delivery:"player"};setLink(info);
         if(!sizePolicy(info,automatic))return;
