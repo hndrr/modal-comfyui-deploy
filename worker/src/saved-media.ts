@@ -1,7 +1,7 @@
 import type {CallToolResult} from "@modelcontextprotocol/sdk/types.js";
 import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
-import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
+import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, mediaHeaderValid, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
 import {get3D} from "./three-media.ts";
 import {MediaDelivery} from "./media-delivery.ts";
 import {deliveryOutputs} from "./delivered-media.ts";
@@ -64,9 +64,7 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
       filename+" — use the inline image viewer; no separate website login is needed. Give this link only if the viewer is unavailable or opening/saving is requested (website login required): "+url :
       "This image exceeds 8 MiB. Open or save it after signing in: "+url}]};
   if (!bytes) return result;
-  const tag=(at:number,s:string)=>s.split("").every((c,i)=>bytes[at+i]===c.charCodeAt(0));
-  if (!(ext==="png" ? bytes[0]===137 && tag(1,"PNG\r\n\x1a\n") :
-        ext==="webp" ? tag(0,"RIFF") && tag(8,"WEBP") : bytes[0]===255 && bytes[1]===216 && bytes[2]===255))
+  if (!mediaHeaderValid(mime,bytes))
     return failure("Saved image content does not match its format.");
   result.content.unshift({type:"image",mimeType:mime,data:base64(bytes)});
   return result;

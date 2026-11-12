@@ -43,7 +43,7 @@
 1. `get_image` / `get_3d` はファイル名、`get_audio` / `get_video` は完了履歴と種類別番号から原本を解決する。
 2. 原本をHEADし、ETag・サイズ・MIMEを取得する。`output_path` は出力ルート相対パスで、隠しパス・パス逸脱を拒否する。
 3. lookupがreadyならコピーを再利用する。原本の本体GET・PUTは0件。版確認のHEADは行う。
-4. missing/pendingなら登録して現在の状態・予約を確認する。upload_requiredの時だけ原本をGETし、ストリームをPUTする。GETは原本ETagを `If-Range` に指定し、取得ヘッダーを照合する。転送後にもHEADで原本の版を確認する。
+4. pendingなら再試行情報を返し、登録を繰り返さない。missingなら登録して現在の状態・予約を確認する。upload_requiredの時だけ原本をGETし、ストリームをPUTする。GETは原本ETagを `If-Range` に指定し、取得ヘッダーを照合する。転送後にもHEADで原本の版を確認する。
 5. readyの本人用URLを本文と `structuredContent.url` に返す。原本ETagとコピーETagは別物で、表示にはAPIが返した現在のコピーのMIME・サイズ・ETagを使う。提供側でメタデータ除去により置換済みでも原本を上書き転送しない。
 
 PUTの応答が失われた場合も、次回lookup/登録から再開する。生成を再投入しない。配信用CPU設定 `SPLIT_MEDIA_ORIGIN` があれば原本取得はそのCPUを使い、なければ既存のComfyUI経路を使う。
@@ -52,17 +52,21 @@ PUTの応答が失われた場合も、次回lookup/登録から再開する。�
 
 `enqueue_workflow` の受付・承認待ちは変更しない。`get_job_progress` がcompletedの時だけ、出力一覧の最大4件を同じ準備処理へ渡す。`outputs` と `outputs_next_offset` を返し、続きは任意引数 `outputs_offset` で取得する。失敗した出力にも原本の認証付きURLと理由を残し、completedや成功済みの出力を消さない。準備中の項目は同じページを再照会する。
 
-`list_outputs` は原本HEADと最大24件ずつのlookupだけを行う。準備済みコピーにURL・ETag・サイズ・MIMEを追加し、欠落から登録・転送は始めない。
+`list_outputs` は原本HEADと最大24件ずつのlookupだけを行う。HEADは最大6件ずつ並行し、completedの出力準備でもlookupをまとめる。準備済みコピーにURL・ETag・サイズ・MIMEを追加し、欠落から登録・転送は始めない。missingの理由は `not_found` / `expired` / `upload_failed` を保持する。
+
+外部APIの制約としてファイル名255文字、サブフォルダ768文字、ETag256文字を検証する。原本経路の制約と異なるため、外れた項目だけを配信不可とし、一覧全体や他の出力を失敗させない。原本の `audio/x-wav`・`audio/vnd.wave`・`audio/x-flac`・`audio/opus`・`application/ogg` は対応する契約MIMEへ正規化する。任意のMIME不一致は許容しない。
 
 設定有効時だけ、コピー作成が発生する4取得ツールと `get_job_progress` に説明を追加し、`readOnlyHint: false`, `idempotentHint: true`, `openWorldHint: true` とする。
 
 ## プレイヤーと失敗時の動作
 
-画像は既存のインライン表示を維持する。音声・動画・3Dの初回応答に `delivery_ref`（ファイル名・サブフォルダ・media_id・配信ETag・MIME・サイズ）を付ける。プレイヤーはこの参照を変更せず内部の `read_audio_part` / `read_video_part` / `read_3d_part` へ渡し、続きはModal履歴や原本を再取得しない。CLIの音声・動画のチャンク取得でも `delivery_ref` を引き継ぐ。
+画像は既存のインライン表示を維持する。音声・動画・3Dの初回応答に `delivery_ref`（ファイル名・サブフォルダ・media_id・配信ETag・MIME・サイズ、音声・動画はprompt_id・indexも）を付ける。プレイヤーはこの参照を変更せず内部の `read_audio_part` / `read_video_part` / `read_3d_part` へ渡し、続きはModal履歴や原本を再取得しない。別ジョブや番号の参照は拒否し、対応付けのない旧参照は作品の再取得を案内する。CLIの音声・動画のチャンク取得でも `delivery_ref` を引き継ぐ。
+
+画像のインライン表示と音声・動画の先頭取得では、コピーのMIMEに対応する形式ヘッダーを検証する。音声・動画のプレイヤー応答はコピーの先頭16バイトだけを取得する。小さなチャンクは、ヘッダーが含まれる範囲で検証する。GLB/SPZの解析は既存3Dビューアーの境界で行う。
 
 チャンクの版・サイズ・Rangeが変わったらエラーにし、作品の再取得を案内する。原本のバイトへ途中で切り替えない。ブラウザはサービス間トークンを持たず、配信URLを直接fetchしたり `/api/view` に書き換えたりしない。本人用ページへのリンクとして扱う。3Dの描画は本体の既存ビューアーを使う。
 
-準備中は再試行情報を返す。初回準備の容量・形式制限、サービス障害は理由を添えて既存の原本取得へ戻す。配信コピーの読取中の障害では再取得を案内する。すでに開いた旧プレイヤーの参照なしチャンク要求は従来経路を維持する。
+準備中は再試行情報を返す。初回準備の容量・形式制限、サービス障害は理由を添えて既存の原本取得へ戻す。配信コピーの読取中の障害では再取得を案内する。すでに開いた旧プレイヤー、および原本にフォールバックしたCLIの参照なしチャンク要求は従来経路を維持する。恒久的な検証エラーに準備中フラグや再試行秒数を付けない。
 
 Secretを削除すると新しいMCP応答は既存経路へ戻る。既存コピーや外部サービスのリンクを自動削除しない。配信側の停止・削除は提供側で行う。
 

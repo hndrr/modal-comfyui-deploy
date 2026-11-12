@@ -7,8 +7,14 @@ import {deliveryOutputs} from '../src/delivered-media.ts';
 
 const origin='https://media.example.test', browser='https://split.example.test', token='x'.repeat(64);
 const config=JSON.stringify({origin,source_id:'test',token});
-const job='11111111-1111-4111-8111-111111111111';
+const job='abcdef12-1111-4111-8111-111111111111';
 const png=Buffer.from('89504e470d0a1a0a0000000000000000','hex');
+function mediaBytes(mime,size,fill=1) {
+  const bytes=Buffer.alloc(size,fill);
+  if(mime==='audio/wav') {bytes.write('RIFF',0);bytes.write('WAVE',8);}
+  if(mime==='video/mp4') bytes.write('ftyp',4);
+  return bytes;
+}
 function fixture(count=1){
   const records=new Map(),calls=[],original=[];
   const files=Array.from({length:count},(_,index)=>({filename:`image${index}.png`,subfolder:'',index,kind:'image',mime:'image/png',bytes:png,etag:'"source-v1"'}));
@@ -44,7 +50,7 @@ function fixture(count=1){
   const send=async(path,init)=>{
     original.push({path,method:init.method});
     const url=new URL(path,browser);
-    if(path==='/history/'+job)return Response.json({[job]:{status:{completed:true,status_str:'success'},outputs:{node:{images:files.map(f=>({...f,type:'output'}))}}}});
+    if(path==='/history/'+job)return Response.json({[job]:{status:{completed:true,status_str:'success'},outputs:{node:{images:files.map(({filename,subfolder})=>({filename,subfolder,type:'output'}))}}}});
     if(url.pathname==='/outputs/'+job){const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||50);return Response.json({items:files.slice(offset,offset+limit).map(({index,filename,subfolder,kind})=>({index,filename,subfolder,kind})),total:files.length,next_offset:offset+limit<files.length?offset+limit:null});}
     assert.equal(url.pathname,'/view');const f=files.find(x=>x.filename===url.searchParams.get('filename'));assert.ok(f);
     const headers={'Content-Type':f.mime,'Content-Length':String(f.bytes.length),ETag:f.etag};
@@ -56,6 +62,74 @@ function fixture(count=1){
   return {records,calls,original,files,fetcher,send,adapter:()=>new MediaDelivery(config,fetcher)};
 }
 const noGeneration=async()=>{throw Error('Unexpected Modal control-plane request');};
+
+test('original-route CLI chunks continue after fallback, and CPU readiness is checked only once per call',async()=>{
+  for(const separate of [true,false]) {
+    const f=fixture();Object.assign(f.files[0],{kind:'audio',filename:'clip.wav',mime:'audio/wav',bytes:mediaBytes('audio/wav',6*1024*1024)});
+    let startups=0,external=0;
+    const control=async(p,i)=>p==='/split/startup'?(startups++,Response.json({ready:true})):f.send(p,i);
+    const adapter=()=>new MediaDelivery(config,async()=>{external++;return new Response(null,{status:503});});
+    const first=await callSplit(control,'get_audio',{prompt_id:job,byte_offset:0},browser,undefined,separate?f.send:undefined,adapter());
+    assert.equal(first.isError,undefined,first.content[0].text);assert.equal(first.structuredContent.next_offset,4*1024*1024);
+    assert.equal(first.structuredContent.delivery_ref,undefined);assert.equal(startups,separate?0:1);
+    const next=await callSplit(control,'get_audio',{prompt_id:job,byte_offset:first.structuredContent.next_offset},browser,undefined,separate?f.send:undefined,adapter());
+    assert.equal(next.isError,undefined);assert.equal(next.structuredContent.next_offset,null);
+    assert.equal(startups,separate?0:2);assert.equal(external,1);
+    assert.deepEqual(Buffer.from(next.content[1].resource.blob,'base64'),f.files[0].bytes.subarray(4*1024*1024));
+  }
+});
+
+test('copy references cannot be reused for another audio output or job',async()=>{
+  const f=fixture();Object.assign(f.files[0],{kind:'audio',filename:'clip.wav',mime:'audio/wav',bytes:mediaBytes('audio/wav',32)});
+  const first=await callSplit(noGeneration,'get_audio',{prompt_id:job},browser,undefined,f.send,f.adapter());
+  assert.equal(first.isError,undefined);const ref=first.structuredContent.delivery_ref;
+  f.calls.length=0;f.original.length=0;
+  for(const args of [{prompt_id:job,index:1},{prompt_id:randomUUID()},{prompt_id:job,delivery_ref:{...ref,media_id:'bad'}}]) {
+    const result=await callSplit(noGeneration,'read_audio_part',{delivery_ref:ref,byte_offset:0,...args},browser,undefined,f.send,f.adapter());
+    assert.equal(result.isError,true);assert.equal(result._meta,undefined);
+  }
+  assert.equal(f.calls.length,0);assert.equal(f.original.length,0);
+});
+
+test('source paths outside the service contract fall back individually without a retry loop',async()=>{
+  const f=fixture(3);f.files[1].subfolder=Array(4).fill('a'.repeat(200)).join('/');
+  for(const prepare of [false,true]) {
+    const out=await deliveryOutputs(f.adapter(),f.send,{items:f.files,total:3,next_offset:null},prepare,browser);
+    assert.equal(out.items.length,3);assert.equal(out.items[1].delivery_status,'unavailable');
+    assert.equal(out.items[1].delivery_reason,'invalid_media_reference');assert.equal(out.items[1].retry_after_seconds,undefined);
+    assert.equal(out.items[0].delivery_status,prepare?'ready':'unavailable');
+    assert.equal(new URL(out.items[1].url).origin,browser);
+  }
+  Object.assign(f.files[0],{kind:'audio',filename:'clip.wav',mime:'audio/wav',subfolder:'.hidden',bytes:mediaBytes('audio/wav',32)});
+  const result=await callSplit(noGeneration,'get_audio',{prompt_id:job},browser,undefined,f.send,f.adapter());
+  assert.equal(result.isError,undefined);assert.equal(result.structuredContent.delivery_reason,'invalid_media_reference');assert.equal(result._meta,undefined);
+});
+
+test('source WAV aliases and normalized copy Content-Type preserve format validation',async()=>{
+  const f=fixture();Object.assign(f.files[0],{kind:'audio',filename:'clip.wav',mime:'audio/x-wav',bytes:mediaBytes('audio/wav',32)});
+  const adapter=new MediaDelivery(config,async req=>{
+    const response=await f.fetcher(req);
+    if(req.method==='GET')response.headers.set('Content-Type','Audio/WAV ; charset=binary');
+    return response;
+  });
+  const result=await callSplit(noGeneration,'get_audio',{prompt_id:job},browser,undefined,f.send,adapter);
+  assert.equal(result.isError,undefined);assert.equal(result.structuredContent.mimeType,'audio/wav');
+  assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+  for(const [kind,filename,mime] of [['image','image0.png','image/png'],['audio','clip.wav','audio/wav'],['video','clip.mp4','video/mp4']]) {
+    const broken=fixture();Object.assign(broken.files[0],{kind,filename,mime,bytes:kind==='image'?png:mediaBytes(mime,32)});
+    await broken.adapter().prepare(broken.send,broken.files[0]);
+    [...broken.records.values()][0].bytes.fill(0);
+    const out=await callSplit(noGeneration,'get_'+kind,kind==='image'?{filename}:{prompt_id:job},browser,undefined,broken.send,broken.adapter());
+    assert.equal(out.isError,true);assert.match(out.content[0].text,/invalid_media_content/);
+  }
+});
+
+test('uppercase completed job IDs resolve output pages using the canonical lowercase ID',async()=>{
+  const f=fixture();
+  const control=async path=>path==='/split/startup'?Response.json({ready:true}):Response.json({prompt_id:job,status:'completed'});
+  const result=await callSplit(control,'get_job_progress',{prompt_id:job.toUpperCase()},browser,undefined,f.send,f.adapter());
+  assert.equal(result.structuredContent.status,'completed');assert.equal(result.structuredContent.outputs[0].delivery_status,'ready');
+});
 
 test('fixed configuration rejects unsafe origins and invalid credentials before any fetch',()=>{
   for(const origin of ['http://media.example.test','https://u:p@media.example.test','https://media.example.test/path','https://media.example.test?x=1','https://media.example.test:8443'])
@@ -89,7 +163,7 @@ test('expired copies recopy the original without resubmitting generation',async(
 
 test('audio, video, GLB and SPZ parts read only the selected external copy and pin its version',async()=>{
   for(const [kind,filename,mime] of [['audio','clip.wav','audio/wav'],['video','clip.mp4','video/mp4'],['3d','model.glb','model/gltf-binary'],['3d','model.spz','application/octet-stream']]){
-    const f=fixture();Object.assign(f.files[0],{kind,filename,mime,bytes:Buffer.alloc(600000,1)});
+    const f=fixture();Object.assign(f.files[0],{kind,filename,mime,bytes:mediaBytes(mime,600000)});
     const args=kind==='3d'?{filename}:{prompt_id:job};
     const first=await callSplit(noGeneration,'get_'+kind,args,browser,undefined,f.send,f.adapter());
     assert.equal(first.isError,undefined,JSON.stringify(first));assert.ok(first.structuredContent.delivery_ref);
@@ -112,18 +186,18 @@ test('current cleansed metadata is authoritative while lookup still uses the ori
 
 test('job-based retrieval detects an overwritten output even while the previous copy is ready',async()=>{
   for(const [kind,filename,mime] of [['audio','clip.wav','audio/wav'],['video','clip.mp4','video/mp4']]){
-    const f=fixture();Object.assign(f.files[0],{kind,filename,mime,bytes:Buffer.alloc(16,1)});
+    const f=fixture();Object.assign(f.files[0],{kind,filename,mime,bytes:mediaBytes(mime,16)});
     const args={prompt_id:job};
     const first=await callSplit(noGeneration,'get_'+kind,args,browser,undefined,f.send,f.adapter());
     assert.equal(first.isError,undefined);
     const oldCopy=[...f.records.values()][0];
-    Object.assign(f.files[0],{etag:'"source-v2"',bytes:Buffer.alloc(24,2)});
+    Object.assign(f.files[0],{etag:'"source-v2"',bytes:mediaBytes(mime,24,2)});
     f.original.length=0;
     const current=await callSplit(noGeneration,'get_'+kind,args,browser,undefined,f.send,f.adapter());
     assert.equal(current.isError,undefined);assert.equal(current.structuredContent.delivery_status,'ready');
     assert.notEqual(current.structuredContent.delivery_ref.media_id,first.structuredContent.delivery_ref.media_id);
     assert.equal(current.structuredContent.size,24);assert.equal(f.records.size,2);
-    assert.equal(oldCopy.state,'ready');assert.deepEqual(oldCopy.bytes,Buffer.alloc(16,1));
+    assert.equal(oldCopy.state,'ready');assert.deepEqual(oldCopy.bytes,mediaBytes(mime,16));
     assert.equal(f.original.filter(c=>c.method==='GET' && c.path.startsWith('/view?')).length,1);
     assert.equal(f.calls.filter(c=>c.method==='PUT').length,2);
     f.original.length=0;
@@ -137,7 +211,7 @@ test('job-based retrieval detects an overwritten output even while the previous 
 test('pending transfer does not start another PUT or return a premature URL',async()=>{
   const f=fixture();const adapter=new MediaDelivery(config,async req=>{
     if(req.url.endsWith('/lookup'))return Response.json({results:[{status:'pending',media_id:job,retry_after_seconds:60}]});
-    assert.equal(req.method,'POST');return Response.json({status:'pending',media_id:job,retry_after_seconds:60});
+    assert.fail('Pending copies must not be registered or uploaded again');
   });
   const result=await callSplit(noGeneration,'get_image',{filename:f.files[0].filename},browser,undefined,f.send,adapter);
   assert.equal(result.isError,true);assert.equal(result._meta.retry_after_seconds,60);
@@ -174,6 +248,7 @@ test('output listing caps pages at 32 and splits lookup into 24/8 without writin
   const result=await callSplit(noGeneration,'list_outputs',{prompt_id:job,limit:100},browser,undefined,f.send,f.adapter());
   const out=JSON.parse(result.content[0].text);
   assert.equal(out.items.length,32);assert.equal(out.next_offset,32);assert.equal(f.calls.length,2);
+  assert.equal(out.items[0].delivery_reason,'not_found');
   assert.ok(f.calls.every(c=>c.path==='/v1/media/lookup'));
   assert.equal(f.original.filter(c=>c.method==='GET' && c.path.startsWith('/view')).length,0);
   assert.equal(f.original.filter(c=>c.method==='HEAD').length,32);
@@ -188,6 +263,7 @@ test('completed progress prepares four outputs, retains failures and pages witho
   const next=await callSplit(control,'get_job_progress',{prompt_id:job,outputs_offset:4},browser,undefined,f.send,f.adapter());
   assert.equal(next.structuredContent.outputs.length,1);assert.equal(next.structuredContent.outputs_next_offset,null);
   assert.equal(f.calls.filter(c=>c.method==='PUT').length,4);
+  assert.equal(f.calls.filter(c=>c.path==='/v1/media/lookup').length,2);
 });
 
 test('configured tool annotations, output schemas and completion paging expose the actual contract',async()=>{
