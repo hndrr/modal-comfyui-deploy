@@ -2,10 +2,11 @@ import type {CallToolResult} from "@modelcontextprotocol/sdk/types.js";
 import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
 import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
+import {get3D} from "./three-media.ts";
 
 type Send = (path:string, init:RequestInit) => Promise<Response>;
 const failure=(text:string):CallToolResult=>({isError:true,content:[{type:"text",text}]});
-export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","read_video_part","list_outputs"]);
+export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","read_video_part","get_3d","read_3d_part","list_outputs"]);
 export const imageOutput={filename:z.string(),mimeType:z.enum(["image/png","image/jpeg","image/webp"]),
   url:z.url(),delivery:z.enum(["inline","link"])};
 
@@ -30,9 +31,12 @@ export function mediaSender(raw:string, hostname:string, credentials:Headers):Se
 }
 
 // Keep original browser requests outside these formats on the ComfyUI route.
-const savedExtensions=new Set(["png","jpg","jpeg","webp","gif","mp3","wav","flac","ogg","opus","m4a","mp4","mov","webm","mkv"]);
+const savedExtensions=new Set(["png","jpg","jpeg","webp","gif","mp3","wav","flac","ogg","opus","m4a","mp4","mov","webm","mkv","glb","spz"]);
 export function savedOutputRequest(request:Request):boolean {
   const url=new URL(request.url),q=url.searchParams;
+  // Archived previews remain readable by the ComfyUI route, whose output root
+  // includes .split-temp. The saved-media server deliberately rejects dot paths.
+  if ((q.get("subfolder") || "").split("/")[0] === ".split-temp") return false;
   return ["GET","HEAD"].includes(request.method) && ["/view","/api/view"].includes(url.pathname) &&
     (q.get("type") || "output")==="output" && !q.has("preview") && !q.has("channel") &&
     savedExtensions.has((q.get("filename") || "").split(".").at(-1)!.toLowerCase());
@@ -69,6 +73,7 @@ async function image(send:Send,origin:string,args:Record<string,unknown>):Promis
 export async function callSavedMedia(send:Send,name:string,args:Record<string,unknown>,origin:string):Promise<CallToolResult> {
   try {
     if(typeof args.prompt_id==="string")args={...args,prompt_id:args.prompt_id.toLowerCase()};
+    if (name==="get_3d" || name==="read_3d_part") return await get3D(send,origin,args,name==="read_3d_part");
     if (name==="get_image") return await image(send,origin,args);
     if (name==="list_outputs") {
       const values=z.object({prompt_id:z.uuid(),offset:z.number().int().min(0).default(0),

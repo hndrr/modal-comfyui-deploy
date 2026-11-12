@@ -112,7 +112,7 @@
 
 ## 保存済みメディア配信用 CPU（mediaapp）の設定
 
-過去の生成画像・音声・動画の参照を独立した配信用 CPU（`comfy_split/mediaapp.py`）へ分離することで、ComfyUI 本体の CPU を起動させずにメディアを高速配信できます。
+過去の生成画像・音声・動画・通常保存されたGLB/SPZの参照を独立した配信用 CPU（`comfy_split/mediaapp.py`）へ分離することで、ComfyUI 本体の CPU を起動させずにメディアを高速配信できます。
 
 `<MEDIA_MODAL_ORIGIN>` は `comfy_split/mediaapp.py` のデプロイ出力に表示される Web URL です（パスと末尾の `/` は除きます）。
 
@@ -120,7 +120,7 @@
 1. **索引の作成と mediaapp デプロイ**:
    - 既存の split と同じ Modal プロファイル・環境で、更新済みの `splitapp.py` をデプロイし、一度 CPU を起動します（起動時に既存台帳からジョブ別の保存記録と索引を作成します）。
    - 続いて `scripts/modal.sh deploy -m comfy_split.mediaapp` を実行します（既存の output / data / models Volume を参照し、モデルはメタデータのみ読み込みます）。
-2. **Worker のデプロイ**: Worker のテスト・型検査後、新しいコードをデプロイします。
+2. **Worker のデプロイ**: テスト・型検査後、`worker/` で `npm run deploy` を実行します。ビューアーも自動でビルドされます。
 3. **Worker へのシークレット登録**:
    Worker のシークレット `SPLIT_MEDIA_ORIGIN` に以下を登録します（認証情報は既存 split の Proxy Auth を再利用します）。
    ```json
@@ -128,7 +128,7 @@
    ```
 4. **配信と停止の検証**:
    - Modal の直接 URL が未認証アクセスで拒否されることを確認します。
-   - split CPU / GPU がともに 0 台の状態で、MCP 経由の出力一覧、画像・音声・動画、モデル一覧、ワークフロー一覧・JSON、履歴が取得できることを確認します（この間、配信用 CPU のみが起動します）。
+   - split CPU / GPU がともに 0 台の状態で、MCP 経由の出力一覧、画像・音声・動画・GLB/SPZ、モデル一覧、ワークフロー一覧・JSON、履歴が取得できることを確認します（この間、配信用 CPU のみが起動します）。
    - 通常・途中・末尾の Range リクエストを検証し、取得停止後は配信用 CPU も 0 台へ戻ることを確認します。
 
 ### 対応フォーマットと読み込み仕様
@@ -136,7 +136,8 @@
   - 画像: PNG, JPEG, WebP, GIF
   - 音声: MP3, WAV, FLAC, Ogg, Opus, M4A
   - 動画: MP4, MOV, WebM, MKV
-- **非対応フォーマット**: GLB、SVG など未対応の形式や、入力・一時プレビュー・画像変換処理は従来の ComfyUI 経路で配信されます（詳細は [メディア配信の設計](../design/split-media-delivery.md) を参照）。
+  - 3D: GLB, SPZ
+- **ComfyUI経路の対象**: SVGなど未対応の形式、入力・一時プレビュー・`.split-temp` 配下・画像変換処理は従来のComfyUI経路で配信します（詳細は [メディア配信の設計](../design/split-media-delivery.md) を参照）。
 - **履歴読み込みの軽量化**:
   - 保存済み履歴は `data/state/saved-jobs.jsonl` と `data/state/saved-jobs/` を使用してジョブ単位で取得されます。
   - これにより、台帳ファイル `controller.json` が 32 MiB を超えている場合でも安全に取得できます（旧形式の互換読み込み上限は 32 MiB）。
