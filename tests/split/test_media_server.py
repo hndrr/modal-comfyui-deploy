@@ -89,6 +89,52 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.request(method="POST"))[0], 405)
         self.reload.assert_not_called()
 
+    async def test_3d_outputs_serve_original_bytes_with_head_and_ranges(self):
+        folder = self.output / "models"
+        folder.mkdir()
+        for name, mime, content in (
+            ("mesh.GLB", b"model/gltf-binary", b"glTF" + bytes(range(32))),
+            ("points.spz", b"application/octet-stream", b"\x1f\x8b" + bytes(range(32))),
+        ):
+            with self.subTest(name=name):
+                (folder / name).write_bytes(content)
+                query = f"type=output&subfolder=models&filename={name}"
+                code, headers, body, _ = await self.request(query=query)
+                self.assertEqual((code, headers[b"content-type"], body), (200, mime, content))
+                self.assertEqual(headers[b"x-content-type-options"], b"nosniff")
+                code, headers, body, _ = await self.request(query=query, method="HEAD")
+                self.assertEqual((code, headers[b"content-length"], body),
+                                 (200, str(len(content)).encode(), b""))
+                code, headers, body, _ = await self.request(query=query, headers=[(b"range", b"bytes=2-7")])
+                self.assertEqual((code, headers[b"content-type"], body), (206, mime, content[2:8]))
+                self.assertEqual(headers[b"content-range"], f"bytes 2-7/{len(content)}".encode())
+
+    async def test_3d_output_rows_exclude_temp_archives_and_unsupported_files(self):
+        self.job["history"]["outputs"]["5"] = {"3d": [
+            dict(filename="mesh.GLB", subfolder="models", type="output"),
+            dict(filename="points.spz", subfolder="", type="output"),
+            dict(filename="archived.glb", subfolder=".split-temp/session", type="output"),
+            dict(filename="preview.spz", subfolder="", type="temp"),
+            dict(filename="other.ply", subfolder="", type="output"),
+        ], "camera": [{"position": [1, 2, 3]}], "transform": [{"scale": 1}]}
+        (self.data / "jobs" / (self.id + ".json")).write_text(json.dumps(self.job))
+        expected = [
+            dict(index=0, node_id="4", filename="音 楽.wav", subfolder="", kind="audio"),
+            dict(index=1, node_id="5", filename="mesh.GLB", subfolder="models", kind="3d"),
+            dict(index=2, node_id="5", filename="points.spz", subfolder="", kind="3d"),
+        ]
+        self.assertEqual(outputs(self.job), expected)
+        code, _, body, _ = await self.request(path="/outputs/" + self.id, query="offset=1&limit=1")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body), dict(prompt_id=self.id, status="completed",
+                         items=expected[1:2], total=3, next_offset=2))
+        archive = self.output / ".split-temp/session"
+        archive.mkdir(parents=True)
+        (archive / "archived.glb").write_bytes(b"private archive")
+        code, _, body, _ = await self.request(query="filename=archived.glb&subfolder=.split-temp/session")
+        self.assertEqual(code, 400)
+        self.assertNotIn(b"private archive", body)
+
     async def test_saved_metadata_is_minimal_and_indexes_match_existing_tools(self):
         code, _, body, _ = await self.request(path="/history/" + self.id, query="")
         self.assertEqual(code, 200)

@@ -75,11 +75,14 @@ test("image links work for small and oversized files, including the legacy Comfy
 });
 
 test("only original output requests qualify, never inputs, transforms or other routes",()=>{
-  for(const path of ["/view?filename=a.wav&type=output","/api/view?filename=a.mp4","/view?filename=a.png&utm_source=chat","/view?filename=a.GIF"])
+  for(const path of ["/view?filename=a.wav&type=output","/api/view?filename=a.mp4","/view?filename=a.png&utm_source=chat","/view?filename=a.GIF",
+    "/view?filename=scene.glb&type=output&subfolder=3d/ComfyUI","/api/view?filename=scene.SPZ"])
     assert.ok(savedOutputRequest(new Request(host+path)));
   for(const path of ["/view?filename=a.wav&type=input","/view?filename=a.wav&type=temp","/view?filename=a.png&preview=webp",
     "/view?filename=a.png&channel=rgb","/assets/a.js","/models/checkpoints",
-    "/view?filename=scene.glb&type=output","/api/view?filename=vector.svg","/view?filename=a.bmp"])
+    "/view?filename=scene.glb&type=temp","/view?filename=scene.spz&type=input",
+    "/view?filename=scene.glb&type=output&subfolder=.split-temp/run","/view?filename=a.png&subfolder=.split-temp/run",
+    "/api/view?filename=vector.svg","/view?filename=a.bmp"])
     assert.equal(savedOutputRequest(new Request(host+path)),false);
 });
 
@@ -117,7 +120,8 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
     if(r===team+"/cdn-cgi/access/certs")return Response.json({keys});
     hits.push(r);
     const extension=new URL(r.url).searchParams.get("filename")?.split(".").at(-1);
-    assert.equal(new URL(r.url).origin,["glb","svg","bmp"].includes(extension)?origin:delivery);
+    const folder=new URL(r.url).searchParams.get("subfolder");
+    assert.equal(new URL(r.url).origin,["svg","bmp"].includes(extension) || folder?.startsWith(".split-temp/") ?origin:delivery);
     assert.equal(r.headers.get("CF-Access-Jwt-Assertion"),null);
     assert.equal(r.headers.get("Cookie"),null);
     if(new URL(r.url).pathname.startsWith("/history/"))return Response.json({[id]:{status:{status_str:"success",completed:true},
@@ -143,8 +147,17 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
   assert.equal(image.result.structuredContent.delivery,"inline");
   assert.deepEqual(Buffer.from(image.result.content[0].data,"base64"),png);
   assert.ok(image.result.content.find(c=>c.type==="text").text.includes(image.result.structuredContent.url));
-  for(const ext of ["gif","glb","svg","bmp"]){
+  for(const ext of ["gif","glb","spz","svg","bmp"]){
     const req=new Request(host+"/view?type=output&filename=out."+ext,{headers:{"CF-Access-Jwt-Assertion":browser}});
     assert.equal((await worker.fetch(req,cfg)).status,200);
   }
+  const archived=new Request(host+"/view?type=output&filename=preview.glb&subfolder=.split-temp/run",{headers:{"CF-Access-Jwt-Assertion":browser}});
+  assert.equal((await worker.fetch(archived,cfg)).status,200);
+  const threePage=token=>new Request(host+"/view?type=output&filename=model.glb",{headers:{"CF-Access-Jwt-Assertion":token,
+    "Sec-Fetch-Dest":"document","Sec-Fetch-Mode":"navigate"}});
+  hits.length=0;
+  assert.equal((await worker.fetch(threePage(""),cfg)).status,403);
+  assert.equal((await worker.fetch(threePage(jwt),cfg)).status,403);
+  assert.match(await (await worker.fetch(threePage(browser),cfg)).text(),/id="viewport"/);
+  assert.equal(hits.length,0);
 });
