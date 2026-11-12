@@ -1,7 +1,8 @@
 import {createViewer} from "./render.ts";
+import {readAtMost} from "../src/bounded-response.ts";
 
 type Info = {filename: string; subfolder: string; format: "glb" | "spz"; size: number;
-  url: string; delivery: "viewer" | "link"};
+  url: string; delivery: "viewer" | "link"; etag?: string};
 type ToolResult = {isError?: boolean; structuredContent?: unknown; content?: {type: string; text?: string}[];
   _meta?: Record<string, unknown>};
 declare global {
@@ -84,6 +85,9 @@ async function load() {
   if (!browser && !initialized && !window.openai?.callTool) {
     status.textContent = "3Dモデルを読み込めます。"; retry.hidden = false; return;
   }
+  if (!browser && initialized && !serverTools && !window.openai?.callTool) {
+    status.textContent = "このホストでは3Dモデルを取得できません。ブラウザで開いてください。"; return;
+  }
   viewport.dataset.state = "loading";
   status.textContent = "3Dモデルを取得中…";
   try {
@@ -93,18 +97,24 @@ async function load() {
       download = new AbortController();
       const response = await fetch(raw, {signal: download.signal, credentials: "same-origin"});
       if (!response.ok) throw Error(`ファイルを取得できませんでした（HTTP ${response.status}）。`);
-      buffer = await response.arrayBuffer();
+      const bytes = await readAtMost(response, LIMIT);
+      if (!bytes) {
+        viewport.dataset.state = "empty";
+        status.textContent = "128 MiBを超えるため自動表示を停止しました。元のファイルを保存してください。";
+        return;
+      }
+      buffer = bytes.buffer as ArrayBuffer;
     } else {
       const bytes = new Uint8Array(info.size);
       let offset = 0;
       while (offset < info.size) {
-        const result = await request("read_3d_part", {filename: info.filename, subfolder: info.subfolder, byte_offset: offset});
+        const result = await request("read_3d_part", {filename: info.filename, subfolder: info.subfolder, byte_offset: offset, etag: info.etag});
         if (run !== version) return;
         if (result.isError) throw Error(result.content?.find(item => item.type === "text")?.text || "3Dファイルを取得できませんでした。");
         const meta = result.structuredContent as Record<string, unknown> | undefined;
         const data = result._meta?.["split/3dPart"];
         if (!meta || meta.filename !== info.filename || meta.subfolder !== info.subfolder || meta.size !== info.size ||
-            meta.format !== info.format || meta.byte_offset !== offset || typeof data !== "string" ||
+            meta.format !== info.format || meta.etag !== info.etag || meta.byte_offset !== offset || typeof data !== "string" ||
             data.length > 4 * Math.ceil(PART / 3)) throw Error("指定した3Dファイルの応答ではありません。");
         const chunk = Uint8Array.from(atob(data), c => c.charCodeAt(0)), next = offset + chunk.length;
         if (!chunk.length || chunk.length !== meta.byte_length || next > info.size ||
@@ -134,7 +144,7 @@ function render(result: ToolResult) {
   if (result.isError) { clear(); current = undefined; link.hidden = true; fail(Error(result.content?.find(x => x.type === "text")?.text || "3Dファイルを取得できませんでした。")); return; }
   const info = readInfo(result.structuredContent);
   if (!info) return;
-  if (current && current.url === info.url && current.size === info.size && current.delivery === info.delivery) return;
+  if (current && current.url === info.url && current.size === info.size && current.etag === info.etag && current.delivery === info.delivery) return;
   current = info; name.textContent = info.filename;
   void load();
 }

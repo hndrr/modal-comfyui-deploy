@@ -106,7 +106,7 @@ GLB/SPZのアップロード・入力への再利用は追加していません�
 | `get_video` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | 最大128 MiBのMP4をMCP認証の非公開分割取得で再生。サイトへの追加ログインは不要。上限超過・Range非対応時はブラウザ認証付き配信を使う。バイナリ取得は `byte_offset: 0` から | 配信用 CPU。プレイヤーHTML自体はWorker |
 | `get_3d` | `filename`、任意で `subfolder` | 通常保存されたGLBメッシュ／SPZ Gaussian splatのメタデータ（形式・MIME・サイズ・閲覧URL）と3Dビューアー。チャット内表示は最大128 MiB | 配信用 CPU。ビューアーHTML自体はWorker。生成しない |
 
-`get_3d` には `list_outputs` のファイル名とサブフォルダを渡します。一時出力・`.split-temp` は対象外です。ビューアーはMCP認証で分割取得し、Accessのブラウザ用URLを直接fetchしません。ホストのCSP・WebGL制約などで表示できない場合や128 MiBを超える場合は、ブラウザ認証付きの閲覧・保存リンクを案内します。ツールの成功だけで表示成功とは判断しません。
+`get_3d` には `list_outputs` のファイル名とサブフォルダを渡します。一時出力・`.split-temp` は対象外です。ビューアーはMCP認証で分割取得し、Accessのブラウザ用URLを直接fetchしません。ホストのCSP・WebGL制約やツール取得の非対応時は、ブラウザ認証付きの閲覧・保存リンクを案内します。ブラウザでも自動表示は128 MiBまでとし、超過時は取得を中止して元ファイルの保存リンクを残します。ツールの成功だけで表示成功とは判断しません。
 
 `get_audio` の `index` は音声だけ、`get_video` の `index` はMP4だけを数えた0始まりの番号です。`list_outputs` の `index` は全種類を通した番号で、`reuse_output` と `inspect_media` に渡します。複数種類の出力があるときは混同しないでください。
 
@@ -177,6 +177,6 @@ ComfyUIのLoRA選択肢を確認する例：
 | --- | --- | --- |
 | `read_audio_part` | `prompt_id`・`byte_offset`、任意で `index` | 音声プレイヤーが検証付き128 KiB分割データを読む。配信用 CPU。エージェント向けではなくアプリ向けとして登録 |
 | `read_video_part` | `prompt_id`・`byte_offset`、任意で `index` | 動画プレイヤーが検証付き512 KiB分割データを読む。配信用 CPU。アプリ専用で、本体はモデル向け本文に含めない |
-| `read_3d_part` | `filename`・`byte_offset`、任意で `subfolder` | 3Dビューアーが最大512 KiBずつ取得。配信用 CPU。アプリ専用で、バイト列のBase64は `_meta["split/3dPart"]` のみ。本文には含めず、`next_offset` で継続 |
+| `read_3d_part` | `filename`・`byte_offset`、任意で `subfolder`・`etag`（継続時は必須） | 最大512 KiBずつ取得。最初のETagを全取得のIf-Rangeに使い、版が変われば中止。配信用 CPU。アプリ専用で、Base64は `_meta["split/3dPart"]` のみ。`next_offset` で継続 |
 
 プレイヤー・ビューアーのHTML取得はMCPリソースで、ツール数には含めません。HTMLだけならWorkerで応答し、データの要求時に配信用CPUを使います。クライアントの表示機能によってプレイヤーが使えない場合も、`get_audio`・`get_video` のリンクまたは部分取得、`get_3d` のブラウザ用リンクを利用できます。
