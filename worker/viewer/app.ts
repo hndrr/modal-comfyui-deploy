@@ -24,6 +24,7 @@ const save = document.querySelector<HTMLAnchorElement>("#save")!;
 let peer = "*", initialized = false, serverTools = false, openLinks = false, sequence = 1;
 let current: Info | undefined, version = 0, viewer: ReturnType<typeof createViewer> | undefined;
 let download: AbortController | undefined, objectUrl: string | undefined;
+let savedBytes: ArrayBuffer | undefined;
 const pending = new Map<number, {resolve: (result: ToolResult) => void; reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>}>();
 function send(message: object) { parent.postMessage({jsonrpc: "2.0", ...message}, peer); }
@@ -41,7 +42,7 @@ function clear() {
   download?.abort(); download = undefined;
   viewer?.dispose(); viewer = undefined;
   if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = undefined;
+  objectUrl = undefined; savedBytes = undefined;
   save.hidden = true; save.removeAttribute("href"); reset.disabled = true; retry.hidden = true;
   viewport.dataset.state = "empty";
 }
@@ -123,18 +124,13 @@ async function load() {
         status.textContent = `3Dモデルを取得中… ${Math.round(offset / info.size * 100)}%`;
       }
       buffer = bytes.buffer;
-      objectUrl = URL.createObjectURL(new Blob([buffer], {type: info.format === "glb" ? "model/gltf-binary" : "application/octet-stream"}));
-      save.href = objectUrl; save.download = info.filename; save.hidden = false;
+      savedBytes = buffer;
+      save.href = info.url; save.download = info.filename; save.hidden = false;
     }
     if (run !== version) return;
     status.textContent = "3Dモデルを読み込み中…";
     viewer = createViewer(viewport, error => { if (run === version) fail(error); });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([viewer.load(buffer, info.format), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(Error("この環境では3D描画を開始できませんでした。")), 30000);
-      })]);
-    } finally { clearTimeout(timer); }
+    await viewer.load(buffer, info.format);
     if (run !== version || !viewer) return;
     reset.disabled = false; viewport.dataset.state = "ready";
     status.textContent = "ドラッグで回転 · スクロールで拡大 · 右ドラッグで移動";
@@ -149,6 +145,12 @@ function render(result: ToolResult) {
   void load();
 }
 reset.onclick = () => viewer?.reset(); retry.onclick = () => { void load(); };
+save.onclick = () => {
+  if (!savedBytes || !current || objectUrl) return;
+  objectUrl = URL.createObjectURL(new Blob([savedBytes], {
+    type: current.format === "glb" ? "model/gltf-binary" : "application/octet-stream"}));
+  save.href = objectUrl;
+};
 link.onclick = event => {
   if (openLinks) { event.preventDefault(); send({id: ++sequence, method: "ui/open-link", params: {url: link.href}}); }
 };
@@ -176,7 +178,7 @@ if (browser) {
       send({method: "ui/notifications/initialized", params: {}});
       send({method: "ui/notifications/size-changed", params: {height: document.body.scrollHeight}});
       if (current && !viewer && retry.hidden === false) void load();
-    } else if (pending.has(message.id)) {
+    } else if (pending.has(message.id) && ("result" in message || "error" in message)) {
       const call = pending.get(message.id)!; pending.delete(message.id); clearTimeout(call.timer);
       if (message.error) call.reject(Error(message.error.message || "3Dファイルを取得できませんでした。"));
       else call.resolve(message.result);

@@ -5,7 +5,6 @@ import {base64} from "./media.ts";
 
 export const THREE_PART_BYTES = 512 * 1024;
 export const THREE_INLINE_LIMIT = 128 * 1024 * 1024;
-const PROBE_BYTES = 4096;
 const strongETag = z.string().max(512).regex(/^"[\x21\x23-\x7e]*"$/);
 const safeSegment = (value:string) => value.length > 0 && value.length <= 255 &&
   !value.startsWith(".") && !/[/\\:\x00-\x1f\x7f]/.test(value);
@@ -78,78 +77,31 @@ async function readRange(send:Send, path:string, offset:number, length:number, i
 }
 
 export async function get3D(send:Send, origin:string, args:Record<string,unknown>, part = false):Promise<CallToolResult> {
-  try {
-    const parsed = schema.safeParse(part ? args : {...args, byte_offset:0});
-    if (!parsed.success) return failure("Invalid 3D output filename, subfolder or byte_offset.");
-    const {filename, subfolder = "", byte_offset:offset, etag:expectedETag} = parsed.data;
-    if (part && offset > 0 && !expectedETag)
-      return failure("Pass the file etag from get_3d or the first part when continuing a 3D read.");
-    const format = /\.(glb|spz)$/i.exec(filename)?.[1].toLowerCase();
-    if (!format) return failure("Supported 3D output formats: GLB and SPZ.");
-    const path = "/view?" + new URLSearchParams({type:"output", filename, subfolder});
-    const url = new URL(path, origin).href;
-    const probe = await readRange(send, path, 0, PROBE_BYTES, part ? expectedETag : undefined);
-    if ("error" in probe) return failure(probe.error);
-    const {bytes, size, etag} = probe;
-    if (format === "glb") {
-      const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-      if (bytes.length < 12 || header.getUint32(0, true) !== 0x46546c67 ||
-          header.getUint32(4, true) !== 2 || header.getUint32(8, true) !== size)
-        return failure("Saved GLB has an invalid magic, version or total-size header.");
-    } else {
-      // Official format: https://github.com/nianticlabs/spz/blob/main/src/cc/load-spz.cc
-      // v1–3: gzip containing a 16-byte NGSP header; v4: plaintext 32-byte NGSP
-      // header plus ZSTD streams. This checks headers, NOT the complete payload,
-      // gzip trailer/CRC or ZSTD streams. Gzip magic alone is not an SPZ signature.
-      const legacy = bytes[0] === 0x1f && bytes[1] === 0x8b;
-      let headerBytes = bytes;
-      if (legacy) {
-        // Only the bounded compressed probe enters the decompressor. Stop at the
-        // header; never inflate a whole file or feed a 512 KiB part into it.
-        const reader = new Response(bytes).body!.pipeThrough(new DecompressionStream("gzip")).getReader();
-        headerBytes = new Uint8Array(16);
-        let used = 0;
-        try {
-          while (used < headerBytes.length) {
-            const {done, value} = await reader.read();
-            if (done) break;
-            const prefix = value.subarray(0, headerBytes.length - used);
-            headerBytes.set(prefix, used); used += prefix.length;
-          }
-          await reader.cancel();
-        } finally { reader.releaseLock(); }
-        if (used < 16) return failure("Saved SPZ has a truncated gzip/NGSP header.");
-      }
-      const header = new DataView(headerBytes.buffer, headerBytes.byteOffset, headerBytes.byteLength);
-      if (headerBytes.length < (legacy ? 16 : 32) || header.getUint32(0, true) !== 0x5053474e)
-        return failure("Saved SPZ does not contain a supported NGSP header.");
-      const version = header.getUint32(4, true);
-      if (legacy ? version < 1 || version > 3 : version !== 4)
-        return failure("Unsupported SPZ header version (expected gzip v1–3 or plaintext v4).");
-      if (!legacy) {
-        const toc = header.getUint32(16, true);
-        if (toc < 32 || toc + headerBytes[15] * 16 > size)
-          return failure("Saved SPZ has an invalid or truncated table-of-contents header.");
-      }
-    }
-    const metadata = {filename, subfolder, format, mimeType:format === "glb" ? "model/gltf-binary" : "application/octet-stream",
-      size, url, ...(etag ? {etag} : {})};
-    if (!part) return {structuredContent:{...metadata, delivery:etag && size <= THREE_INLINE_LIMIT ? "viewer" : "link"},
-      content:[{type:"text",text:!etag ?
-        filename + " has no verifiable file version. Open or save it after website login: " + url : size <= THREE_INLINE_LIMIT ?
-        filename + " — use the 3D viewer. Retrieval alone does not confirm the viewer is visible. " +
-          "Open or save this file after website login: " + url :
-        filename + " exceeds the 128 MiB viewer limit. Open or save it after website login: " + url}]};
-    if (offset >= size) return failure("Byte offset is outside the saved 3D file.");
-    if (!etag) return failure("Saved 3D file has no verifiable ETag. Use the signed-in browser link.");
-    const chunk = await readRange(send, path, offset, THREE_PART_BYTES, etag);
-    if ("error" in chunk) return failure(chunk.error);
-    if (chunk.size !== size) return failure("Saved 3D file size changed during retrieval. Retry the read; no generation was submitted.");
-    const next = offset + chunk.bytes.length;
-    return {structuredContent:{...metadata, delivery:"chunk", byte_offset:offset,
-      byte_length:chunk.bytes.length, next_offset:next < size ? next : null},
-      content:[], _meta:{"split/3dPart":base64(chunk.bytes)}};
-  } catch {
-    return failure("Saved 3D delivery is unavailable or the response is invalid. Retry the read; no generation was submitted.");
-  }
+  const parsed = schema.safeParse(part ? args : {...args, byte_offset:0});
+  if (!parsed.success) return failure("Invalid 3D output filename, subfolder, byte_offset or etag.");
+  const {filename, subfolder = "", byte_offset:offset, etag:expectedETag} = parsed.data;
+  if (part && offset > 0 && !expectedETag)
+    return failure("Pass the file etag from get_3d or the first part when continuing a 3D read.");
+  const format = /\.(glb|spz)$/i.exec(filename)?.[1].toLowerCase();
+  if (!format) return failure("Supported 3D output formats: GLB and SPZ.");
+  const path = "/view?" + new URLSearchParams({type:"output", filename, subfolder});
+  const url = new URL(path, origin).href;
+  // Metadata needs one byte for Content-Range. Each private read fetches only
+  // its requested part. GLB/SPZ contents are parsed at the viewer boundary.
+  const chunk = await readRange(send, path, offset, part ? THREE_PART_BYTES : 1, part ? expectedETag : undefined);
+  if ("error" in chunk) return failure(chunk.error);
+  const {bytes, size, etag} = chunk;
+  const metadata = {filename, subfolder, format, mimeType:format === "glb" ? "model/gltf-binary" : "application/octet-stream",
+    size, url, ...(etag ? {etag} : {})};
+  if (!part) return {structuredContent:{...metadata, delivery:etag && size <= THREE_INLINE_LIMIT ? "viewer" : "link"},
+    content:[{type:"text",text:!etag ?
+      filename + " has no verifiable file version. Open or save it after website login: " + url : size <= THREE_INLINE_LIMIT ?
+      filename + " — use the 3D viewer. Retrieval alone does not confirm the viewer is visible. " +
+        "Open or save this file after website login: " + url :
+      filename + " exceeds the 128 MiB viewer limit. Open or save it after website login: " + url}]};
+  if (!etag) return failure("Saved 3D file has no verifiable ETag. Use the signed-in browser link.");
+  const next = offset + bytes.length;
+  return {structuredContent:{...metadata, delivery:"chunk", byte_offset:offset,
+    byte_length:bytes.length, next_offset:next < size ? next : null},
+    content:[], _meta:{"split/3dPart":base64(bytes)}};
 }

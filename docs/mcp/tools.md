@@ -106,6 +106,8 @@ GLB/SPZのアップロード・入力への再利用は追加していません�
 | `get_video` | `prompt_id`、任意で `index`・`byte_offset`・`chunk_bytes` | 最大128 MiBのMP4をMCP認証の非公開分割取得で再生。サイトへの追加ログインは不要。上限超過・Range非対応時はブラウザ認証付き配信を使う。バイナリ取得は `byte_offset: 0` から | 配信用 CPU。プレイヤーHTML自体はWorker |
 | `get_3d` | `filename`、任意で `subfolder` | 通常保存されたGLBメッシュ／SPZ Gaussian splatのメタデータ（形式・MIME・サイズ・閲覧URL）と3Dビューアー。チャット内表示は最大128 MiB | 配信用 CPU。ビューアーHTML自体はWorker。生成しない |
 
+3D対応前に控えた `list_outputs` のindexは再利用せず、一覧を取得し直してください。3D出力が追加されたジョブでは、画像・音声・動画のindexが変わる場合があります。
+
 `get_3d` には `list_outputs` のファイル名とサブフォルダを渡します。一時出力・`.split-temp` は対象外です。ビューアーはMCP認証で分割取得し、Accessのブラウザ用URLを直接fetchしません。ホストのCSP・WebGL制約やツール取得の非対応時は、ブラウザ認証付きの閲覧・保存リンクを案内します。ブラウザでも自動表示は128 MiBまでとし、超過時は取得を中止して元ファイルの保存リンクを残します。ツールの成功だけで表示成功とは判断しません。
 
 `get_audio` の `index` は音声だけ、`get_video` の `index` はMP4だけを数えた0始まりの番号です。`list_outputs` の `index` は全種類を通した番号で、`reuse_output` と `inspect_media` に渡します。複数種類の出力があるときは混同しないでください。

@@ -2,7 +2,7 @@ import {BoxGeometry} from "three";
 import {crc32, deflateSync, gzipSync} from "node:zlib";
 
 // Small self-contained files for loader smoke checks; no model weights or downloads.
-export function texturedGLB() {
+export function texturedGLB({dataUris = false} = {}) {
   const geometry = new BoxGeometry(1.6, 1.6, 1.6), chunks = [], views = [];
   let offset = 0;
   const add = bytes => {
@@ -30,16 +30,17 @@ export function texturedGLB() {
   const json = {asset:{version:"2.0"},scene:0,scenes:[{nodes:[0]}],nodes:[{mesh:0}],
     meshes:[{primitives:[{attributes:{POSITION:0,NORMAL:1,TEXCOORD_0:2},indices:3,material:0}]}],
     materials:[{pbrMetallicRoughness:{baseColorTexture:{index:0},metallicFactor:.15,roughnessFactor:.35}}],
-    textures:[{source:0}],images:[{bufferView:textureView,mimeType:"image/png"}],
-    accessors,bufferViews:views,buffers:[{byteLength:offset}]};
+    textures:[{source:0}],images:[dataUris ? {uri:"data:image/png;base64,"+png.toString("base64")} : {bufferView:textureView,mimeType:"image/png"}],
+    accessors,bufferViews:views,buffers:[{byteLength:offset,
+      ...(dataUris ? {uri:"data:application/octet-stream;base64,"+Buffer.concat(chunks).toString("base64")} : {})}]};
   const text = Buffer.from(JSON.stringify(json)), jsonBytes = Buffer.alloc(Math.ceil(text.length / 4) * 4, 32);
   text.copy(jsonBytes);
   const bin = Buffer.concat(chunks), header = Buffer.alloc(20), binHeader = Buffer.alloc(8);
-  header.write("glTF"); header.writeUInt32LE(2,4); header.writeUInt32LE(28 + jsonBytes.length + bin.length,8);
+  header.write("glTF"); header.writeUInt32LE(2,4); header.writeUInt32LE(20 + jsonBytes.length + (dataUris ? 0 : 8 + bin.length),8);
   header.writeUInt32LE(jsonBytes.length,12); header.write("JSON",16);
   binHeader.writeUInt32LE(bin.length); binHeader.writeUInt32LE(0x004e4942,4);
   geometry.dispose();
-  return Buffer.concat([header,jsonBytes,binHeader,bin]);
+  return Buffer.concat(dataUris ? [header,jsonBytes] : [header,jsonBytes,binHeader,bin]);
 }
 
 export function gaussianSPZ() {

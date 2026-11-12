@@ -6,7 +6,8 @@ import {threeViewerHtml} from "../src/three-viewer.ts";
 import {get3D} from "../src/three-media.ts";
 import {texturedGLB, gaussianSPZ} from "../tests/three-fixtures.mjs";
 
-const origin = "http://127.0.0.1:8767", files = {"sample.glb":texturedGLB(),"sample.spz":gaussianSPZ()};
+const origin = "http://127.0.0.1:8767", files = {"sample.glb":texturedGLB(),"sample.spz":gaussianSPZ(),
+  "data.glb":texturedGLB({dataUris:true}),"broken.glb":Buffer.from("invalid glb")};
 const send = async (path, init) => {
   const url = new URL(path,origin), bytes = files[url.searchParams.get("filename")];
   if (!bytes) return new Response(null,{status:404});
@@ -27,10 +28,10 @@ const server = createServer(async(req,res)=>{
       response=Response.json(await get3D(send,origin,args,name==="read_3d_part"));
     }else if(url.pathname==="/widget"){
       response=new Response(threeViewerHtml(origin),{headers:{"Content-Type":"text/html",
-        ...(url.searchParams.has("restricted")?{"Content-Security-Policy":"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src blob: data:; connect-src blob:; worker-src 'none'"}:{})}});
+        "Content-Security-Policy":`default-src 'none'; script-src 'unsafe-inline' ${url.searchParams.get("restricted")==="1"?"":"'wasm-unsafe-eval'"}; style-src 'unsafe-inline'; img-src blob: data:; connect-src blob: data:; worker-src ${url.searchParams.has("restricted")?"'none'":"blob:"}`}});
     }else if(url.pathname==="/mcp-test"){
-      const filename=url.searchParams.get("filename")==="sample.spz"?"sample.spz":"sample.glb";
-      response=new Response(`<!doctype html><title>MCP 3D smoke</title><iframe title="3D MCP viewer" style="width:95vw;height:85vh;border:0" src="/widget${url.searchParams.has("restricted")?"?restricted=1":""}"></iframe><script>
+      const filename=Object.hasOwn(files,url.searchParams.get("filename"))?url.searchParams.get("filename"):"sample.glb";
+      response=new Response(`<!doctype html><title>MCP 3D smoke</title><iframe title="3D MCP viewer" style="width:95vw;height:85vh;border:0" src="/widget${url.searchParams.has("restricted")?"?restricted="+(url.searchParams.get("restricted")==="worker"?"worker":"1"):""}"></iframe><script>
       const frame=document.querySelector('iframe');
       addEventListener('message',async e=>{
         if(e.source!==frame.contentWindow)return;

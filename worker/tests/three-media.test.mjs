@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {gzipSync, zstdCompressSync} from "node:zlib";
-import {randomBytes} from "node:crypto";
 import {z} from "zod";
+import {callSavedMedia} from "../src/saved-media.ts";
 import {get3D, threeInputs, threePartInputs, threeOutput, THREE_PART_BYTES, THREE_INLINE_LIMIT} from "../src/three-media.ts";
 
 const origin = "https://split.example.com";
@@ -70,13 +70,13 @@ test("GLB retrieval exposes only metadata and an encoded public output URL", asy
   const result = await get3D(send, origin, {...args, byte_offset:0, chunk_bytes:1});
   assert.deepEqual(valid(result), {...args, format:"glb", mimeType:"model/gltf-binary", size:bytes.length,
     delivery:"viewer", etag, url:origin + "/view?" + new URLSearchParams({type:"output", ...args})});
-  assert.deepEqual(calls, ["bytes=0-4095"]);
+  assert.deepEqual(calls, ["bytes=0-0"]);
   assert.deepEqual(result.content.map(c => c.type), ["text"]); assert.equal(result._meta, undefined);
   assert.ok(JSON.stringify(result).length < 2048);
   assert.ok(!JSON.stringify(result).includes(bytes.toString("base64")));
 });
 
-test("official SPZ gzip v1–3 and plaintext/ZSTD v4 signatures are accepted", async () => {
+test("SPZ versions are delivered as saved files without reparsing their contents", async () => {
   for (const version of [1, 2, 3, 4]) {
     const bytes = spz(version), input = {filename:"scene.spz"};
     const result = await get3D(upstream(ranged(bytes), input).send, origin, input);
@@ -84,27 +84,6 @@ test("official SPZ gzip v1–3 and plaintext/ZSTD v4 signatures are accepted", a
     assert.equal(metadata.format, "spz"); assert.equal(metadata.subfolder, "");
     assert.equal(metadata.mimeType, "application/octet-stream"); assert.equal(metadata.size, bytes.length);
     assert.equal(metadata.delivery, "viewer"); assert.equal(result._meta, undefined);
-  }
-});
-
-test("large gzip SPZ needs only a bounded compressed prefix to verify its NGSP header", async () => {
-  const header = Buffer.alloc(16); header.write("NGSP"); header.writeUInt32LE(3, 4); header.writeUInt32LE(1000, 8);
-  const bytes = gzipSync(Buffer.concat([header, randomBytes(20_000)])), input = {filename:"large.spz"};
-  assert.ok(bytes.length > 4096);
-  const {send, calls} = upstream(ranged(bytes), input);
-  assert.equal(valid(await get3D(send, origin, input)).size, bytes.length);
-  assert.deepEqual(calls, ["bytes=0-4095"]);
-});
-
-test("gzip alone, wrong SPZ versions and truncated NGSP/TOC headers are rejected", async () => {
-  const newer = spz(4); newer.writeUInt32LE(5, 4);
-  const legacyPlain = Buffer.alloc(32); legacyPlain.write("NGSP"); legacyPlain.writeUInt32LE(3, 4);
-  const gzipV4 = gzipSync(spz(4).subarray(0, 32));
-  const badToc = spz(4); badToc.writeUInt32LE(badToc.length, 16);
-  const input = {filename:"invalid.spz"};
-  for (const bytes of [gzipSync(Buffer.from("not an SPZ file at all")), gzipSync(Buffer.from("NGSP")),
-      newer, legacyPlain, gzipV4, badToc, spz(4).subarray(0, 31), Buffer.from([0x1f, 0x8b, 8, 0])]) {
-    failed(await get3D(upstream(ranged(bytes), input).send, origin, input));
   }
 });
 
@@ -136,23 +115,15 @@ test("path schemas reject traversal, hidden components, controls and unsafe byte
     failed(await get3D(send, origin, {filename}), /GLB and SPZ/);
 });
 
-test("GLB magic, version, total length and truncated headers are checked", async () => {
-  const wrongMagic = glb(); wrongMagic.write("oops");
-  const wrongVersion = glb(); wrongVersion.writeUInt32LE(1, 4);
-  const wrongSize = glb(); wrongSize.writeUInt32LE(wrongSize.length + 1, 8);
-  for (const bytes of [wrongMagic, wrongVersion, wrongSize, glb().subarray(0, 11)])
-    failed(await get3D(upstream(ranged(bytes)).send, origin, args), /GLB/);
-});
-
-test("viewer limit is inclusive and larger files return a link after only a 4 KiB read", async () => {
+test("viewer limit is inclusive and larger files return a link after only a one-byte read", async () => {
   assert.equal(THREE_INLINE_LIMIT, 128 * 1024 * 1024);
   for (const size of [THREE_INLINE_LIMIT, THREE_INLINE_LIMIT + 4]) {
-    const prefix = Buffer.alloc(4096); glb().copy(prefix); prefix.writeUInt32LE(size, 8);
-    const {send, calls} = upstream(() => new Response(prefix, {status:206, headers:{"Content-Range":`bytes 0-4095/${size}`,ETag:etag}}));
+    const prefix = Buffer.of(0x67);
+    const {send, calls} = upstream(() => new Response(prefix, {status:206, headers:{"Content-Range":`bytes 0-0/${size}`,ETag:etag}}));
     const result = await get3D(send, origin, args), metadata = valid(result);
     assert.equal(metadata.delivery, size <= THREE_INLINE_LIMIT ? "viewer" : "link");
     assert.equal(metadata.size, size); assert.equal(result._meta, undefined);
-    assert.deepEqual(calls, ["bytes=0-4095"]); assert.ok(JSON.stringify(result).length < 2048);
+    assert.deepEqual(calls, ["bytes=0-0"]); assert.ok(JSON.stringify(result).length < 2048);
   }
 });
 
@@ -172,10 +143,11 @@ test("private 512 KiB parts reconstruct GLB/SPZ with no model-visible bytes", as
       parts.push(Buffer.from(blob, "base64")); offset = info.next_offset;
     } while (offset !== null);
     assert.deepEqual(Buffer.concat(parts), bytes);
+    assert.equal(calls.length, parts.length, "Each part makes exactly one upstream request");
   }
 });
 
-test("one ETag pins every part, rejecting same-size replacements between calls or during a call", async () => {
+test("one ETag pins every part, rejecting same-size replacements even at offset zero", async () => {
   const bytes=glb(THREE_PART_BYTES),replacement=Buffer.from(bytes);replacement[replacement.length-1]^=1;
   let current=bytes,version=etag;
   const {send}=upstream((range,_call,headers)=>{
@@ -191,12 +163,11 @@ test("one ETag pins every part, rejecting same-size replacements between calls o
   for(const honorIfRange of [true,false]){
     const swapped=upstream((range,call,headers)=>{
       assert.equal(headers.get("If-Range"),etag);
-      if(call===1)return ranged(bytes)(range);
       const response=honorIfRange?new Response(replacement):ranged(replacement)(range);
       response.headers.set("ETag",'"version-2"');return response;
     });
     failed(await get3D(swapped.send,origin,{...args,byte_offset:0,etag},true),/version changed/);
-    assert.equal(swapped.calls.length,2);
+    assert.equal(swapped.calls.length,1);
   }
 });
 
@@ -222,8 +193,7 @@ test("malformed, inconsistent and truncated ranges are rejected for both probes 
     for (const kind of ["missing", "wildcard", "unsafe", "wrong-start", "wrong-end", "short-end", "truncated", "oversized",
         "wrong-length", "invalid-length", "encoded"]) {
       const {send} = upstream((range, call) => {
-        if (part && call === 1) return ranged(bytes)(range);
-        const offset = part ? 1 : 0, length = part ? THREE_PART_BYTES : 4096, end = offset + length - 1;
+        const offset = part ? 1 : 0, length = part ? THREE_PART_BYTES : 1, end = offset + length - 1;
         const headers = {"Content-Range":`bytes ${offset}-${end}/${bytes.length}`,ETag:etag};
         let body = bytes.subarray(offset, end + 1);
         if (kind === "missing") delete headers["Content-Range"];
@@ -244,16 +214,11 @@ test("malformed, inconsistent and truncated ranges are rejected for both probes 
   }
 });
 
-test("small complete 200 responses are supported, but ignored offsets and changed sizes fail", async () => {
+test("ignored ranges, incomplete lengths and out-of-range offsets fail", async () => {
   const bytes = glb();
-  for (const headers of [{}, {"Content-Length":String(bytes.length)}]) {
-    const result = await get3D(upstream(() => new Response(bytes, {headers})).send, origin, args);
-    assert.equal(valid(result).size, bytes.length);
-  }
+  failed(await get3D(upstream(() => new Response(bytes)).send, origin, args), /exceeds/);
   failed(await get3D(upstream(() => new Response(bytes)).send, origin, {...args, byte_offset:1, etag}, true), /version changed/);
-  const {send} = upstream((range, call) => ranged(call === 1 ? bytes : Buffer.concat([bytes, Buffer.alloc(4)]))(range));
-  failed(await get3D(send, origin, {...args, byte_offset:0}, true), /size changed/);
-  failed(await get3D(upstream(ranged(bytes)).send, origin, {...args, byte_offset:bytes.length, etag}, true), /outside/);
+  failed(await get3D(upstream(() => new Response(null,{status:416})).send, origin, {...args, byte_offset:bytes.length, etag}, true), /outside/);
   for (const headers of [{"Content-Length":String(bytes.length - 1)}, {"Content-Range":`bytes 0-${bytes.length - 1}/${bytes.length}`}])
     failed(await get3D(upstream(() => new Response(bytes, {headers})).send, origin, args));
 });
@@ -273,19 +238,18 @@ test("deletion, HTTP failures, redirects and transport errors never submit gener
     for (const part of [false, true]) {
       let cancelled = false;
       const {send, calls} = upstream((range, call) => {
-        if (part && call === 1) return ranged(glb())(range);
         return new Response(new ReadableStream({cancel() { cancelled = true; }}), {status});
       });
       const result = await get3D(send, origin, {...args, byte_offset:0}, part);
       failed(result, status === 416 ? /outside/ : new RegExp(`HTTP ${status}`));
-      assert.equal(cancelled, true); assert.equal(calls.length, part ? 2 : 1);
+      assert.equal(cancelled, true); assert.equal(calls.length, 1);
       if ([404, 410].includes(status)) assert.match(result.content[0].text, /No generation was submitted/);
     }
   }
   for (const serve of [() => { throw Error("private upstream credential"); },
     () => new Response(new ReadableStream({start(c) { c.error(Error("private upstream body")); }}))]) {
     const {send, calls} = upstream(serve);
-    const result = await get3D(send, origin, args);
+    const result = await callSavedMedia(send, "get_3d", args, origin);
     failed(result, /no generation was submitted/); assert.equal(calls.length, 1);
     assert.ok(!JSON.stringify(result).includes("private upstream"));
   }

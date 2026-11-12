@@ -139,7 +139,7 @@ jobs:
           cache-dependency-path: worker/package-lock.json
       - run: npm ci
       - run: npm test
-      - run: npm run typecheck
+      - run: npm run --ignore-scripts typecheck # pretest already built the viewer
       - name: Test the server-side MCP package and remote upload client
         working-directory: mcp
         run: |
