@@ -4,6 +4,8 @@ import {randomUUID} from 'node:crypto';
 import {MediaDelivery} from '../src/media-delivery.ts';
 import {callSplit,remoteMcp} from '../src/remote-mcp.ts';
 import {deliveryOutputs} from '../src/delivered-media.ts';
+import {AUDIO_PART_BYTES,VIDEO_PART_BYTES} from '../src/media.ts';
+import {THREE_PART_BYTES} from '../src/three-media.ts';
 
 const origin='https://media.example.test', browser='https://split.example.test', token='x'.repeat(64);
 const config=JSON.stringify({origin,source_id:'test',token});
@@ -131,7 +133,37 @@ test('source WAV aliases and normalized copy Content-Type preserve format valida
   }
 });
 
-test('a missing copy reference never splices original bytes into an audio or video continuation',async()=>{
+test('legacy player parts without delivery references always read original audio, video and 3D bytes',async()=>{
+  for(const [kind,mime,filename,length] of [
+    ['audio','audio/wav','clip.wav',AUDIO_PART_BYTES],
+    ['video','video/mp4','clip.mp4',VIDEO_PART_BYTES],
+    ['3d','model/gltf-binary','mesh.glb',THREE_PART_BYTES],
+    ['3d','application/octet-stream','scene.spz',THREE_PART_BYTES],
+  ]) {
+    const f=fixture();Object.assign(f.files[0],{kind,mime,filename,bytes:mediaBytes(mime,length+17)});
+    await f.adapter().prepare(f.send,f.files[0]);
+    Object.assign([...f.records.values()][0],{bytes:mediaBytes(mime,length+9,2),cleansed:true});
+    f.calls.length=0;
+    for(const enabled of [false,true]) {
+      const chunks=[];let offset=0,etag;
+      do {
+        // Cached players know neither delivery_ref nor delivery_route. 3D still pins its source ETag.
+        const args={...(kind==='3d'?{filename,etag}:{prompt_id:job,index:0}),byte_offset:offset};
+        const result=await callSplit(noGeneration,`read_${kind}_part`,args,browser,undefined,f.send,enabled?f.adapter():undefined);
+        assert.equal(result.isError,undefined,JSON.stringify(result.content));
+        const info=result.structuredContent;
+        assert.equal(info.delivery_route,enabled?'original':undefined);
+        assert.equal(info.delivery_ref,undefined);assert.equal(info.size,f.files[0].bytes.length);
+        chunks.push(Buffer.from(result._meta[`split/${kind}Part`],'base64'));
+        offset=info.next_offset;etag=info.etag;
+      } while(offset!==null);
+      assert.equal(chunks.length,2);assert.deepEqual(Buffer.concat(chunks),f.files[0].bytes);
+    }
+    assert.equal(f.calls.length,0);
+  }
+});
+
+test('a missing copy reference never splices original bytes into a CLI audio or video continuation',async()=>{
   for(const [kind,mime,filename] of [['audio','audio/wav','clip.wav'],['video','video/mp4','clip.mp4']]) {
     const f=fixture();Object.assign(f.files[0],{kind,mime,filename,bytes:mediaBytes(mime,6*1024*1024)});
     await f.adapter().prepare(f.send,f.files[0]);
@@ -139,10 +171,8 @@ test('a missing copy reference never splices original bytes into an audio or vid
     const first=await callSplit(noGeneration,'get_'+kind,{prompt_id:job,byte_offset:0},browser,undefined,f.send,f.adapter());
     assert.equal(first.isError,undefined);assert.equal(first.structuredContent.size,copy.bytes.length);
     f.original.length=0;f.calls.length=0;
-    for(const name of ['get_'+kind,`read_${kind}_part`]) {
-      const missing=await callSplit(noGeneration,name,{prompt_id:job,byte_offset:first.structuredContent.next_offset},browser,undefined,f.send,f.adapter());
-      assert.equal(missing.isError,true);assert.match(missing.content[0].text,/delivery_reference_required/);
-    }
+    const missing=await callSplit(noGeneration,'get_'+kind,{prompt_id:job,byte_offset:first.structuredContent.next_offset},browser,undefined,f.send,f.adapter());
+    assert.equal(missing.isError,true);assert.match(missing.content[0].text,/delivery_reference_required/);
     assert.equal(f.original.length,0);assert.equal(f.calls.length,0);
     const next=await callSplit(noGeneration,'get_'+kind,{prompt_id:job,byte_offset:first.structuredContent.next_offset,delivery_ref:first.structuredContent.delivery_ref},browser,undefined,f.send,f.adapter());
     assert.equal(next.isError,undefined);assert.equal(next.structuredContent.next_offset,null);
