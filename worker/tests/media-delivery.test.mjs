@@ -77,7 +77,7 @@ test('first image streams one copy, repeated retrieval and registration reuse it
   assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
   const before=f.calls.length;
   const legacy=await callSplit(noGeneration,'get_image',args,browser,undefined,f.send);
-  assert.ok(legacy.structuredContent.url.startsWith(browser));assert.equal(f.calls.length,before);
+  assert.equal(new URL(legacy.structuredContent.url).origin,browser);assert.equal(f.calls.length,before);
 });
 
 test('expired copies recopy the original without resubmitting generation',async()=>{
@@ -110,6 +110,30 @@ test('current cleansed metadata is authoritative while lookup still uses the ori
   assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
 });
 
+test('job-based retrieval detects an overwritten output even while the previous copy is ready',async()=>{
+  for(const [kind,filename,mime] of [['audio','clip.wav','audio/wav'],['video','clip.mp4','video/mp4']]){
+    const f=fixture();Object.assign(f.files[0],{kind,filename,mime,bytes:Buffer.alloc(16,1)});
+    const args={prompt_id:job};
+    const first=await callSplit(noGeneration,'get_'+kind,args,browser,undefined,f.send,f.adapter());
+    assert.equal(first.isError,undefined);
+    const oldCopy=[...f.records.values()][0];
+    Object.assign(f.files[0],{etag:'"source-v2"',bytes:Buffer.alloc(24,2)});
+    f.original.length=0;
+    const current=await callSplit(noGeneration,'get_'+kind,args,browser,undefined,f.send,f.adapter());
+    assert.equal(current.isError,undefined);assert.equal(current.structuredContent.delivery_status,'ready');
+    assert.notEqual(current.structuredContent.delivery_ref.media_id,first.structuredContent.delivery_ref.media_id);
+    assert.equal(current.structuredContent.size,24);assert.equal(f.records.size,2);
+    assert.equal(oldCopy.state,'ready');assert.deepEqual(oldCopy.bytes,Buffer.alloc(16,1));
+    assert.equal(f.original.filter(c=>c.method==='GET' && c.path.startsWith('/view?')).length,1);
+    assert.equal(f.calls.filter(c=>c.method==='PUT').length,2);
+    f.original.length=0;
+    const reused=await callSplit(noGeneration,'get_'+kind,args,browser,undefined,f.send,f.adapter());
+    assert.deepEqual(reused.structuredContent.delivery_ref,current.structuredContent.delivery_ref);
+    assert.equal(f.original.filter(c=>c.method==='GET' && c.path.startsWith('/view?')).length,0);
+    assert.equal(f.calls.filter(c=>c.method==='PUT').length,2);
+  }
+});
+
 test('pending transfer does not start another PUT or return a premature URL',async()=>{
   const f=fixture();const adapter=new MediaDelivery(config,async req=>{
     if(req.url.endsWith('/lookup'))return Response.json({results:[{status:'pending',media_id:job,retry_after_seconds:60}]});
@@ -125,7 +149,7 @@ test('size limits, service errors and redirects retain the authenticated origina
     const f=fixture(),adapter=new MediaDelivery(config,async()=>response());
     const result=await callSplit(noGeneration,'get_image',{filename:f.files[0].filename},browser,undefined,f.send,adapter);
     assert.equal(result.isError,undefined);assert.equal(result.structuredContent.delivery_status,'unavailable');
-    assert.ok(result.structuredContent.url.startsWith(browser));assert.ok(!JSON.stringify(result).includes('TOP_SECRET'));
+    assert.equal(new URL(result.structuredContent.url).origin,browser);assert.ok(!JSON.stringify(result).includes('TOP_SECRET'));
   }
   const f=fixture();const send=(path,init)=>init.method==='HEAD'?Promise.resolve(new Response(null,{headers:{'Content-Length':String(26*1024*1024)}})):f.send(path,init);
   const result=await callSplit(noGeneration,'get_image',{filename:f.files[0].filename},browser,undefined,send,f.adapter());
