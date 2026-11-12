@@ -4,14 +4,15 @@ import {runInNewContext} from "node:vm";
 import {playerHtml} from "../src/video-player.ts";
 import {getMedia,VIDEO_PART_BYTES} from "../src/media.ts";
 
-for(const external of [false,true])
-test(`MCP playback uses ${external ? "the current external copy MIME and reference" : "the original"} and repeated results preserve the video`,async()=>{
+for(const route of ['legacy','copy','original'])
+test(`MCP playback uses the ${route} route and repeated results preserve the video`,async()=>{
+  const external=route==='copy';
   const handlers={},calls=[],messages=[],elements=Object.fromEntries(["video","span","button","a"].map(k=>[k,{hidden:true,
     pause(){},load(){},removeAttribute(k){delete this[k];}}]));
   const bytes=Buffer.alloc(4*1024*1024+9);bytes.write("ftyp",4);
   const info={prompt_id:"00000000-0000-4000-8000-000000000001",index:0,filename:"clip.mp4",mimeType:external ? "video/webm" : "video/mp4",
     size:bytes.length,url:external ? "https://media.example.test/media/11111111-1111-4111-8111-111111111111" : "https://split.example.com/view?filename=clip.mp4",delivery:"player",
-    ...(external ? {delivery_ref:{media_id:"11111111-1111-4111-8111-111111111111",etag:'"copy-v2"'}} : {})};
+    ...(external ? {delivery_ref:{media_id:"11111111-1111-4111-8111-111111111111",etag:'"copy-v2"'}} : route==='original' ? {delivery_route:'original'} : {})};
   let file,revoked=false;
   class BrowserURL extends URL{
     static createObjectURL(blob){file=blob;return "blob:video";}
@@ -20,7 +21,7 @@ test(`MCP playback uses ${external ? "the current external copy MIME and referen
   const parent={postMessage:m=>messages.push(m)},win={openai:{async callTool(name,args){
     calls.push({name,args});const chunk=bytes.subarray(args.byte_offset,args.byte_offset+VIDEO_PART_BYTES);
     const next=args.byte_offset+chunk.length;
-    return {content:[],structuredContent:{...info,delivery:next<bytes.length?"chunk":"inline",byte_offset:args.byte_offset,
+    return {content:[],structuredContent:{...info,...(!external?{delivery_route:'original'}:{}),delivery:next<bytes.length?"chunk":"inline",byte_offset:args.byte_offset,
       byte_length:chunk.length,next_offset:next<bytes.length?next:null},_meta:{"split/videoPart":chunk.toString("base64")}};
   }}};
   runInNewContext(playerHtml("https://split.example.com","https://media.example.test").split("<script>")[1].split("</script>")[0],
@@ -33,6 +34,7 @@ test(`MCP playback uses ${external ? "the current external copy MIME and referen
   assert.equal(file.type,info.mimeType);
   assert.equal(elements.a.href,info.url);
   if(external)assert.ok(calls.every(c=>c.args.delivery_ref===info.delivery_ref));
+  else assert.ok(calls.slice(route==='legacy'?1:0).every(c=>c.args.delivery_route==='original'));
   assert.equal(calls.length,9);assert.ok(calls.every(c=>c.name==="read_video_part"));
   handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});
   assert.equal(calls.length,9);assert.equal(revoked,false);assert.equal(elements.video.src,"blob:video");

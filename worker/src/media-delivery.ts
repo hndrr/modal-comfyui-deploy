@@ -32,6 +32,7 @@ export const deliveryRefSchema = outputFileSchema.extend({
 });
 export type DeliveryRef = z.infer<typeof deliveryRefSchema>;
 export const deliveryOutput = {delivery_ref:deliveryRefSchema.optional(),
+  delivery_route:z.literal("original").optional(),
   delivery_status:z.enum(["ready","pending","unavailable"]).optional(),
   delivery_reason:z.string().optional(), retry_after_seconds:z.number().int().positive().optional()};
 const readySchema = z.object({status:z.literal("ready"),media_id:z.uuid(),url:z.url(),

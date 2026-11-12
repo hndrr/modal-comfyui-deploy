@@ -9,9 +9,15 @@ import {MediaDelivery, DeliveryError, deliveryRefSchema, outputFileSchema, outpu
 export const deliveredTools=new Set(["get_image","get_audio","get_video","get_3d","read_audio_part","read_video_part","read_3d_part"]);
 const problem = (e:unknown) => e instanceof DeliveryError ? e : e instanceof z.ZodError ?
   new DeliveryError("invalid_media_reference") : new DeliveryError("delivery_unavailable",60);
+const unavailable = (e:unknown) => {
+  const p=problem(e);
+  return {delivery_status:"unavailable",delivery_reason:p.code,...(p.retry ? {retry_after_seconds:p.retry} : {})};
+};
 const failure = (e:unknown):CallToolResult => {
   const p=problem(e);
-  return {isError:true,content:[{type:"text",text:`Media delivery: ${p.code}. ${p.retry ? "Retry retrieval after the indicated delay." : "Retrieve the work again or use its existing authenticated output route."} No generation was submitted.`}],
+  const next=p.code==="delivery_reference_required" ? "Restart at byte_offset 0 and forward the returned delivery_ref or delivery_route unchanged." :
+    p.retry ? "Retry retrieval after the indicated delay." : "Retrieve the work again or use its existing authenticated output route.";
+  return {isError:true,content:[{type:"text",text:`Media delivery: ${p.code}. ${next} No generation was submitted.`}],
     ...(p.retry ? {_meta:{"split/deliveryPending":true,retry_after_seconds:p.retry}} : {})};
 };
 function summary(state:DeliveryState) {
@@ -26,8 +32,21 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
   fallback:()=>Promise<CallToolResult>):Promise<CallToolResult> {
   const kind=name.includes("3d") ? "3d" : name.includes("audio") ? "audio" : name.includes("video") ? "video" : "image";
   const part=name.startsWith("read_");
-  // Original-route continuations have no copy reference, including CLI chunks.
-  if(args.delivery_ref===undefined && (part || (Number(args.byte_offset) || 0)>0)) return fallback();
+  const original = async (error?:unknown):Promise<CallToolResult> => {
+    const result=await fallback();
+    return {...result,...(result.structuredContent ? {structuredContent:{...result.structuredContent,
+      delivery_route:"original",...(error ? unavailable(error) : {})}} : {}),
+      content:[...result.content,...(error ? [{type:"text" as const,text:`External delivery unavailable (${problem(error).code}); using the existing authenticated output route.`}] : [])]};
+  };
+  // A stateless read cannot infer the previous route from the current copy state.
+  if(args.delivery_route!==undefined) {
+    if(args.delivery_route!=="original" || args.delivery_ref!==undefined) return failure(new DeliveryError("invalid_delivery_reference"));
+    return original();
+  }
+  if(args.delivery_ref===undefined) {
+    if((Number(args.byte_offset) || 0)>0) return failure(new DeliveryError("delivery_reference_required"));
+    if(part) return original(); // Legacy/starting widgets choose their route at offset zero.
+  }
   let file:OutputFile, ref:DeliveryRef, count:number|undefined;
   let prompt_id:string|undefined, index:number|undefined;
   try {
@@ -63,10 +82,7 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
     }
   } catch(e) {
     if(args.delivery_ref!==undefined) return failure(e);
-    const p=problem(e),result=await fallback();
-    return {...result,...(result.structuredContent ? {structuredContent:{...result.structuredContent,
-      delivery_status:"unavailable",delivery_reason:p.code}} : {}),
-      content:[...result.content,{type:"text",text:`External delivery unavailable (${p.code}); using the existing authenticated output route.`}]};
+    return original(e);
   }
   const metadata={...file,...(prompt_id ? {prompt_id,index} : {}),
     ...(count ? {[kind+"_count"]:count} : {}),mimeType:ref.mime_type,size:ref.size_bytes,
@@ -98,7 +114,11 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
       complete && kind==="audio" ? {type:"audio",mimeType:ref.mime_type,data:blob} :
       {type:"resource",annotations:{audience:["user"]},resource:{uri:metadata.url+(complete ? "" : `#bytes=${offset}-${next-1}`),
         mimeType:complete ? ref.mime_type : "application/octet-stream",blob}}]};
-  } catch(e) {return failure(e);} // Never splice original bytes into an in-progress copy read.
+  } catch(e) {
+    // No copy bytes have been returned by an initial get_* call yet.
+    if(args.delivery_ref===undefined && !part) return original(e);
+    return failure(e); // Never switch an explicitly selected copy mid-read.
+  }
 }
 
 const outputPageSchema=z.object({items:z.array(z.object({filename:z.string(),subfolder:z.string().default(""),index:z.number().int().nonnegative(),
@@ -113,7 +133,7 @@ export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value
     const batch=await Promise.all(page.items.slice(offset,offset+6).map(async(file,j)=>{
       const position=offset+j;
       try {return {source:await adapter.inspect(send,outputFileSchema.parse(file)),position};}
-      catch(e) {Object.assign(items[position],{delivery_status:"unavailable",delivery_reason:problem(e).code});return undefined;}
+      catch(e) {Object.assign(items[position],unavailable(e));return undefined;}
     }));
     for(const entry of batch) if(entry) inspected.push(entry);
   }
@@ -122,9 +142,9 @@ export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value
       const states=await adapter.lookup(inspected.map(({source})=>source));
       for(const [i,{source,position}] of inspected.entries()) {
         try {Object.assign(items[position],summary(prepare ? await adapter.prepareSource(send,source,states[i]) : states[i]));}
-        catch(e) {const p=problem(e);Object.assign(items[position],{delivery_status:"unavailable",delivery_reason:p.code,...(p.retry ? {retry_after_seconds:p.retry} : {})});}
+        catch(e) {Object.assign(items[position],unavailable(e));}
       }
-    } catch(e) {for(const {position} of inspected) Object.assign(items[position],{delivery_status:"unavailable",delivery_reason:problem(e).code});}
+    } catch(e) {for(const {position} of inspected) Object.assign(items[position],unavailable(e));}
   }
   return {...page,items};
 }
