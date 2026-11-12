@@ -44,6 +44,18 @@ uv run --locked --extra split-test python scripts/test_standalone.py --suite spl
 uv run --locked --extra split-test python scripts/test_standalone.py --suite split --pattern test_worker.py
 ```
 
+### 3Dビューアーの表示確認
+
+`worker/` の依存関係をインストール後、次のコマンドでGLB/SPZのローカルサンプルを表示できます。
+
+```bash
+cd worker
+npm run build:viewer
+node --experimental-strip-types scripts/preview-3d.mjs
+```
+
+`http://127.0.0.1:8767` で `/view?type=output&filename=sample.glb` を開きます。`sample.spz` も同様に確認できます。模擬MCPホストは `/mcp-test?filename=sample.spz`、WebAssembly制限時の案内はそのURLに `&restricted=1` を付けて確認します。実MCPクライアント・Access認証の確認は接続先で別途行います。
+
 ---
 
 ## テストの設計原則と運用方針

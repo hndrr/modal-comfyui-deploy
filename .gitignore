@@ -32,6 +32,7 @@ worker/node_modules/
 worker/.wrangler/
 /.wrangler/
 worker/.dev.vars
+worker/src/generated/
 # Local split validation evidence (logs, snapshots and measurements)
 /docs/validation/
 /mcp/.state/

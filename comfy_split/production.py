@@ -14,12 +14,12 @@ from aiohttp import web
 from PIL import Image
 
 from comfy_split import input_media as media
+# Share list_outputs rows so output indexes agree across the media CPU and MCP.
 from comfy_split.media_server import FORMATS, output_rows as outputs
 from comfy_split.storage import MOUNTS
 
-# list_outputs is served by the media CPU. Share its rows so an output index
-# names the same file in reuse_output and inspect_media.
-KINDS = {ext: kind for ext, (kind, _) in FORMATS.items()}
+# Input browsing retains its existing image/audio/video formats.
+INPUT_KINDS = {ext: kind for ext, (kind, _) in FORMATS.items() if kind in {"image", "audio", "video"}}
 
 
 def require(ok, reason):
@@ -74,8 +74,11 @@ def page(rows, args):
 
 def inspect(file, name):
     ext = Path(name).suffix.lower()[1:]
-    require(ext in KINDS, "Unsupported media")
-    result = {"filename": name, "kind": KINDS[ext], "size_bytes": os.fstat(file.fileno()).st_size}
+    require(ext in FORMATS, "Unsupported media")
+    result = {"filename": name, "kind": FORMATS[ext][0], "size_bytes": os.fstat(file.fileno()).st_size}
+    if result["kind"] == "3d":
+        result["format"] = ext.upper()
+        return result
     if result["kind"] == "image":
         with Image.open(file) as image:
             result.update(width=image.width, height=image.height, format=image.format)
@@ -127,12 +130,12 @@ def production(name, a, jobs):
     root = Path(MOUNTS["input"])
     if name == "list_inputs":
         kind, query = a.get("kind"), a.get("query", "")
-        require(kind is None or kind in KINDS.values(), "Unknown media kind")
+        require(kind is None or kind in INPUT_KINDS.values(), "Unknown media kind")
         require(isinstance(query, str), "Invalid search")
         rows = []
         with os.scandir(root) as entries:
             for e in entries:
-                k = KINDS.get(Path(e.name).suffix.lower()[1:])
+                k = INPUT_KINDS.get(Path(e.name).suffix.lower()[1:])
                 if (
                     k
                     and (not kind or k == kind)
@@ -170,6 +173,7 @@ def production(name, a, jobs):
         if name == "inspect_media":
             return inspect(file, path)
         require(name == "reuse_output", "Unknown operation")
+        require(item["kind"] != "3d", "3D outputs cannot be reused as inputs")
         size = os.fstat(file.fileno()).st_size
         require(0 < size <= media.MAX, "Output exceeds the input size limit (256 MiB)")
         key = hashlib.sha256(f"reuse:{job_id}:{index}:{path}".encode()).hexdigest()

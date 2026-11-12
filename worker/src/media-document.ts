@@ -1,11 +1,24 @@
 // Top-level links need an HTML document. ComfyUI media elements and API clients
 // keep /view's original byte and Range semantics.
+import {threeViewerHtml} from "./three-viewer.ts";
+import {threeInputs} from "./three-media.ts";
+import {z} from "zod";
 export function mediaDocument(request:Request):Response|null {
   const url=new URL(request.url), q=url.searchParams;
   if (url.pathname!=="/view" || request.method!=="GET" || request.headers.has("Range") ||
       request.headers.get("Sec-Fetch-Dest")!=="document" || request.headers.get("Sec-Fetch-Mode")!=="navigate" ||
       q.get("type")!=="output" || q.has("preview") || q.has("channel")) return null;
   const file=q.get("filename") || "", folder=q.get("subfolder") || "";
+  if (/\.(?:glb|spz)$/i.test(file)) {
+    const parsed = z.object(threeInputs).safeParse({filename:file,subfolder:folder});
+    if (!parsed.success) return null;
+    return new Response(threeViewerHtml(url.origin,{filename:file,subfolder:folder}),{headers:{
+      "Content-Type":"text/html; charset=utf-8","Cache-Control":"private, no-store",
+      "Vary":"Sec-Fetch-Dest, Sec-Fetch-Mode, Range",
+      "Content-Security-Policy":"default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:; connect-src 'self' blob: data:; img-src blob: data:; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      "X-Content-Type-Options":"nosniff","Referrer-Policy":"no-referrer",
+    }});
+  }
   const safe=(v:string)=> v && v.length<=255 && v!=="." && v!==".." && !/[/\\:\x00-\x1f\x7f]/.test(v);
   if (!safe(file) || !/\.(?:mp3|wav|flac|ogg|opus|mp4)$/i.test(file) || folder.length>1024 ||
       (folder && !folder.split("/").every(safe))) return null;
