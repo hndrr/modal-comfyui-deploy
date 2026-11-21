@@ -8,9 +8,9 @@ import re
 from uuid import uuid4
 from pathlib import Path
 
-from aiohttp import ClientTimeout, web
+from aiohttp import ClientResponseError, ClientTimeout, web
 
-from comfy_split import model_files, node_packs
+from comfy_split import manager_queue, model_files, node_packs
 from comfy_split.production import page
 from comfy_split.state import body_digest
 from comfy_split.storage import MOUNTS
@@ -59,8 +59,10 @@ async def queue_status(c):
     if (c.journal.data["candidate"] or {}).get("status") in {"creating", "failed"}:
         return None
     if c.candidate.process and c.candidate.process.returncode is None:
-        state = await manager(c, "GET", "manager/queue/status")
-        return {key: state.get(key) for key in ("is_processing", "pending_count", "in_progress_count")}
+        try:
+            return await manager_queue.read_queue(c.client, c.candidate.url, timeout=15)
+        except ClientResponseError as error:
+            raise web.HTTPConflict(text=f"Candidate Manager rejected the operation ({error.status}).") from error
     return None
 
 
@@ -88,7 +90,7 @@ async def refresh_nodes(c, state):
                     if status.get("status_str") in {"success", "skipped", "skip"}
                     else "failed"
                 )
-            elif state.get("is_processing") or state.get("pending_count"):
+            elif manager_queue.busy(state):
                 continue
             else:
                 result = "unknown"
@@ -275,7 +277,7 @@ async def mutate(c, name, a, row):
         if data["session"] or c.journal.busy() or (c.apply_task and not c.apply_task.done()):
             conflict("Wait for active jobs or validation to finish.")
         state = await queue_status(c)
-        if state and (state["is_processing"] or state["pending_count"]):
+        if state and manager_queue.busy(state):
             conflict("Wait for the candidate Manager queue.")
         await refresh_nodes(c, state)
         if name == "discard_environment":

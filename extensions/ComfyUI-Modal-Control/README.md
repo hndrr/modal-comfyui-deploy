@@ -32,12 +32,9 @@ ComfyUIや環境バージョンを交換しても拡張はイメージから読�
 
 読み込みにはComfyUIの `app.registerExtension()` を使います。
 split はデプロイ時に ComfyUI の安定リリースを選び、そのリリースが指定するフロントエンドを使います（[split の更新方法](../../docs/guides/comfyui-split.md)）。
-将来のすべてのバージョンとの互換性を保証するものではありません。
-更新時は標準拡張一覧、状態API、GPU0台の表示、保存・復元を確認してください。
 
-公式の読み込み仕様: https://docs.comfy.org/custom-nodes/js/javascript_overview
+### フロントエンド更新時の確認
 
-GPU状態は標準ツールバー内の独立したボタンにも常時表示し、クリックするとGPUサイドバーを切り替える。
-位置の固定やキャンバスへの重ね描きは行わない。
-
-台数表示は `GPU(0)` の形式とし、稼働中は赤、取得失敗時は `GPU(?)` とする。
+1. 検証環境で標準 UI を開き、`GET /extensions` の一覧にこの拡張の `modal-control.js` があることを確認します。読み込みに失敗したら、ブラウザのコンソールで `comfy-adapter.mjs` の import を確認します。[公式の拡張読み込み仕様](https://docs.comfy.org/custom-nodes/js/javascript_overview)
+2. GPU 停止中にツールバーの `GPU(0)` をクリックし、サイドバーが開くことを確認します。状態 API が台数を返しているのにボタンが出ない場合は、アダプターの `registerGpuIndicator` と `registerGpuSidebar` を確認します。
+3. 検証用ワークフローを編集し、キューが空の状態で GPU 常時起動へ切り替え、分離モードへ戻します。各回の再読み込み後にノード・接続・編集値が復元されることを確認します。保存時は `saveWorkflow`、復元時は `restoreWorkflow` が公式 UI との接点です。

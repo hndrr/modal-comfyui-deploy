@@ -614,6 +614,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             await self.control.apply_environment()
         self.assertEqual(self.control.journal.data["environment"], "base")
         self.assertEqual(self.control.journal.data["candidate"]["status"], "failed")
+        self.assertEqual(self.control.journal.data["candidate"]["error"], "Unrecognized Manager queue status")
         self.worker.spawn.aio.assert_not_awaited()
 
     async def test_mode_is_not_ready_until_cpu_has_restarted(self):

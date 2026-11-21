@@ -81,11 +81,20 @@ if __name__ == "__main__":
         sys.path.insert(0, "/opt/comfy-template")
         from comfy.cli_args import args as comfy_args
         comfy_args.cpu = True
-        guard = runpy.run_path("/opt/comfy-extensions/ComfyUI-Modal-Bridge/cpu_guard.py")
-        guard["install_cpu_guard"]()
-        from comfy_execution.jobs import JobStatus, get_all_jobs, get_job
-        queue = [(0, "split-build-check", {}, {"create_time": 1}, [])]
-        jobs, total = get_all_jobs([], queue, {}, status_filter=[JobStatus.PENDING],
-                                  workflow_id=None, sort_by="created_at", sort_order="desc", limit=1, offset=0)
-        if total != 1 or jobs[0]["id"] != queue[0][1] or get_job(queue[0][1], [], queue, {})["id"] != queue[0][1]:
-            raise RuntimeError("Unsupported ComfyUI job serialization; review the Modal bridge")
+        bridge = Path("/opt/comfy-extensions/ComfyUI-Modal-Bridge")
+        try:
+            runpy.run_path(str(bridge / "cpu_guard.py"))["verify_cpu_guard"]()
+        except Exception as error:
+            raise RuntimeError("Incompatible ComfyUI CPU queue guard; check Bridge cpu_guard.py") from error
+        job_id = "split-build-check"
+        body = {"queue": {"queue_running": [], "queue_pending": [[0, job_id, {}, {"create_time": 1}, []]]},
+                "history": {}, "query": {"status": "pending", "limit": "1"}}
+        try:
+            serialize = runpy.run_path(str(bridge / "jobs.py"))["serialize_jobs"]
+            listing, list_status = serialize(body)
+            job, job_status = serialize({**body, "job_id": job_id})
+            if (list_status != 200 or job_status != 200 or listing["pagination"]["total"] != 1
+                    or [item["id"] for item in listing["jobs"]] != [job_id] or job["id"] != job_id):
+                raise ValueError("Expected the queued job in both list and detail responses")
+        except Exception as error:
+            raise RuntimeError("Incompatible ComfyUI job serialization; check Bridge jobs.py") from error

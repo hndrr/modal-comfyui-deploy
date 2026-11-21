@@ -197,6 +197,15 @@ Volumeの構成一覧については、[CPU/GPU分離構成ガイドのVolume一
 - **内部境界変更時の検証**:
   - BridgeやGatewayとの連携境界を変更した際は、`scripts/verify_comfy_bridge.py` によるCPUガードおよびジョブAPIの検証に加え、実モデルでの生成・プレビュー、通常出力・一時出力の保存、CPU再起動後の復元、二重実行防止の動作確認を必ず実施してください。
 
+### ComfyUI 更新時の切り分け
+
+| 症状 | 確認する箇所 |
+| --- | --- |
+| ビルド時に CPU キューガードまたはジョブ整形の非互換で停止する | [Bridge](../../extensions/ComfyUI-Modal-Bridge/README.md) の `cpu_guard.py` または `jobs.py`。ビルドは選択した本体 SHA で実際のガードを取り付け、内部ルートと共通の整形関数で待機ジョブの一覧と詳細を検査します。 |
+| 生成できるが履歴・進捗・中断の表示が合わない | [job_progress.py](../../comfy_split/job_progress.py) で、ワーカーが受け取った標準履歴・WebSocket イベントと、ブラウザや MCP に返す結果を照合します。出力の保存と完了通知の順序は Gateway とワーカーが保証します。 |
+| Manager のインストール後に反映できない、または CPU が停止待ちのままになる | [manager_queue.py](../../comfy_split/manager_queue.py) で候補環境のキュー応答を確認します。CPU の停止判定、候補の反映、MCP が同じ応答を使います。 |
+| GPU パネルやモード切替時のワークフロー復元だけが動かない | [フロントエンド更新時の確認](../../extensions/ComfyUI-Modal-Control/README.md#フロントエンド更新時の確認)を実行します。 |
+
 ---
 
 ## 検証・テスト・修復手順

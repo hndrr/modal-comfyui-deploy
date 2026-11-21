@@ -6,7 +6,7 @@ import signal
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
 from aiohttp import ClientConnectionError, web
@@ -335,11 +335,14 @@ class RemoteOperations(unittest.IsolatedAsyncioTestCase):
         c.ensure_candidate = AsyncMock()
         c.candidate.process = SimpleNamespace(returncode=None)
         state = {"is_processing": True, "pending_count": 0, "in_progress_count": 1}
+        queue_response = AsyncMock()
+        queue_response.__aenter__.return_value = SimpleNamespace(
+            status=200, raise_for_status=Mock(), json=AsyncMock(return_value=state)
+        )
+        c.client = SimpleNamespace(get=Mock(return_value=queue_response))
         history = {}
 
         async def manager(c, method, path, **kw):
-            if path.endswith("/status"):
-                return state
             if path.endswith("/history"):
                 return {"history": history}
             if path.endswith("/task"):

@@ -67,7 +67,7 @@ class CpuAutoscalingTests(unittest.IsolatedAsyncioTestCase):
     async def test_manager_finishes_and_commits_before_sleep(self):
         self.control.journal.data['candidate'] = {'status': 'editing'}
         self.control.candidate.process = SimpleNamespace(returncode=None)
-        response = SimpleNamespace(raise_for_status=Mock(), json=AsyncMock(
+        response = SimpleNamespace(status=200, raise_for_status=Mock(), json=AsyncMock(
             return_value={'is_processing': True, 'pending_count': 0}))
         context = AsyncMock()
         context.__aenter__.return_value = response
