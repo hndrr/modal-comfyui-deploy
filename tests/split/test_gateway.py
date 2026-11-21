@@ -368,6 +368,62 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.control.dispatch_jobs()
         self.assertEqual([j["status"] for j in jobs], ["completed", "queued", "unknown", "completed", "running"])
 
+    async def test_allocation_timeout_and_manual_switch_only_grant_current_attempt(self):
+        self.control.workers.update(L4=self.worker, L40S=self.worker)
+        self.control.read_result = AsyncMock(return_value=None)
+        call = SimpleNamespace(cancel=remote_mock())
+        self.enterContext(patch("modal.FunctionCall.from_id", return_value=call))
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job.update(gpu="L4", gpu_reason="test")
+        with patch("time.time", return_value=1000):
+            await self.control.dispatch_jobs()
+        initial = job["allocation"]
+        with patch("time.time", return_value=1179):
+            await self.control.dispatch_jobs()
+        self.assertEqual(job["gpu"], "L4")
+        with patch("time.time", return_value=1180):
+            await self.control.dispatch_jobs()
+        self.assertEqual(job["gpu"], "RTX-PRO-6000")
+        self.assertNotEqual(job["allocation"], initial)
+        await self.control.relay_event(job, {"type": "allocation_ready", "allocation": initial})
+        self.commands.put.aio.assert_awaited_with("stop", partition=initial, partition_ttl=240)
+        url = "/split/jobs/" + job["id"] + "/gpu"
+        self.assertEqual((await self.client.post(url, json={"gpu": "L40S"})).status, 200)
+        await self.control.dispatch_jobs()
+        token = job["allocation"]
+        job["submitted_at"] -= 300
+        await self.control.dispatch_jobs()
+        self.assertEqual(job["gpu"], "L40S")
+        await self.control.relay_event(job, {"type": "allocation_ready", "allocation": token})
+        self.commands.put.aio.assert_awaited_with("run", partition=token, partition_ttl=240)
+        self.assertTrue(Journal(Path(self.temp.name)).data["jobs"][job["id"]]["allocation_granted"])
+        self.assertEqual((await self.client.post(url, json={"gpu": "L4"})).status, 409)
+        self.assertEqual(call.cancel.aio.await_count, 2)
+
+    async def test_fallback_settings_and_cancelling_allocation(self):
+        settings = {"enabled": False, "minutes": 1, "gpu": "L40S"}
+        url = "/split/gpu-fallback"
+        self.assertEqual((await self.client.post(url, json={**settings, "minutes": 0})).status, 400)
+        self.assertEqual((await self.client.post(url, json=settings)).status, 200)
+        self.assertEqual(Journal(Path(self.temp.name)).data["gpu_fallback"], settings)
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job.update(gpu=self.control.session_gpu, gpu_reason="test")
+        self.control.read_result = AsyncMock(return_value=None)
+        await self.control.dispatch_jobs()
+        job["submitted_at"] -= 300
+        await self.control.dispatch_jobs()
+        state = await (await self.client.get("/split/status")).json()
+        self.assertEqual([j["id"] for j in state["waiting_for_gpu"]], [job["id"]])
+        self.assertEqual(job["gpu"], self.control.session_gpu)
+        with patch("modal.FunctionCall.from_id", return_value=SimpleNamespace(cancel=remote_mock())):
+            await self.control.cancel([job["id"]])
+        self.assertEqual(job["status"], "cancelled")
+        self.assertNotIn("allocation", job)
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        job["mcp_guard"] = {"routes": [["approved"]]}
+        await self.control.dispatch_jobs()
+        self.assertNotIn("allocation", job)
+
     async def test_interrupt_and_unlabelled_previews_are_scoped_during_parallel_runs(self):
         jobs = [self.control.journal.enqueue({"prompt": {"1": {}}, "client_id": sid})
                 for sid in ("same", "same", "other")]

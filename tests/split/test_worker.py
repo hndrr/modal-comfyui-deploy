@@ -112,10 +112,29 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(worker_module, "JOBS", self.root))
         self.enterContext(patch.object(worker_module, "generate", self.generate))
 
-    async def run_job(self):
+    async def run_job(self, *, commands=None, **extra):
         return await worker_module.run_worker(
-            {"id": "job", "environment": "base", "operation": "generate", "body": {"prompt": {}}},
-            self.events, SimpleNamespace(get_many=remote_mock([])), self.volumes)
+            {"id": "job", "environment": "base", "operation": "generate", "body": {"prompt": {}}, **extra},
+            self.events, commands or SimpleNamespace(get_many=remote_mock([])), self.volumes)
+
+    async def test_superseded_allocation_exits_before_creating_shared_receipts(self):
+        commands = SimpleNamespace(get=remote_mock("stop"), get_many=remote_mock([]))
+        self.assertEqual((await self.run_job(commands=commands, allocation="old"))["status"], "cancelled")
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.generate.assert_not_awaited()
+        commands.get.aio.return_value = "run"
+        self.assertEqual((await self.run_job(commands=commands, allocation="current"))["status"], "completed")
+        self.generate.assert_awaited_once()
+
+    async def test_warm_worker_reuses_unchanged_models_and_reloads_a_new_revision(self):
+        self.process.version = "base"
+        self.process.models_revision = "current"
+        await self.run_job(models_revision="current")
+        self.volumes["models"].reload.aio.assert_not_awaited()
+        self.process.stop.assert_not_awaited()
+        await self.run_job(models_revision="new")
+        self.process.stop.assert_awaited_once()
+        self.volumes["models"].reload.aio.assert_awaited_once()
 
     async def test_result_receipt_is_written_after_outputs_committed(self):
         sequence = []

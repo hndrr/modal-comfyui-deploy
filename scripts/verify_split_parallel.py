@@ -80,23 +80,18 @@ async def main(gpu):
         assert overlap > 0 and times[3][0] >= min(end for _, end in times[:3]), times
         assert len(hashes) == 4
         data_volume = modal.Volume.from_name("comfy-split-data")
-        journal = json.loads(b"".join([chunk async for chunk in data_volume.read_file.aio("/state/controller.json")]))
         tasks = []
         for job_id in ids:
-            call = modal.FunctionCall.from_id(journal["jobs"][job_id]["call_id"])
-            nodes = list(await call.get_call_graph.aio())
-            while nodes:
-                node = nodes.pop()
-                if node.function_call_id == call.object_id:
-                    tasks.append(node.task_id)
-                    break
-                nodes.extend(node.children)
-            else:
-                raise AssertionError(f"Missing Modal execution record for {job_id}")
+            receipt = b"".join([chunk async for chunk in data_volume.read_file.aio(f"jobs/{job_id}.started.json")])
+            tasks.append(json.loads(receipt)["worker_id"])
         assert all(tasks) and len(set(tasks[:3])) == 3, tasks
+        reused = tasks[3] in tasks[:3]
+        if reused:
+            cached = dict(history[ids[3]]["status"]["messages"])["execution_cached"]["nodes"]
+            assert {"1", "2", "3"} <= set(cached), ("Warm model loaders were not reused", cached)
         print(json.dumps({"prompt_ids": ids, "three_way_overlap_seconds": overlap / 1000,
                           "distinct_first_three_containers": len(set(tasks[:3])),
-                          "distinct_images": len(hashes)}), flush=True)
+                          "fourth_reused_warm_worker": reused, "distinct_images": len(hashes)}), flush=True)
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             if (await get("/split/status"))["gpu"]["containers"] == 0:

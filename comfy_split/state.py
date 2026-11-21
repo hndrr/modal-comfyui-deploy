@@ -75,6 +75,7 @@ class Journal:
             "jobs": {}, "next_number": 0, "session": None,
         }
         self.data.setdefault("retired_jobs", {})
+        self.data.setdefault("gpu_fallback", {"enabled": True, "minutes": 3, "gpu": "RTX-PRO-6000"})
         self._job_hashes = {}
         self._removed_jobs = set()
         self._review_hashes = {}

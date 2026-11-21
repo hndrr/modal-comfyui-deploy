@@ -22,7 +22,7 @@ from comfy_split.extensions import load_extensions, check_requirements, reserved
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
-from comfy_split import gpu, job_progress, mcp_policy
+from comfy_split import gpu, job_progress, mcp_policy, model_files
 from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,10 @@ def api_path(path):
 def manager_path(path):
     path = path.removeprefix("/v2")
     return path.startswith(("/manager/", "/customnode/", "/snapshot/", "/comfyui_manager/"))
+
+
+def waiting_for_gpu(job):
+    return job["status"] == "running" and bool(job.get("allocation")) and not job.get("allocation_granted")
 
 
 class Controller:
@@ -360,17 +364,18 @@ class Controller:
             others = await gpu.pool_stats(w for device, w in self.workers.items() if device != target)
             if any(s.num_total_runners or s.backlog for s in others):
                 return
+        extra = {}
         if operation == "generate":
             await self.volumes["input"].commit.aio()
             await self.volumes["models"].reload.aio()
-        extra = {}
+            extra["models_revision"] = await asyncio.to_thread(model_files.catalog_revision, Path(storage.MOUNTS["models"]))
         try:
             check_requirements(record.get("body"), record)
             for extension in self.plugins:
                 hook = getattr(extension, "before_dispatch", None)
                 if hook:
                     values = hook(record)
-                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard"}:
+                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard", "models_revision", "allocation"}:
                         raise ValueError("Extension attempted to replace core worker fields")
                     extra.update(values)
         except ValueError as error:
@@ -379,6 +384,9 @@ class Controller:
         # Persist intent BEFORE spawn. A crash between spawn and call-id commit
         # leaves an unknown job, which recovery must never blindly resubmit.
         self.gpu_stats_expiry = 0
+        if operation == "generate" and target != "CPU" and not record.get("mcp_guard", {}).get("routes"):
+            extra["allocation"] = uuid.uuid4().hex
+            record.update(allocation=extra["allocation"], submitted_at=time.time(), allocation_granted=False)
         record["status"] = "dispatching"
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
@@ -431,6 +439,14 @@ class Controller:
 
     async def relay_event(self, record, event):
         """Relay worker progress while deferring output notifications until files are durable."""
+        if event["type"] == "allocation_ready":
+            token = event["allocation"]
+            current = record.get("allocation") == token and record["status"] == "running"
+            if current:
+                record["allocation_granted"] = True
+                await self.persist()
+            await self.commands.put.aio("run" if current else "stop", partition=token, partition_ttl=240)
+            return
         for extension in self.plugins:
             hook = getattr(extension, "worker_event", None)
             if hook and await hook(record, event):
@@ -556,6 +572,7 @@ class Controller:
                 await asyncio.sleep(2)
 
     async def dispatch_jobs(self):
+        fallback = self.journal.data["gpu_fallback"]
         for job in list(self.journal.data["jobs"].values()):
             if job["status"] not in ACTIVE - {"queued"}:
                 continue
@@ -564,11 +581,33 @@ class Controller:
                 result = await self.read_result(job)
                 if result and not (result.get("status") == "unknown" and job["status"] == "unknown"):
                     await self.finish(job, result)
+                elif (waiting_for_gpu(job) and fallback["enabled"] and not job.get("gpu_switched")
+                      and job.get("gpu", self.session_gpu) != fallback["gpu"]
+                      and time.time() - job["submitted_at"] >= 60 * fallback["minutes"]):
+                    await self.switch_gpu(job, fallback["gpu"], "自動")
             except Exception:
                 log.exception("Could not reconcile job %s; will retry", job["id"])
         while job := self.journal.next_job():
             await self.spawn(job, "generate")
             await self.status()
+
+    async def revoke_allocation(self, job):
+        # Invalidate the grant before replacing or cancelling the Modal call.
+        token = job.pop("allocation")
+        call_id = job["call_id"]
+        job["call_id"] = None
+        await self.persist()
+        try:
+            await modal.FunctionCall.from_id(call_id).cancel.aio()
+        except Exception:
+            log.warning("Could not cancel superseded allocation for %s", job["id"], exc_info=True)
+            await self.commands.put.aio("stop", partition=token, partition_ttl=240)
+
+    async def switch_gpu(self, job, device, reason):
+        previous = job.get("gpu", self.session_gpu)
+        job.update(status="queued", gpu=device, gpu_switched=True,
+                   gpu_reason=f"割り当て待ちのため{previous}から{reason}切り替え")
+        await self.revoke_allocation(job)
 
     async def end_legacy(self, result):
         await self.volumes["output"].reload.aio()
@@ -623,10 +662,14 @@ class Controller:
             job = self.journal.data["jobs"].get(job_id)
             if not job:
                 continue
-            if job["status"] == "queued":
+            if job["status"] == "queued" or waiting_for_gpu(job):
+                waiting = waiting_for_gpu(job)
                 job["status"] = "cancelled"
                 job["finished_at"] = time.time()
                 job["history"] = job_history(job)
+                if waiting:
+                    await self.revoke_allocation(job)
+                    await self.finish(job, {"status": "cancelled"})
             elif job["status"] in {"dispatching", "running"}:
                 await self.command(job_id, "interrupt")
         await self.persist()
@@ -933,10 +976,35 @@ class Controller:
                 return web.json_response({"api_version": 1, "mode": data["mode"], "environment": data["environment"],
                     "dependencies": getattr(self.cpu, "dependencies", {}),
                     "gpu": await self.gpu_status(),
+                    "gpu_fallback": data["gpu_fallback"],
+                    "waiting_for_gpu": [{"id": j["id"], "gpu": j.get("gpu", self.session_gpu),
+                        "wait_seconds": max(0, int(time.time() - j["submitted_at"]))}
+                        for j in data["jobs"].values() if waiting_for_gpu(j)],
                     "candidate": data["candidate"], "busy": self.journal.busy(),
                     "transitioning": bool(data["session"] and (
                         not data["session"].get("url") or data["session"].get("stopping"))),
                     "unknown_jobs": [j["id"] for j in data["jobs"].values() if j["status"] == "unknown"]})
+            if path == "/split/gpu-fallback" and request.method == "POST":
+                settings = await request.json()
+                if (not isinstance(settings, dict) or set(settings) != {"enabled", "minutes", "gpu"}
+                    or type(settings["enabled"]) is not bool or type(settings["minutes"]) is not int
+                    or not 1 <= settings["minutes"] <= 60 or settings["gpu"] not in tuple(gpu.WORKERS)):
+                    return web.json_response({"error": "有効・無効、待ち時間（1〜60分）、代替GPUを指定してください。"}, status=400)
+                async with self.lock:
+                    self.journal.data["gpu_fallback"] = settings
+                    await self.persist()
+                return web.json_response(settings)
+            if path.startswith("/split/jobs/") and path.endswith("/gpu") and request.method == "POST":
+                body = await request.json()
+                device = body.get("gpu") if isinstance(body, dict) else None
+                if device not in tuple(gpu.WORKERS):
+                    return web.json_response({"error": "切り替え先のGPUを指定してください。"}, status=400)
+                async with self.lock:
+                    job = self.journal.data["jobs"].get(path.removeprefix("/split/jobs/").removesuffix("/gpu"))
+                    if not job or not waiting_for_gpu(job) or device == job.get("gpu", self.session_gpu):
+                        return web.json_response({"error": "割り当て待ちのジョブに別のGPUを指定してください。"}, status=409)
+                    await self.switch_gpu(job, device, "手動")
+                    return web.json_response({"prompt_id": job["id"], "gpu": device})
             if path == "/split/mode" and request.method == "POST":
                 return await self.mode(request)
             if path == "/split/environment/discard" and request.method == "POST":
@@ -993,7 +1061,7 @@ class Controller:
                     job = self.journal.data["jobs"].get(job_id) or self.journal.data["retired_jobs"].get(job_id)
                     if job is None:
                         return web.json_response({"prompt_id": job_id, "status": "not_found"}, status=404)
-                    if job["status"] == "queued":
+                    if job["status"] == "queued" or waiting_for_gpu(job):
                         await self.cancel([job_id])
                     elif job["status"] in {"dispatching", "running"}:
                         if not job.get("cancel_requested"):

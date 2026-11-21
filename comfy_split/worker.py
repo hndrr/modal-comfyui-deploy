@@ -7,6 +7,7 @@ import os
 import queue
 import shutil
 import time
+import uuid
 from types import SimpleNamespace
 
 import modal
@@ -20,6 +21,7 @@ from comfy_split.storage import JOBS, STATE, USER
 
 CPU_WORKER = os.environ.get("SPLIT_WORKER_CPU") == "1"
 process = ComfyProcess("cpu_worker" if CPU_WORKER else "gpu", 8188)
+WORKER_ID = uuid.uuid4().hex
 
 
 async def run_worker(spec, events, commands, volumes):
@@ -29,6 +31,21 @@ async def run_worker(spec, events, commands, volumes):
     started = time.monotonic()
     generating = spec["operation"] == "generate"
     referenced = set()
+
+    # Only the gateway can grant the current attempt. A late allocation from
+    # a cancelled or replaced call must never touch this prompt's receipts.
+    if allocation := spec.get("allocation"):
+        while time.monotonic() - started < 180:
+            await events.put.aio({"type": "allocation_ready", "allocation": allocation}, partition=session_id)
+            try:
+                decision = await commands.get.aio(partition=allocation, timeout=10)
+            except queue.Empty:
+                continue
+            if decision == "run":
+                break
+            return {"status": "cancelled"}
+        else:
+            return {"status": "failed", "error": "GPUの割り当てをゲートウェイで確認できませんでした。"}
 
     async def emit(value):
         event = value.get("event", {})
@@ -47,18 +64,23 @@ async def run_worker(spec, events, commands, volumes):
     result = None
     async with ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False) as client:
         try:
-            if process.version is not None and process.version != spec["environment"]:
+            models_revision = spec.get("models_revision")
+            if process.version is not None and (process.version != spec["environment"] or
+                    (models_revision and models_revision != process.models_revision)):
                 await process.stop()
             for name in ("environment", "input", "models", "data", "output"):
                 # Environments are immutable. Native libraries imported from a
                 # venv stay open for the process lifetime and prevent reload.
                 if name == "environment" and process.version == spec["environment"]:
                     continue
+                if name == "models" and process.version and models_revision and models_revision == process.models_revision:
+                    continue
                 try:
                     await volumes[name].reload.aio()
                 except RuntimeError as error:
                     if "open files" not in str(error):
                         raise
+                    print(json.dumps({"event": "worker_volume_busy", "volume": name, "id": session_id}), flush=True)
                     # Some nodes keep model/input files mapped after execution.
                     # Close those handles before refreshing the Volume snapshot.
                     await process.stop()
@@ -77,10 +99,11 @@ async def run_worker(spec, events, commands, volumes):
                 write_json(result_path, result)
                 await volumes["data"].commit.aio()
                 return result
-            write_json(started_path, {"id": session_id, "at": time.time(),
+            write_json(started_path, {"id": session_id, "at": time.time(), "worker_id": WORKER_ID,
                                      "environment": spec["environment"], "operation": spec["operation"]})
             await volumes["data"].commit.aio()
             await process.start(spec["environment"], cpu=CPU_WORKER, isolated_output=generating)
+            process.models_revision = models_revision
             print(json.dumps({"event": "cpu_worker_ready" if CPU_WORKER else "gpu_ready", "id": session_id,
                               "seconds": time.monotonic() - started}))
             if spec["operation"] == "validate":

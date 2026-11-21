@@ -125,6 +125,7 @@ class ComfyProcess:
         self.role, self.port = role, port
         self.process = None
         self.version = None
+        self.models_revision = None
         self.dependencies = {}
         self.root = Path("/tmp") / ("split-comfy-" + role)
         self.log = Path("/tmp") / ("split-comfy-" + role + ".log")
