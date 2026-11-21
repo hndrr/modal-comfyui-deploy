@@ -346,28 +346,42 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ConnectionError):
                 await self.control.read_result({"id": "missing-test-result", "call_id": "fc-test"})
 
-    async def test_pool_switch_waits_without_dispatch_intent_or_blocking_cancellation(self):
-        other = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-l4")),
-                                get_current_stats=remote_mock(SimpleNamespace(num_total_runners=0, backlog=0)))
-        self.control.workers["L4"] = other
-        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=1, backlog=0)
-        job = self.control.journal.enqueue({"prompt": {"1": {}}})
-        job.update(gpu="L4", gpu_reason="ジョブの機種指定")
-        await self.control.spawn(job, "generate")
-        other.spawn.aio.assert_not_awaited()
-        self.assertEqual(job["status"], "queued")
-        state = await self.control.gpu_status()
-        self.assertEqual(state["containers"], 1)
-        self.assertEqual(state["latest_selection"]["gpu"], "L4")
-        await self.control.cancel([job["id"]])
-        self.assertEqual(job["status"], "cancelled")
+    async def test_dispatch_fills_three_slots_and_refills_out_of_order(self):
+        cpu = SimpleNamespace(spawn=remote_mock(SimpleNamespace(object_id="fc-cpu")))
+        self.control.cpu_worker = cpu
+        jobs = []
+        for device in ("CPU", "CPU", self.control.session_gpu, self.control.session_gpu, "L4"):
+            job = self.control.journal.enqueue({"prompt": {"1": {}}})
+            job.update(gpu=device, gpu_reason="test")
+            jobs.append(job)
+        self.control.workers["L4"] = self.worker
+        self.control.read_result = AsyncMock(return_value=None)
+        await self.control.dispatch_jobs()
+        self.assertEqual([j["status"] for j in jobs], ["running", "queued", "running", "running", "queued"])
+        self.control.read_result.side_effect = lambda j: {"status": "completed"} if j is jobs[3] else None
+        await self.control.dispatch_jobs()
+        self.assertEqual([j["status"] for j in jobs], ["running", "queued", "running", "completed", "running"])
+        self.assertEqual(cpu.spawn.aio.await_count, 1)
+        self.assertEqual(self.worker.spawn.aio.await_count, 3)
+        jobs[2]["status"] = "unknown"
+        self.control.read_result.side_effect = lambda j: {"status": "completed"} if j is jobs[0] else None
+        await self.control.dispatch_jobs()
+        self.assertEqual([j["status"] for j in jobs], ["completed", "queued", "unknown", "completed", "running"])
 
-        job = self.control.journal.enqueue({"prompt": {"1": {}}})
-        job["gpu"] = "L4"
-        self.worker.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
-        await self.control.spawn(job, "generate")
-        other.spawn.aio.assert_awaited_once()
-        self.assertEqual(job["call_id"], "fc-l4")
+    async def test_interrupt_and_unlabelled_previews_are_scoped_during_parallel_runs(self):
+        jobs = [self.control.journal.enqueue({"prompt": {"1": {}}, "client_id": sid})
+                for sid in ("same", "same", "other")]
+        for job in jobs:
+            job["status"] = "running"
+        response = await self.client.post("/api/interrupt", json={})
+        self.assertEqual(response.status, 409)
+        self.commands.put.aio.assert_not_awaited()
+        self.assertEqual((await self.client.post("/api/interrupt", json={"prompt_id": jobs[1]["id"]})).status, 200)
+        self.commands.put.aio.assert_awaited_once_with({"type": "interrupt"}, partition=jobs[1]["id"])
+        self.control.broadcast = AsyncMock()
+        for job in jobs:
+            await self.control.relay_event(job, {"type": "preview", "data": b"preview"})
+        self.control.broadcast.assert_awaited_once_with(b"preview", "other")
 
     async def test_spawn_failure_keeps_dispatch_intent_and_prevents_second_job(self):
         job = self.control.journal.enqueue({"prompt": {"1": {}}})
@@ -379,7 +393,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disk.data["jobs"][job["id"]]["status"], "unknown")
         self.assertIsNone(disk.next_job())
 
-    async def test_session_gpu_alias_still_counts_and_waits_for_the_named_pool(self):
+    async def test_session_gpu_alias_counts_named_pool_but_dispatches_to_session_worker(self):
         for device in ("L4", "L40S"):
             pools = {}
             def lookup(app, name):
@@ -394,10 +408,6 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.control.gpu_status())["containers"], 1)
             job = self.control.journal.enqueue({"prompt": {"1": {}}})
             job.update(gpu=device, gpu_reason="manual")
-            await self.control.spawn(job, "generate")
-            pools["gpu_worker"].spawn.aio.assert_not_awaited()
-            self.assertEqual(job["status"], "queued")
-            named_pool.get_current_stats.aio.return_value = SimpleNamespace(num_total_runners=0, backlog=0)
             await self.control.spawn(job, "generate")
             pools["gpu_worker"].spawn.aio.assert_awaited_once()
 

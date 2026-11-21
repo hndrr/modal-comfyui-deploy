@@ -27,8 +27,14 @@ async def run_worker(spec, events, commands, volumes):
     result_path = JOBS / (session_id + ".json")
     started_path = JOBS / (session_id + ".started.json")
     started = time.monotonic()
+    generating = spec["operation"] == "generate"
+    referenced = set()
 
     async def emit(value):
+        event = value.get("event", {})
+        if generating and event.get("type") == "executed":
+            detail = event["data"]
+            detail["output"] = process.durable_outputs(detail.get("output", {}), session_id, referenced)
         try:
             await events.put.aio(value, block=False, partition=session_id)
         except queue.Full:
@@ -74,7 +80,7 @@ async def run_worker(spec, events, commands, volumes):
             write_json(started_path, {"id": session_id, "at": time.time(),
                                      "environment": spec["environment"], "operation": spec["operation"]})
             await volumes["data"].commit.aio()
-            await process.start(spec["environment"], cpu=CPU_WORKER)
+            await process.start(spec["environment"], cpu=CPU_WORKER, isolated_output=generating)
             print(json.dumps({"event": "cpu_worker_ready" if CPU_WORKER else "gpu_ready", "id": session_id,
                               "seconds": time.monotonic() - started}))
             if spec["operation"] == "validate":
@@ -85,8 +91,14 @@ async def run_worker(spec, events, commands, volumes):
             elif spec["operation"] == "legacy":
                 result = await legacy(spec, client, control, emit)
             else:
+                await asyncio.to_thread(process.stage_output_inputs, spec["body"]["prompt"])
+                before = await asyncio.to_thread(process.output_snapshot)
                 result = await asyncio.wait_for(generate_with_extensions(spec, client, control, emit),
                     timeout=int(os.environ.get("SPLIT_GENERATION_TIMEOUT", "1800")))
+                if result.get("history"):
+                    history = result["history"]
+                    history["outputs"] = process.durable_outputs(history.get("outputs", {}), session_id, referenced)
+                await asyncio.to_thread(process.publish_outputs, session_id, before, referenced)
         except Exception as error:
             result = {"status": "failed", "error": str(error)}
             try:
@@ -97,8 +109,6 @@ async def run_worker(spec, events, commands, volumes):
         # Closing model/asset files before reload on the next invocation is the
         # subprocess's responsibility. Incompatible reloads fail, never run stale inputs.
         await asyncio.to_thread(process.archive_temp)
-        if result.get("history"):
-            result["history"]["outputs"] = process.durable_outputs(result["history"].get("outputs", {}))
         await volumes["output"].commit.aio()
         if spec["operation"] == "legacy":
             await volumes["data"].commit.aio()
@@ -172,8 +182,6 @@ async def generate(spec, client, control, emit):
                     if event.get("type") == "executing" and event.get("data", {}).get("node") is None:
                         relay_finished.set()
                         continue
-                    if event.get("type") == "executed":
-                        event["data"]["output"] = process.durable_outputs(event["data"].get("output", {}))
                     await emit({"type": "event", "event": event})
                 elif message.type == WSMsgType.BINARY and len(message.data) < 512 * 1024:
                     await emit({"type": "preview", "data": message.data})

@@ -17,6 +17,33 @@ ADAPTER_TOKEN = next(iter(INTEGRATIONS.values()))["secrets"][0][1]
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    def test_parallel_and_cached_outputs_keep_their_own_files(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(runtime, "OUTPUT", Path(tmp) / "shared"):
+            shared = runtime.OUTPUT
+            shared.mkdir()
+            (shared / "previous.png").write_bytes(b"previous")
+            for job, content in (("first", b"A"), ("second", b"B")):
+                process = runtime.ComfyProcess("gpu", 8188)
+                process.output_directory = Path(tmp) / job
+                process.output_directory.mkdir()
+                process.stage_output_inputs({"1": {"inputs": {"image": "previous.png [output]"}}})
+                before = process.output_snapshot()
+                folder = process.output_directory / "nested"
+                folder.mkdir()
+                (folder / "same.png").write_bytes(content)
+                (folder / "sidecar.txt").write_text(job)
+                native = {"type": "output", "filename": "same.png", "subfolder": "nested"}
+                refs = set()
+                output = process.durable_outputs(native, job, refs)
+                process.publish_outputs(job, before, refs)
+                self.assertEqual((shared / output["subfolder"] / output["filename"]).read_bytes(), content)
+                self.assertFalse((shared / "jobs" / job / "previous.png").exists())
+            process.publish_outputs("cached", process.output_snapshot(), refs)
+            self.assertEqual((shared / "jobs/cached/nested/same.png").read_bytes(), b"B")
+            self.assertFalse((shared / "jobs/cached/nested/sidecar.txt").exists())
+            self.assertEqual((shared / "jobs/first/nested/same.png").read_bytes(), b"A")
+            self.assertEqual((shared / "jobs/second/nested/sidecar.txt").read_text(), "second")
+
     async def test_candidate_archive_failure_still_terminates_and_reaps_process(self):
         """Candidate archive errors must still allow forced termination and process reaping."""
         process = runtime.ComfyProcess("candidate", 8190)
@@ -76,7 +103,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     process.temp_root = process.root / "temporary"
                     process.log = root / f"{mode}-{role}.log"
                     launch = AsyncMock(side_effect=RuntimeError("captured launch"))
-                    with patch.object(runtime, "ENVIRONMENTS", environments), \
+                    with patch.object(runtime, "ENVIRONMENTS", environments), patch.object(runtime, "OUTPUT", root / "data/output"), \
                          patch.object(runtime, "TEMPLATE", template), patch.object(runtime, "USER", user), \
                          patch.object(runtime, "Path", side_effect=local_path), \
                          patch.dict(os.environ, {**selection,
@@ -118,6 +145,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                                 client.__aenter__.return_value = client
                                 client.get = Mock(return_value=response)
                                 with (patch.object(runtime, "ENVIRONMENTS", environments),
+                                      patch.object(runtime, "OUTPUT", root / "data/output"),
                                       patch.object(runtime, "TEMPLATE", template),
                                       patch.object(runtime, "USER", user),
                                       patch.object(runtime, "Path", side_effect=local_path),

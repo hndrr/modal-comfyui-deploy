@@ -18,9 +18,10 @@ from aiohttp import ClientError, ClientSession
 from comfy_split import node_packs
 from comfy_split.gateway_access import ENV as GATEWAY_TOKEN_ENV
 from comfy_split.state import write_json
-from comfy_split.storage import ENVIRONMENTS, TEMP_ARCHIVE, USER
+from comfy_split.storage import ENVIRONMENTS, MOUNTS, TEMP_ARCHIVE, USER
 
 TEMPLATE = Path("/opt/comfy-template")
+OUTPUT = Path(MOUNTS["output"])
 
 
 def identifier(value):
@@ -130,6 +131,7 @@ class ComfyProcess:
         self.temp_root = self.root / "temporary"
         self.temp_namespace = uuid.uuid4().hex
         self.user_directory = user_directory
+        self.output_directory = OUTPUT
 
     def archive_temp(self, *, legacy_paths=False):
         source = self.temp_root / "temp"
@@ -138,17 +140,64 @@ class ComfyProcess:
         destination = TEMP_ARCHIVE / ("temp" if legacy_paths else self.temp_namespace)
         shutil.copytree(source, destination, dirs_exist_ok=True)
 
-    def durable_outputs(self, value):
+    def stage_output_inputs(self, prompt):
+        # Native loaders resolve the " [output]" annotation under --output-directory.
+        for node in prompt.values():
+            for value in node.get("inputs", {}).values():
+                if not isinstance(value, str) or not value.endswith(" [output]"):
+                    continue
+                name = Path(value.removesuffix(" [output]"))
+                if any(len(part.encode()) > 255 for part in name.parts):
+                    continue
+                if name.is_absolute() or ".." in name.parts:
+                    raise ValueError("Invalid output input path")
+                source = OUTPUT / name
+                if not source.resolve().is_relative_to(OUTPUT.resolve()):
+                    raise ValueError("Invalid output input path")
+                if not source.is_file():
+                    continue
+                destination = self.output_directory / name
+                if not destination.resolve().is_relative_to(self.output_directory.resolve()):
+                    raise ValueError("Invalid worker output path")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+
+    def output_snapshot(self):
+        files = {}
+        for path in self.output_directory.rglob("*"):
+            if not path.is_symlink() and path.is_file():
+                stat = path.stat()
+                files[path.relative_to(self.output_directory)] = (stat.st_ctime_ns, stat.st_size)
+        return files
+
+    def publish_outputs(self, job_id, before, referenced):
+        after = self.output_snapshot()
+        files = referenced | {name for name, stamp in after.items() if before.get(name) != stamp}
+        for name in files:
+            if name not in after:
+                raise ValueError(f"Missing generated output: {name}")
+            destination = OUTPUT / "jobs" / job_id / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(self.output_directory / name, destination)
+
+    def durable_outputs(self, value, job_id=None, referenced=None):
         if isinstance(value, list):
-            return [self.durable_outputs(item) for item in value]
+            return [self.durable_outputs(item, job_id, referenced) for item in value]
         if not isinstance(value, dict):
             return value
-        result = {key: self.durable_outputs(item) for key, item in value.items()}
-        if result.get("type") == "temp" and isinstance(result.get("filename"), str):
+        result = {key: self.durable_outputs(item, job_id, referenced) for key, item in value.items()}
+        kind = result.get("type")
+        if (kind == "temp" or (kind == "output" and job_id)) and isinstance(result.get("filename"), str):
             subfolder = Path(result.get("subfolder", ""))
-            if subfolder.is_absolute() or ".." in subfolder.parts:
-                raise ValueError("Invalid temporary output subfolder")
-            result.update(type="output", subfolder=(Path(".split-temp") / self.temp_namespace / subfolder).as_posix())
+            filename = result["filename"]
+            if subfolder.is_absolute() or ".." in subfolder.parts or Path(filename).name != filename or filename in {"", ".", ".."}:
+                raise ValueError("Invalid output path")
+            if kind == "temp":
+                folder = Path(".split-temp") / self.temp_namespace
+            else:
+                folder = Path("jobs") / job_id
+                referenced.add(subfolder / filename)
+            result.update(type="output", subfolder=(folder / subfolder).as_posix())
         return result
 
     @property
@@ -176,10 +225,12 @@ class ComfyProcess:
         self.version = None
         self.dependencies = {}
 
-    async def start(self, version, *, cpu=False, manager=False):
-        if self.version == version and self.process and self.process.returncode is None:
+    async def start(self, version, *, cpu=False, manager=False, isolated_output=False):
+        output = self.root / "generated" if isolated_output else OUTPUT
+        if self.version == version and self.output_directory == output and self.process and self.process.returncode is None:
             return
         await self.stop()
+        self.output_directory = output
         source = environment_path(version)
         self.root.mkdir(parents=True, exist_ok=True)
         special = {"models", "input", "output", "user", "temp"}
@@ -213,7 +264,7 @@ class ComfyProcess:
         configure_manager(user, manager)
         for name, destination in {
             "models": Path("/models"), "input": Path("/data/input"),
-            "output": Path("/data/output"),
+            "output": output,
         }.items():
             destination.mkdir(parents=True, exist_ok=True)
             link = self.root / name
@@ -248,7 +299,7 @@ class ComfyProcess:
                    "--listen", "127.0.0.1", "--port", str(self.port),
                    "--base-directory", str(self.root),
                    "--user-directory", str(user),
-                   "--input-directory", "/data/input", "--output-directory", "/data/output",
+                   "--input-directory", "/data/input", "--output-directory", str(output),
                    "--temp-directory", str(temporary),
                    "--database-url", f"sqlite:////tmp/split-{self.role}.db",
                    "--enable-manager", "--preview-method", "auto",

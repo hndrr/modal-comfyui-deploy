@@ -17,6 +17,7 @@ from comfy_split.model_import import import_model as import_model_file
 from comfy_split.extension_sources import enabled_sources
 from comfy_split.release import REVISION_ENV, comfy_revision
 from comfy_split.storage import MOUNTS, VOLUME_NAMES
+from comfy_split.state import GENERATION_LIMIT
 from comfyapp import (
     FUNCTION_TIMEOUT,
     GPU_PROFILE,
@@ -219,7 +220,7 @@ worker_options = dict(
     secrets=provider_secrets + ([modal.Secret.from_name(billing_secret, required_keys=["COMFY_API_KEY"])]
                                if billing_secret else []),
     min_containers=0,
-    max_containers=1,
+    max_containers=GENERATION_LIMIT,
     scaledown_window=30,
     timeout=86400,
     retries=0,
@@ -255,7 +256,7 @@ async def gpu_worker_l40s(spec):
 
 
 @app.function(**{**worker_options, "image": image.env({"SPLIT_WORKER_CPU": "1"}),
-                 "cpu": 2, "memory": 8192})
+                 "cpu": 2, "memory": 8192, "max_containers": 1})
 async def cpu_worker(spec):
     return await run_job(spec)
 

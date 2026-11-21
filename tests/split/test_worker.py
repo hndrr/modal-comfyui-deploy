@@ -93,9 +93,7 @@ class WorkerProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(progress, [1, 2])
             executed = [call.args[0]["event"]["data"]["output"] for call in emit.call_args_list
                         if call.args[0].get("event", {}).get("type") == "executed"]
-            expected = {**output, "3d": [{"filename": "preview.glb", "type": "output",
-                         "subfolder": f".split-temp/{process.temp_namespace}/nested"}]}
-            self.assertEqual(executed, [expected])
+            self.assertEqual(executed, [output])
         finally:
             await server.close()
 
@@ -105,7 +103,8 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.dict(os.environ, Settings().environment()))
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.volumes = volume_mocks()
-        self.process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x,
+        self.process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x, *_: x,
+            stage_output_inputs=Mock(), output_snapshot=Mock(return_value={}), publish_outputs=Mock(),
             url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
         self.generate = AsyncMock(return_value={"status": "completed"})
         self.events = SimpleNamespace(put=remote_mock())
@@ -115,7 +114,7 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_job(self):
         return await worker_module.run_worker(
-            {"id": "job", "environment": "base", "operation": "generate"},
+            {"id": "job", "environment": "base", "operation": "generate", "body": {"prompt": {}}},
             self.events, SimpleNamespace(get_many=remote_mock([])), self.volumes)
 
     async def test_result_receipt_is_written_after_outputs_committed(self):
@@ -175,7 +174,7 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.generate.side_effect = RuntimeError("CUDA-only custom node")
         with patch.object(worker_module, "CPU_WORKER", True):
             result = await self.run_job()
-        self.process.start.assert_awaited_once_with("base", cpu=True)
+        self.process.start.assert_awaited_once_with("base", cpu=True, isolated_output=True)
         self.generate.assert_awaited_once()
         self.assertEqual(result["status"], "failed")
         self.assertIn("CUDA-only", result["error"])

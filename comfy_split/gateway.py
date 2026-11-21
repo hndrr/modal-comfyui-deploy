@@ -356,7 +356,7 @@ class Controller:
         target = record.get("gpu", self.session_gpu)
         # The prior job may still own a warm container. Return to the dispatcher
         # while it scales down so cancellation and status stay responsive.
-        if target != "CPU":
+        if operation != "generate" and target != "CPU":
             others = await gpu.pool_stats(w for device, w in self.workers.items() if device != target)
             if any(s.num_total_runners or s.backlog for s in others):
                 return
@@ -388,7 +388,13 @@ class Controller:
                 spec[key] = record[key]
         spec.update(extra)
         worker = self.cpu_worker if target == "CPU" else self.workers[target]
-        call = await worker.spawn.aio(spec)
+        try:
+            call = await worker.spawn.aio(spec)
+        except Exception:
+            if operation == "generate":
+                record.update(status="unknown", error="実行ワーカーの呼び出し結果を確認できません。")
+                await self.persist()
+            raise
         record["call_id"] = call.object_id
         record["status"] = "running"
         await self.persist()
@@ -434,6 +440,14 @@ class Controller:
             await self.persist()
         elif event["type"] in {"event", "preview"}:
             data = event.get("event", event.get("data"))
+            client_id = record.get("body", {}).get("client_id")
+            if event["type"] == "preview" and any(
+                j["id"] != record["id"] and j["status"] in ACTIVE - {"queued"}
+                and (not client_id or j.get("body", {}).get("client_id") in (None, client_id))
+                for j in self.journal.data["jobs"].values()
+            ):
+                # Native binary previews do not always carry a prompt ID.
+                return
             kind = data.get("type") if isinstance(data, dict) else None
             if kind:
                 job_progress.observe(record, kind, data.get("data"))
@@ -489,6 +503,8 @@ class Controller:
         self.cleanup_due = 0
         delivered = set()
         for event in deferred:
+            if record["status"] != "completed" and str(event["data"]["node"]) not in record["history"]["outputs"]:
+                continue
             await self.broadcast(event, record.get("body", {}).get("client_id"))
             delivered.add(str(event["data"]["node"]))
         # Queue overflow/disconnection must not lose saved node previews.
@@ -505,7 +521,8 @@ class Controller:
         detail = next((data for kind, data in reversed(messages) if kind == terminal),
                       {"prompt_id": record["id"], "timestamp": int(record["finished_at"] * 1000)})
         await self.broadcast({"type": terminal, "data": detail}, record.get("body", {}).get("client_id"))
-        await self.broadcast({"type": "executing", "data": {"node": None, "prompt_id": record["id"]}})
+        await self.broadcast({"type": "executing", "data": {"node": None, "prompt_id": record["id"]}},
+                             record.get("body", {}).get("client_id"))
         await self.status()
 
     async def dispatch(self):
@@ -529,19 +546,7 @@ class Controller:
                                 if session["operation"] == "legacy":
                                     await self.end_legacy(result)
                     elif self.journal.data["mode"] == "split" and not self.journal.data["candidate"]:
-                        running = next((j for j in self.journal.data["jobs"].values()
-                                        if j["status"] in ACTIVE - {"queued"}), None)
-                        if running:
-                            await self.drain_events(running)
-                            result = await self.read_result(running)
-                            if result and not (result.get("status") == "unknown" and running["status"] == "unknown"):
-                                await self.finish(running, result)
-                        else:
-                            job = self.journal.next_job()
-                            if job:
-                                await self.spawn(job, "generate")
-                                if job["status"] != "queued":
-                                    await self.status()
+                        await self.dispatch_jobs()
                     await self.cleanup_storage()
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
@@ -549,6 +554,21 @@ class Controller:
             except Exception:
                 log.exception("Dispatcher failed; preserving journal for recovery")
                 await asyncio.sleep(2)
+
+    async def dispatch_jobs(self):
+        for job in list(self.journal.data["jobs"].values()):
+            if job["status"] not in ACTIVE - {"queued"}:
+                continue
+            try:
+                await self.drain_events(job)
+                result = await self.read_result(job)
+                if result and not (result.get("status") == "unknown" and job["status"] == "unknown"):
+                    await self.finish(job, result)
+            except Exception:
+                log.exception("Could not reconcile job %s; will retry", job["id"])
+        while job := self.journal.next_job():
+            await self.spawn(job, "generate")
+            await self.status()
 
     async def end_legacy(self, result):
         await self.volumes["output"].reload.aio()
@@ -1078,8 +1098,11 @@ class Controller:
             if path == "/interrupt" and request.method == "POST":
                 body = await request.json() if request.can_read_body else {}
                 async with self.lock:
-                    await self.cancel([body["prompt_id"]] if body.get("prompt_id") else [
-                        j["id"] for j in self.journal.data["jobs"].values() if j["status"] == "running"])
+                    ids = [body["prompt_id"]] if body.get("prompt_id") else [
+                        j["id"] for j in self.journal.data["jobs"].values() if j["status"] == "running"]
+                    if len(ids) > 1:
+                        return web.json_response({"error": "実行中のジョブを選んで中断してください。"}, status=409)
+                    await self.cancel(ids)
                 return web.json_response({})
             if path.startswith("/jobs/") and path != "/jobs/cancel" and path.endswith("/cancel") and request.method == "POST":
                 async with self.lock:
