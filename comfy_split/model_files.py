@@ -13,6 +13,20 @@ CATEGORIES = frozenset(
 WEIGHTS = {".safetensors", ".gguf", ".onnx", ".bin", ".pt", ".pth", ".ckpt"}
 
 
+def catalog_revision(root):
+    """Fingerprint metadata on the gateway's freshly reloaded model mount."""
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        digest.update(os.fsencode(path.relative_to(root)) + b"\0")
+        digest.update(f"{info.st_size}:{info.st_mtime_ns}\n".encode())
+        if stat.S_ISLNK(info.st_mode):
+            digest.update(os.fsencode(os.readlink(path)) + b"\0")
+    return digest.hexdigest()
+
+
 def checked(value, msg):
     if not value:
         raise ValueError(msg)

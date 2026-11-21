@@ -56,9 +56,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("SPLIT_WORKER_CPU", image_env.get(gpu["image"], {}))
         self.assertNotIn("gpu", cpu)
         self.assertEqual((cpu["cpu"], cpu["memory"]), (2, 8192))
-        for field in ("secrets", "volumes", "retries", "timeout", "min_containers", "max_containers", "scaledown_window"):
+        for field in ("secrets", "volumes", "retries", "timeout", "min_containers", "scaledown_window"):
             self.assertEqual(cpu[field], gpu[field])
         self.assertEqual((cpu["min_containers"], cpu["max_containers"], cpu["scaledown_window"]), (0, 1, 30))
+        self.assertEqual(gpu["max_containers"], 3)
         self.assertNotIn("enable_memory_snapshot", cpu)
 
     def test_gpu_verification_uses_dotenv_revision_without_overriding_shell(self):

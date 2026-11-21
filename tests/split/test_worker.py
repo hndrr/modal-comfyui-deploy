@@ -93,9 +93,7 @@ class WorkerProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(progress, [1, 2])
             executed = [call.args[0]["event"]["data"]["output"] for call in emit.call_args_list
                         if call.args[0].get("event", {}).get("type") == "executed"]
-            expected = {**output, "3d": [{"filename": "preview.glb", "type": "output",
-                         "subfolder": f".split-temp/{process.temp_namespace}/nested"}]}
-            self.assertEqual(executed, [expected])
+            self.assertEqual(executed, [output])
         finally:
             await server.close()
 
@@ -105,7 +103,8 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.dict(os.environ, Settings().environment()))
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.volumes = volume_mocks()
-        self.process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x: x,
+        self.process = SimpleNamespace(archive_temp=Mock(), durable_outputs=lambda x, *_: x,
+            stage_output_inputs=Mock(), output_snapshot=Mock(return_value={}), publish_outputs=Mock(),
             url="http://unused.invalid", start=AsyncMock(), stop=AsyncMock(), version=None)
         self.generate = AsyncMock(return_value={"status": "completed"})
         self.events = SimpleNamespace(put=remote_mock())
@@ -113,10 +112,29 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(worker_module, "JOBS", self.root))
         self.enterContext(patch.object(worker_module, "generate", self.generate))
 
-    async def run_job(self):
+    async def run_job(self, *, commands=None, **extra):
         return await worker_module.run_worker(
-            {"id": "job", "environment": "base", "operation": "generate"},
-            self.events, SimpleNamespace(get_many=remote_mock([])), self.volumes)
+            {"id": "job", "environment": "base", "operation": "generate", "body": {"prompt": {}}, **extra},
+            self.events, commands or SimpleNamespace(get_many=remote_mock([])), self.volumes)
+
+    async def test_superseded_allocation_exits_before_creating_shared_receipts(self):
+        commands = SimpleNamespace(get=remote_mock("stop"), get_many=remote_mock([]))
+        self.assertEqual((await self.run_job(commands=commands, allocation="old"))["status"], "cancelled")
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.generate.assert_not_awaited()
+        commands.get.aio.return_value = "run"
+        self.assertEqual((await self.run_job(commands=commands, allocation="current"))["status"], "completed")
+        self.generate.assert_awaited_once()
+
+    async def test_warm_worker_reuses_unchanged_models_and_reloads_a_new_revision(self):
+        self.process.version = "base"
+        self.process.models_revision = "current"
+        await self.run_job(models_revision="current")
+        self.volumes["models"].reload.aio.assert_not_awaited()
+        self.process.stop.assert_not_awaited()
+        await self.run_job(models_revision="new")
+        self.process.stop.assert_awaited_once()
+        self.volumes["models"].reload.aio.assert_awaited_once()
 
     async def test_result_receipt_is_written_after_outputs_committed(self):
         sequence = []
@@ -175,7 +193,7 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.generate.side_effect = RuntimeError("CUDA-only custom node")
         with patch.object(worker_module, "CPU_WORKER", True):
             result = await self.run_job()
-        self.process.start.assert_awaited_once_with("base", cpu=True)
+        self.process.start.assert_awaited_once_with("base", cpu=True, isolated_output=True)
         self.generate.assert_awaited_once()
         self.assertEqual(result["status"], "failed")
         self.assertIn("CUDA-only", result["error"])
@@ -187,6 +205,36 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
             await self.run_job()
         self.assertTrue((self.root / "job.started.json").exists())
         self.assertFalse((self.root / "job.json").exists())
+
+    async def test_saved_output_survives_a_later_generation_error(self):
+        process = runtime.ComfyProcess("gpu", 8188)
+        process.output_directory = self.root / "generated"
+        process.output_directory.mkdir()
+        (process.output_directory / "previous.png").write_bytes(b"previous")
+        self.process.output_snapshot = process.output_snapshot
+        self.process.publish_outputs = process.publish_outputs
+
+        def fail_after_save(*args):
+            (process.output_directory / "partial.png").write_bytes(b"saved")
+            raise TimeoutError("sampling timed out")
+
+        self.generate.side_effect = fail_after_save
+        with patch.object(runtime, "OUTPUT", self.root / "output"):
+            result = await self.run_job()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("sampling timed out", result["error"])
+        published = self.root / "output/jobs/job"
+        self.assertEqual((published / "partial.png").read_bytes(), b"saved")
+        self.assertFalse((published / "previous.png").exists())
+        self.volumes["output"].commit.aio.assert_awaited_once()
+
+    async def test_generation_and_output_publication_errors_are_both_reported(self):
+        self.generate.side_effect = RuntimeError("sampling failed")
+        self.process.publish_outputs.side_effect = OSError("copy failed")
+        result = await self.run_job()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("sampling failed", result["error"])
+        self.assertIn("copy failed", result["error"])
 
     async def test_warm_worker_skips_immutable_environment_and_closes_mapped_files(self):
         self.process.version = "base"

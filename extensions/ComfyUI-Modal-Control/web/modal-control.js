@@ -40,8 +40,9 @@ app.registerExtension({
     const gpuLabel = document.createElement("label");
     gpuLabel.textContent = "GPUの選び方";
     const choice = document.createElement("select");
+    const devices = [["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]];
     for (const [value, title] of [["auto", "自動（料金優先）"], ["auto-speed", "自動（速度優先）"],
-      ["L4", "L4"], ["L40S", "L40S"], ["RTX-PRO-6000", "RTX PRO 6000"]]) {
+      ...devices]) {
       choice.add(new Option(title, value));
     }
     const savedGpu = () => document.cookie.split("; ").find(c => c.startsWith("split_gpu="))?.slice(10);
@@ -87,15 +88,46 @@ app.registerExtension({
     settingsHint.textContent = "設定は全員に適用されます。通常は変更不要です。";
     advanced.append(settingsHint, controls);
     let working = false;
-    const action = (label, handler) => {
+    const action = (label, handler, parent = controls) => {
       const item = document.createElement("button"); item.textContent = label;
+      item.type = "button";
       item.onclick = async () => {
         working = true; item.disabled = true; error.textContent = "";
         try { await handler(); } catch (e) { error.textContent = e.message; }
-        finally { working = false; await refresh().catch(() => showGpu(null)); }
+        finally { working = false; item.disabled = false; await refresh().catch(() => showGpu(null)); }
       };
-      controls.append(item); return item;
+      parent.append(item); return item;
     };
+    const fallback = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = "GPUの割り当て待ち";
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    const enabledLabel = document.createElement("label");
+    enabledLabel.append(enabled, " 自動でGPUを切り替える");
+    const minutes = document.createElement("input");
+    minutes.type = "number"; minutes.min = "1"; minutes.max = "60"; minutes.required = true;
+    const waitLabel = document.createElement("label");
+    waitLabel.append("待ち時間（分）", minutes);
+    const target = document.createElement("select");
+    for (const [value, title] of devices) target.add(new Option(title, value));
+    const targetLabel = document.createElement("label");
+    targetLabel.append("切り替え先", target);
+    const hint = document.createElement("p");
+    hint.className = "modal-hint";
+    hint.textContent = "全員に適用されます。切り替え後は選んだGPUの料金がかかります。";
+    fallback.append(legend, enabledLabel, waitLabel, targetLabel, hint);
+    let editVersion = 0;
+    let savedVersion = 0;
+    fallback.oninput = () => { editVersion++; };
+    action("設定を保存", async () => {
+      if (!minutes.reportValidity()) return;
+      const submittedVersion = editVersion;
+      await request("gpu-fallback", {enabled: enabled.checked, minutes: minutes.valueAsNumber, gpu: target.value});
+      savedVersion = submittedVersion;
+    }, fallback);
+    const waiting = document.createElement("div");
+    let waitingKey;
     let state;
     const refresh = async () => {
       state = await request("status");
@@ -103,6 +135,30 @@ app.registerExtension({
       syncChoice();
       gpuLabel.hidden = state.mode !== "split";
       routingHint.hidden = state.mode !== "split";
+      fallback.hidden = state.mode !== "split" || !state.gpu_fallback;
+      if (state.gpu_fallback && editVersion === savedVersion) {
+        enabled.checked = state.gpu_fallback.enabled;
+        minutes.value = state.gpu_fallback.minutes;
+        target.value = state.gpu_fallback.gpu;
+      }
+      const jobs = state.waiting_for_gpu || [];
+      const key = jobs.map(j => j.id + j.gpu).join(",");
+      if (key !== waitingKey) {
+        waitingKey = key;
+        waiting.replaceChildren();
+        for (const job of jobs) {
+          const row = document.createElement("div");
+          row.append(document.createElement("p"));
+          for (const [device, title] of devices.filter(([d]) => d !== job.gpu)) {
+            action(title + " に切り替え", () => request("jobs/" + job.id + "/gpu", {gpu: device}), row);
+          }
+          waiting.append(row);
+        }
+      }
+      jobs.forEach((job, index) => {
+        waiting.children[index].firstChild.textContent =
+          `${job.gpu} の割り当て待ち ${Math.floor(job.wait_seconds / 60)}分${job.wait_seconds % 60}秒（${job.id.slice(0, 8)}）`;
+      });
       const latest = state.gpu?.latest_selection;
       selection.textContent = latest ? `直近の実行先：${latest.gpu}（${latest.gpu_reason}）` : "";
       description.textContent = state.mode === "legacy"
@@ -151,7 +207,7 @@ app.registerExtension({
     });
     updates.append(apply, discard);
     advanced.append(updates);
-    panel.append(heading, button, gpuDescription, description, gpuLabel, routingHint, selection, error, advanced);
+    panel.append(heading, button, gpuDescription, description, gpuLabel, routingHint, waiting, fallback, selection, error, advanced);
     registerGpuSidebar((element) => element.replaceChildren(panel));
     updateIndicator = registerGpuIndicator();
     const poll = async () => {

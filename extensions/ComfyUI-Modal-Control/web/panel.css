@@ -28,3 +28,6 @@ button.comfyui-button.modal-gpu-indicator:hover { border-color: var(--fg-color, 
 button.modal-gpu-indicator:focus-visible { outline: 2px solid #8ebcf0; outline-offset: 3px; }
 
 .modal-control-panel select { display: block; width: 100%; margin-top: 4px; padding: 8px; font: inherit; color: inherit; background: var(--comfy-input-bg,#333); border: 1px solid var(--border-color,#555); border-radius: 6px; }
+.modal-control-panel fieldset { margin: 16px 0; padding: 8px 12px; border: 1px solid var(--border-color,#555); }
+.modal-control-panel fieldset label { display: block; margin: 8px 0; }
+.modal-control-panel input[type=number] { width: 5em; margin-inline-start: 8px; color: inherit; background: var(--comfy-input-bg,#333); }

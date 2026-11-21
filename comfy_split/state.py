@@ -10,6 +10,7 @@ from copy import deepcopy
 from pathlib import Path
 
 ACTIVE = {"queued", "dispatching", "running", "unknown"}
+GENERATION_LIMIT = 3
 
 
 def prompt_record(job, original=None):
@@ -74,6 +75,7 @@ class Journal:
             "jobs": {}, "next_number": 0, "session": None,
         }
         self.data.setdefault("retired_jobs", {})
+        self.data.setdefault("gpu_fallback", {"enabled": True, "minutes": 3, "gpu": "RTX-PRO-6000"})
         self._job_hashes = {}
         self._removed_jobs = set()
         self._review_hashes = {}
@@ -218,9 +220,13 @@ class Journal:
 
     def next_job(self):
         jobs = sorted(self.data["jobs"].values(), key=lambda j: j["number"])
-        if any(j["status"] in {"dispatching", "running", "unknown"} for j in jobs):
+        running = [j for j in jobs if j["status"] == "running"]
+        # An unconfirmed spawn may already be executing external side effects.
+        if len(running) >= GENERATION_LIMIT or any(j["status"] in {"dispatching", "unknown"} for j in jobs):
             return None
-        return next((j for j in jobs if j["status"] == "queued"), None)
+        cpu_busy = any(j.get("gpu") == "CPU" for j in running)
+        return next((j for j in jobs if j["status"] == "queued"
+                     and not (cpu_busy and j.get("gpu") == "CPU")), None)
 
     def recover(self):
         for job in self.data["jobs"].values():
