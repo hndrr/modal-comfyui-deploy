@@ -458,11 +458,11 @@ class Controller:
             data = event.get("event", event.get("data"))
             client_id = record.get("body", {}).get("client_id")
             if event["type"] == "preview" and any(
-                j["id"] != record["id"] and j["status"] in ACTIVE - {"queued"}
-                and (not client_id or j.get("body", {}).get("client_id") in (None, client_id))
+                j["id"] != record["id"] and j["status"] == "running" and not waiting_for_gpu(j)
+                and (not client_id or j.get("body", {}).get("client_id") == client_id)
                 for j in self.journal.data["jobs"].values()
             ):
-                # Native binary previews do not always carry a prompt ID.
+                # Unaddressed previews reach every socket. Give targeted previews priority.
                 return
             kind = data.get("type") if isinstance(data, dict) else None
             if kind:

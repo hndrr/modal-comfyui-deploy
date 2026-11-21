@@ -439,6 +439,32 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             await self.control.relay_event(job, {"type": "preview", "data": b"preview"})
         self.control.broadcast.assert_awaited_once_with(b"preview", "other")
 
+    async def test_browser_receives_its_preview_during_an_mcp_job(self):
+        browser = self.control.journal.enqueue({"prompt": {"1": {}}, "client_id": "browser"})
+        mcp = self.control.journal.enqueue({"prompt": {"1": {}}})
+        browser["status"] = mcp["status"] = "running"
+        async with self.client.ws_connect("/ws?clientId=browser") as socket:
+            await socket.receive_json()  # Initial queue status.
+            await self.control.relay_event(mcp, {"type": "preview", "data": b"mcp preview"})
+            await self.control.relay_event(browser, {"type": "preview", "data": b"browser preview"})
+            await self.control.broadcast(b"end", "browser")
+            self.assertEqual(await socket.receive_bytes(timeout=2), b"browser preview")
+            self.assertEqual(await socket.receive_bytes(timeout=2), b"end")
+
+    async def test_preview_is_visible_while_a_same_client_job_cannot_generate(self):
+        body = {"prompt": {"1": {}}, "client_id": "browser"}
+        sender = self.control.journal.enqueue(body)
+        peer = self.control.journal.enqueue(body)
+        sender["status"] = "running"
+        peer.update(allocation="attempt", allocation_granted=False)
+        self.control.broadcast = AsyncMock()
+        for status in ("running", "unknown"):
+            with self.subTest(status=status):
+                peer["status"] = status
+                self.control.broadcast.reset_mock()
+                await self.control.relay_event(sender, {"type": "preview", "data": b"preview"})
+                self.control.broadcast.assert_awaited_once_with(b"preview", "browser")
+
     async def test_spawn_failure_keeps_dispatch_intent_and_prevents_second_job(self):
         job = self.control.journal.enqueue({"prompt": {"1": {}}})
         self.worker.spawn.aio.side_effect = RuntimeError("connection lost after send")
