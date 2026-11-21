@@ -206,6 +206,36 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((self.root / "job.started.json").exists())
         self.assertFalse((self.root / "job.json").exists())
 
+    async def test_saved_output_survives_a_later_generation_error(self):
+        process = runtime.ComfyProcess("gpu", 8188)
+        process.output_directory = self.root / "generated"
+        process.output_directory.mkdir()
+        (process.output_directory / "previous.png").write_bytes(b"previous")
+        self.process.output_snapshot = process.output_snapshot
+        self.process.publish_outputs = process.publish_outputs
+
+        def fail_after_save(*args):
+            (process.output_directory / "partial.png").write_bytes(b"saved")
+            raise TimeoutError("sampling timed out")
+
+        self.generate.side_effect = fail_after_save
+        with patch.object(runtime, "OUTPUT", self.root / "output"):
+            result = await self.run_job()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("sampling timed out", result["error"])
+        published = self.root / "output/jobs/job"
+        self.assertEqual((published / "partial.png").read_bytes(), b"saved")
+        self.assertFalse((published / "previous.png").exists())
+        self.volumes["output"].commit.aio.assert_awaited_once()
+
+    async def test_generation_and_output_publication_errors_are_both_reported(self):
+        self.generate.side_effect = RuntimeError("sampling failed")
+        self.process.publish_outputs.side_effect = OSError("copy failed")
+        result = await self.run_job()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("sampling failed", result["error"])
+        self.assertIn("copy failed", result["error"])
+
     async def test_warm_worker_skips_immutable_environment_and_closes_mapped_files(self):
         self.process.version = "base"
         self.volumes["models"].reload.aio.side_effect = [RuntimeError("there are open files preventing the operation"), None]

@@ -413,6 +413,8 @@ class Controller:
         except FileNotFoundError:
             pass
         if not record.get("call_id"):
+            if record.get("allocation_rejected"):
+                return {"status": "failed", "error": "GPUワーカーの呼び出しを確認できず、生成開始前に割り当てを拒否しました。"}
             return None
         call = modal.FunctionCall.from_id(record["call_id"])
         try:
@@ -441,11 +443,17 @@ class Controller:
         """Relay worker progress while deferring output notifications until files are durable."""
         if event["type"] == "allocation_ready":
             token = event["allocation"]
-            current = record.get("allocation") == token and record["status"] == "running"
-            if current:
+            current = record.get("allocation") == token
+            grant = current and record["status"] == "running"
+            if grant:
                 record["allocation_granted"] = True
                 await self.persist()
-            await self.commands.put.aio("run" if current else "stop", partition=token, partition_ttl=240)
+            elif (current and record["status"] == "unknown" and not record.get("call_id")
+                  and record.get("allocation_granted") is False):
+                # No call ID to poll. Persist the pre-start failure before the worker exits.
+                record["allocation_rejected"] = True
+                await self.persist()
+            await self.commands.put.aio("run" if grant else "stop", partition=token, partition_ttl=240)
             return
         for extension in self.plugins:
             hook = getattr(extension, "worker_event", None)

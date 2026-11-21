@@ -475,6 +475,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disk.data["jobs"][job["id"]]["status"], "unknown")
         self.assertIsNone(disk.next_job())
 
+    async def test_denied_current_allocation_unblocks_queue_after_ambiguous_spawn(self):
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        following = self.control.journal.enqueue({"prompt": {"2": {}}})
+        self.worker.spawn.aio.side_effect = [RuntimeError("lost spawn reply"), SimpleNamespace(object_id="fc-next")]
+        with self.assertRaisesRegex(RuntimeError, "lost spawn reply"):
+            await self.control.dispatch_jobs()
+        await self.control.relay_event(job, {"type": "allocation_ready", "allocation": "superseded"})
+        await self.control.dispatch_jobs()
+        self.assertEqual(job["status"], "unknown")
+        self.assertEqual(following["status"], "queued")
+
+        await self.control.relay_event(job, {"type": "allocation_ready", "allocation": job["allocation"]})
+        self.commands.put.aio.assert_awaited_with("stop", partition=job["allocation"], partition_ttl=240)
+        # Recovery must still finish this attempt if the worker already consumed "stop".
+        self.control.journal = Journal(Path(self.temp.name))
+        await self.control.dispatch_jobs()
+        jobs = self.control.journal.data["jobs"]
+        self.assertEqual(jobs[job["id"]]["status"], "failed")
+        self.assertEqual(jobs[job["id"]]["history"]["status"]["status_str"], "error")
+        self.assertEqual(jobs[following["id"]]["status"], "running")
+
     async def test_session_gpu_alias_counts_named_pool_but_dispatches_to_session_worker(self):
         for device in ("L4", "L40S"):
             pools = {}

@@ -117,12 +117,14 @@ app.registerExtension({
     hint.className = "modal-hint";
     hint.textContent = "全員に適用されます。切り替え後は選んだGPUの料金がかかります。";
     fallback.append(legend, enabledLabel, waitLabel, targetLabel, hint);
-    let edited = false;
-    fallback.oninput = () => { edited = true; };
+    let editVersion = 0;
+    let savedVersion = 0;
+    fallback.oninput = () => { editVersion++; };
     action("設定を保存", async () => {
       if (!minutes.reportValidity()) return;
+      const submittedVersion = editVersion;
       await request("gpu-fallback", {enabled: enabled.checked, minutes: minutes.valueAsNumber, gpu: target.value});
-      edited = false;
+      savedVersion = submittedVersion;
     }, fallback);
     const waiting = document.createElement("div");
     let waitingKey;
@@ -134,7 +136,7 @@ app.registerExtension({
       gpuLabel.hidden = state.mode !== "split";
       routingHint.hidden = state.mode !== "split";
       fallback.hidden = state.mode !== "split" || !state.gpu_fallback;
-      if (state.gpu_fallback && !edited) {
+      if (state.gpu_fallback && editVersion === savedVersion) {
         enabled.checked = state.gpu_fallback.enabled;
         minutes.value = state.gpu_fallback.minutes;
         target.value = state.gpu_fallback.gpu;

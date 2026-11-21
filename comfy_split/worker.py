@@ -61,7 +61,15 @@ async def run_worker(spec, events, commands, volumes):
     async def control():
         return await commands.get_many.aio(20, block=False, partition=session_id)
 
+    async def stop_after_error(message):
+        try:
+            await process.stop()
+        except Exception as stop_error:
+            return f"{message} (cleanup error: {stop_error})"
+        return message
+
     result = None
+    before = None
     async with ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False) as client:
         try:
             models_revision = spec.get("models_revision")
@@ -121,14 +129,21 @@ async def run_worker(spec, events, commands, volumes):
                 if result.get("history"):
                     history = result["history"]
                     history["outputs"] = process.durable_outputs(history.get("outputs", {}), session_id, referenced)
-                await asyncio.to_thread(process.publish_outputs, session_id, before, referenced)
         except Exception as error:
-            result = {"status": "failed", "error": str(error)}
+            result = {"status": "failed", "error": await stop_after_error(str(error) or type(error).__name__)}
+        if before is not None:
+            # Earlier nodes may have saved files before a later node raised or timed out.
             try:
-                await process.stop()
-            # クリーンアップ失敗で元のエラーを隠さないため、広く捕捉する。
-            except Exception as stop_error:  # noqa: BLE001
-                result["error"] = f"{result['error']} (cleanup error: {stop_error})"
+                await asyncio.to_thread(process.publish_outputs, session_id, before, referenced)
+            except Exception as publish_error:
+                message = f"Output publication failed: {publish_error}"
+                if result.get("error"):
+                    message = f"{result['error']} ({message})"
+                if result["status"] == "completed":
+                    result.pop("history", None)
+                elif result.get("history"):
+                    result["history"]["outputs"] = {}
+                result.update(status="failed", error=await stop_after_error(message))
         # Closing model/asset files before reload on the next invocation is the
         # subprocess's responsibility. Incompatible reloads fail, never run stale inputs.
         await asyncio.to_thread(process.archive_temp)
