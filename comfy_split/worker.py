@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import modal
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
+from comfy_split import job_progress
 from comfy_split.proxy import proxy
 from comfy_split.extensions import run_worker_extensions
 from comfy_split.runtime import ComfyProcess
@@ -217,7 +218,7 @@ async def generate(spec, client, control, emit):
                     # Final completion is sent only after files have been committed.
                     if event.get("type") == "status":
                         continue
-                    if event.get("type") == "executing" and event.get("data", {}).get("node") is None:
+                    if job_progress.is_execution_end(event):
                         relay_finished.set()
                         continue
                     await emit({"type": "event", "event": event})
@@ -252,11 +253,7 @@ async def generate(spec, client, control, emit):
                         await asyncio.wait_for(relay_finished.wait(), timeout=2)
                     except TimeoutError:
                         pass
-                    status = history.get("status", {}).get("status_str")
-                    messages = history.get("status", {}).get("messages", [])
-                    interrupted = any(m[0] == "execution_interrupted" for m in messages)
-                    return {"status": "cancelled" if interrupted else
-                            "completed" if status == "success" else "failed", "history": history}
+                    return {"status": job_progress.history_status(history), "history": history}
                 if process.process.returncode is not None:
                     raise RuntimeError("ComfyUI exited while executing the workflow")
                 await asyncio.sleep(0.3)

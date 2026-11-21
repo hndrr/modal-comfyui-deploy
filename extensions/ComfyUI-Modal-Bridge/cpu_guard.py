@@ -7,6 +7,10 @@ queue reads, history, or cleanup. The normal prompt thread remains idle.
 import inspect
 
 
+class CPUGenerationDisabled(RuntimeError):
+    """The split gateway owns this CPU's generation queue."""
+
+
 def cpu_guard_enabled():
     import execution
     return getattr(execution.PromptQueue.put, "_modal_cpu_guard", False)
@@ -20,7 +24,20 @@ def install_cpu_guard():
         raise RuntimeError("Unsupported ComfyUI PromptQueue.put signature; CPU guard cannot be installed")
 
     def deny_put(self, item):
-        raise RuntimeError("Generation is owned by the split dispatcher")
+        raise CPUGenerationDisabled("Generation is owned by the split dispatcher")
 
     deny_put._modal_cpu_guard = True
     execution.PromptQueue.put = deny_put
+
+
+def verify_cpu_guard():
+    """Exercise the installed guard on the build CPU without starting a prompt worker."""
+    from execution import PromptQueue
+
+    install_cpu_guard()
+    try:
+        # The guard must reject before touching either queue state or prompt contents.
+        PromptQueue.put(None, None)
+    except CPUGenerationDisabled:
+        return
+    raise RuntimeError("The UI queue accepted a prompt with the CPU guard installed")

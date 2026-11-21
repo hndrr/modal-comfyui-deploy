@@ -11,6 +11,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from comfy_split.storage import STATE
+
 
 def get(origin, path):
     with urllib.request.urlopen(origin + path, timeout=5) as response:
@@ -19,10 +21,17 @@ def get(origin, path):
 
 def main():
     origin = 'http://127.0.0.1:8000'
-    state = get(origin, '/split/status')
-    assert get('http://127.0.0.1:8187', '/_split/catalog')['cpu_guard']
+    cpu = 'http://127.0.0.1:8187'
+    state = json.loads((STATE / 'controller.json').read_text())
+    assert get(cpu, '/_split/catalog')['cpu_guard']
     before = get(origin, '/api/history')
-    jobs = get(origin, '/api/jobs?limit=100')
+    # Exercise the installed Bridge with the gateway's read-only snapshots.
+    # The public /api/jobs route requires an authenticated browser or MCP client.
+    snapshot = {'queue': get(origin, '/api/queue'), 'history': before, 'query': {'limit': '100'}}
+    request = urllib.request.Request(cpu + '/_split/jobs', data=json.dumps(snapshot).encode(),
+                                     headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        jobs = json.load(response)
     assert jobs['pagination']['total'] >= len(before)
     with tempfile.TemporaryDirectory(prefix='plain-comfy-') as directory:
         root = Path(directory)
@@ -70,8 +79,16 @@ def main():
                     time.sleep(1)
                 else:
                     raise RuntimeError('Normal CPU execution failed')
+                # The same valid prompt must be refused by the guarded CPU queue.
+                guarded = urllib.request.Request(cpu + '/prompt', data=request.data, headers=request.headers)
+                try:
+                    with urllib.request.urlopen(guarded, timeout=10):
+                        raise AssertionError('Split CPU accepted a direct generation request')
+                except urllib.error.HTTPError as error:
+                    assert error.code == 500, f'Unexpected Split CPU prompt response: {error.code}'
                 print(json.dumps({'plain_startup': True, 'bridge_absent': True,
-                                  'normal_cpu_execution': True, 'retained_history': len(before)}), flush=True)
+                                  'normal_cpu_execution': True, 'split_cpu_rejected': True,
+                                  'retained_history': len(before)}), flush=True)
             finally:
                 process.terminate()
                 try:

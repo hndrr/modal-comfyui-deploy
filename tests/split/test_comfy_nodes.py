@@ -54,9 +54,8 @@ class BridgeTests(unittest.TestCase):
             def put(self, item):
                 pass
 
-        guard = load('build_cpu_guard', PACK / 'cpu_guard.py')
         job = {"id": "split-build-check"}
-        jobs = SimpleNamespace(JobStatus=SimpleNamespace(PENDING="pending"),
+        jobs = SimpleNamespace(JobStatus=SimpleNamespace(ALL={"pending"}),
                                get_job=Mock(return_value=job), get_all_jobs=Mock())
         cli = SimpleNamespace(args=SimpleNamespace(cpu=False))
         kitchen = SimpleNamespace(**{name: lambda: None for name in
@@ -67,15 +66,17 @@ class BridgeTests(unittest.TestCase):
         for compatible in (True, False):
             jobs.get_all_jobs.return_value = ([job], 1) if compatible else ([], 0)
             with self.subTest(compatible=compatible), patch.dict(sys.modules, modules), \
+                 patch.object(Queue, "put", Queue.put), \
                  patch.object(sys, "argv", ["check_environment", "--bridge"]), \
                  patch.object(sys, "path", sys.path.copy()), \
                  patch("pathlib.Path.read_text", return_value="comfy-kitchen==1\n"), \
                  patch("importlib.metadata.version", return_value="1"), patch("subprocess.run"), \
-                 patch("runpy.run_path", return_value={"install_cpu_guard": guard.install_cpu_guard}):
+                 patch("runpy.run_path", side_effect=lambda path: run(str(PACK / Path(path).name))):
                 if compatible:
                     run(str(ROOT / "comfy_split/check_environment.py"), run_name="__main__")
                     self.assertTrue(cli.args.cpu)
-                    self.assertTrue(guard.cpu_guard_enabled())
+                    with self.assertRaisesRegex(RuntimeError, "dispatcher"):
+                        Queue().put("workflow")
                 else:
                     with self.assertRaisesRegex(RuntimeError, "job serialization"):
                         run(str(ROOT / "comfy_split/check_environment.py"), run_name="__main__")

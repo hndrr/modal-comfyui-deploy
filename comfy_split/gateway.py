@@ -22,7 +22,7 @@ from comfy_split.extensions import load_extensions, check_requirements, reserved
 from comfy_split.runtime import (
     ComfyProcess, create_environment, environment_path, initialize_environment,
 )
-from comfy_split import gpu, job_progress, mcp_policy, model_files
+from comfy_split import gpu, job_progress, manager_queue, mcp_policy, model_files
 from comfy_split.state import ACTIVE, Journal, job_history, write_json
 
 log = logging.getLogger(__name__)
@@ -159,11 +159,8 @@ class Controller:
             # Manager installs continue after their HTTP request returns. Keep
             # the CPU alive until its native queue finishes, then persist files.
             if self.candidate.process and self.candidate.process.returncode is None:
-                async with self.client.get(self.candidate.url + "/v2/manager/queue/status",
-                                           timeout=ClientTimeout(total=5)) as response:
-                    response.raise_for_status()
-                    state = await response.json()
-                needed = bool(state["is_processing"] or state.get("pending_count", 0))
+                state = await manager_queue.read_queue(self.client, self.candidate.url, timeout=5)
+                needed = manager_queue.busy(state)
                 if not needed and self.cpu_pinned:
                     from comfy_split.split_admin import refresh_nodes
                     await refresh_nodes(self, state)
@@ -472,39 +469,8 @@ class Controller:
             ):
                 # Unaddressed previews reach every socket. Give targeted previews priority.
                 return
-            kind = data.get("type") if isinstance(data, dict) else None
-            if kind:
-                job_progress.observe(record, kind, data.get("data"))
-            # Terminal notifications are reconstructed from durable history
-            # in finish(), after output reload and journal persistence.
-            if kind in {"execution_success", "execution_error", "execution_interrupted"}:
-                return
-            # Files referenced in executed events may not be committed yet.
-            if kind == "executed":
-                record.setdefault("deferred_events", []).append(data)
-            else:
-                await self.broadcast(data, record.get("body", {}).get("client_id"))
-            # Frontend's Total counter uses `executed`/`execution_cached`,
-            # while core reports non-output node completion in progress_state.
-            # Emit one empty UI result only for those genuinely finished
-            # prompt nodes; leave real UI results and expanded child IDs alone.
-            if kind in {"executed", "execution_cached", "progress_state"}:
-                detail = data.get("data", {})
-                notified = record.setdefault("completed_nodes", [])
-                if kind == "executed":
-                    notified.append(str(detail["node"]))
-                elif kind == "execution_cached":
-                    notified.extend(str(node) for node in detail.get("nodes", []))
-                elif detail.get("prompt_id") == record["id"]:
-                    prompt = record.get("body", {}).get("prompt", {})
-                    for node_id, node in detail.get("nodes", {}).items():
-                        if node.get("state") != "finished" or node_id not in prompt or node_id in notified:
-                            continue
-                        notified.append(node_id)
-                        await self.broadcast({"type": "executed", "data": {
-                            "prompt_id": record["id"], "node": node_id,
-                            "display_node": node.get("display_node_id", node_id), "output": {},
-                        }}, record.get("body", {}).get("client_id"))
+            for notification in job_progress.live_events(record, data):
+                await self.broadcast(notification, client_id)
 
     async def finish(self, record, result):
         # A result can arrive while more than one dispatch batch remains queued.
@@ -525,28 +491,8 @@ class Controller:
         record.pop("completed_nodes", None)
         await self.persist()
         self.cleanup_due = 0
-        delivered = set()
-        for event in deferred:
-            if record["status"] != "completed" and str(event["data"]["node"]) not in record["history"]["outputs"]:
-                continue
-            await self.broadcast(event, record.get("body", {}).get("client_id"))
-            delivered.add(str(event["data"]["node"]))
-        # Queue overflow/disconnection must not lose saved node previews.
-        for node_id, output in record["history"]["outputs"].items():
-            if node_id not in delivered:
-                meta = record["history"].get("meta", {}).get(node_id, {})
-                await self.broadcast({"type": "executed", "data": {
-                    "prompt_id": record["id"], "node": node_id,
-                    "display_node": meta.get("display_node", node_id), "output": output,
-                }}, record.get("body", {}).get("client_id"))
-        terminal = {"completed": "execution_success", "cancelled": "execution_interrupted"}.get(
-            record["status"], "execution_error")
-        messages = record["history"].get("status", {}).get("messages", [])
-        detail = next((data for kind, data in reversed(messages) if kind == terminal),
-                      {"prompt_id": record["id"], "timestamp": int(record["finished_at"] * 1000)})
-        await self.broadcast({"type": terminal, "data": detail}, record.get("body", {}).get("client_id"))
-        await self.broadcast({"type": "executing", "data": {"node": None, "prompt_id": record["id"]}},
-                             record.get("body", {}).get("client_id"))
+        for notification in job_progress.finished_events(record, deferred):
+            await self.broadcast(notification, record.get("body", {}).get("client_id"))
         await self.status()
 
     async def dispatch(self):
@@ -793,14 +739,9 @@ class Controller:
         try:
             # Manager may still have an installation queue executing.
             if not resume:
-                async with self.client.get(self.candidate.url + "/v2/manager/queue/status") as response:
-                    if response.status != 200:
-                        raise RuntimeError("Manager queue status could not be verified")
-                    queue = await response.json()
-                    if "is_processing" not in queue:
-                        raise RuntimeError("Unrecognized Manager queue status")
-                    if queue["is_processing"] or queue.get("pending_count", 0):
-                        raise RuntimeError("Managerのインストール完了を待ってください。")
+                queue = await manager_queue.read_queue(self.client, self.candidate.url, timeout=None)
+                if manager_queue.busy(queue):
+                    raise RuntimeError("Managerのインストール完了を待ってください。")
             version = candidate["version"]
             await self.close_candidate_relays()
             await self.candidate.stop()
