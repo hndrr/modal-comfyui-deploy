@@ -1,5 +1,6 @@
-"""Verify four real generations on the deployed split app (billable L4 GPUs)."""
+"""Verify four real generations on the deployed split app (billable GPUs)."""
 
+import argparse
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -16,7 +17,7 @@ import modal
 from PIL import Image
 
 
-async def main():
+async def main(gpu):
     root = Path(__file__).resolve().parents[1]
     load_dotenv(root / ".env")
     origin = await modal.Function.from_name("comfyui-split", "ui").get_web_url.aio()
@@ -38,12 +39,12 @@ async def main():
         for seed in range(4):
             prompt = deepcopy(graph)
             prompt["7"]["inputs"]["seed"] = seed
-            async with client.post("/api/prompt", json={"prompt": prompt, "gpu": "L4"},
+            async with client.post("/api/prompt", json={"prompt": prompt, "gpu": gpu},
                                    headers={"Idempotency-Key": f"parallel-{run}-{seed}"}) as response:
                 receipt = await response.json()
-            assert receipt["gpu"] == "L4", receipt
+            assert receipt["gpu"] == gpu, receipt
             ids.append(receipt["prompt_id"])
-        print(json.dumps({"submitted": ids}), flush=True)
+        print(json.dumps({"submitted": ids, "gpu": gpu}), flush=True)
         queued_fourth = False
         history = {}
         deadline = time.monotonic() + 1200
@@ -106,4 +107,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--gpu", choices=("L4", "L40S", "RTX-PRO-6000"), default="L4")
+    asyncio.run(main(parser.parse_args().gpu))

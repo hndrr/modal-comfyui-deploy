@@ -229,7 +229,7 @@ uv run --locked --extra split-test python scripts/test_standalone.py --suite spl
 | スクリプト | 実行場所 / 所要時間 | 検証内容 | 備考 |
 | :--- | :--- | :--- | :--- |
 | `scripts/verify_split_execution.py` | CPUコンテナ内<br>（短時間） | CPUでの画像保存・表示、WebSocketイベント、モード往復、GPU停止を確認するAPIスモークテスト（待機取消は同期したローカルHTTPテストで確認） | `EmptyImage` を使用するため、モデル推論やサンプリング中プレビューの検証は含みません |
-| `scripts/verify_split_parallel.py` | ローカル（デプロイ先の `MODAL_PROFILE` を指定） | 実L4で4件を投入し、3台の実行時間の重なり、4件目の待機、履歴ごとのPNG、GPUの自動停止を確認 | 利用者のキューが空のときに `uv run --extra split-test python scripts/verify_split_parallel.py` を実行します。プロキシ認証、FLUX検証用モデル、3台分のGPU利用枠が必要です。 |
+| `scripts/verify_split_parallel.py` | ローカル（デプロイ先の `MODAL_PROFILE` を指定） | 同じGPU機種に4件を投入し、3台の実行時間の重なり、4件目の待機、履歴ごとのPNG、GPUの自動停止を確認 | 利用者のキューが空のときに `uv run --extra split-test python scripts/verify_split_parallel.py` を実行します。既定はL4です。L40S・RTX PRO 6000は `--gpu L40S` または `--gpu RTX-PRO-6000` で指定します。プロキシ認証、FLUX検証用モデル、3台分のGPU利用枠が必要です。 |
 | `scripts/verify_split_idle.py` | CPUコンテナ内<br>（約10分間） | WebSocketを維持しながら、画面配信、メタデータ取得、画像アップロード・表示、ワークフロー保存・読取を繰り返し、各回でGPU台数が常に0であることを確認 | 検証用ファイルは `split-verification` 名で保存されます |
 | `scripts/verify_image_browsing.py` | 修復後CPUコンテナ内 | Web拡張配信、一覧表示、アップロード、プレビュー、名前変更、削除、MiniMax生成結果参照を確認 | 出力Volumeの `split-verification/` に `minimax_real_` で始まる画像が存在することが前提です |
 
