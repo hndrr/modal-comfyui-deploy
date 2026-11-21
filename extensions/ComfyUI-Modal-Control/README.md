@@ -26,7 +26,8 @@ ComfyUIや環境バージョンを交換しても拡張はイメージから読�
 - `GET /modal-control/v1/status`: CPU側バックエンドとのバージョン付き契約です。
   `api_version: 1`、`gpu: {containers, checked_at, phase}` とモード・環境情報を返します。
   `containers: null` は確認失敗であり、0台とは区別します。
-- 明示的な管理操作は既存の `POST /split/mode`、`/split/environment/apply`、
+- GPUパネルでは割り当て待ちのジョブを手動で別機種へ移せます（`POST /split/jobs/<prompt_id>/gpu`）。自動切り替えの初期値は3分後にRTX PRO 6000で、パネルから全員に適用する設定を保存します（`POST /split/gpu-fallback`）。
+- モード切替と環境更新は `POST /split/mode`、`/split/environment/apply`、
   `/split/environment/discard` を使います。状態表示だけでは呼びません。
 
 読み込みにはComfyUIの `app.registerExtension()` を使います。
