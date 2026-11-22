@@ -108,9 +108,10 @@ const reviewResult = (() => {
       redline = { ...s.privateContent?.redline };
     for (const [k, v] of drafts) redline[k] = { ...v, marks: v.marks.map((m) => ({ ...m, image: "" })) };
     wstate = { ...s, ...extra, privateContent: { ...s.privateContent, redline } };
-    return Promise.resolve(o.setWidgetState(wstate)).catch(() =>
-      say("ウィジェット状態を保存できません。下書きはこの画面に残っています。"),
-    );
+    return Promise.resolve().then(() => o.setWidgetState(wstate)).catch(() => {
+      if (extra) throw Error("参照画像をチャットに関連付けられませんでした。下書きはこの画面に残っています。");
+      say("ウィジェット状態を保存できません。下書きはこの画面に残っています。");
+    });
   }
   function area() {
     const vw = player.videoWidth,
@@ -307,7 +308,7 @@ const reviewResult = (() => {
     const dd = d,
       c = cur,
       o = window.openai,
-      app = initialized,
+      app = initialized && !(o?.sendFollowUpMessage && o.uploadFile && o.setWidgetState),
       list = dd.marks.filter((m) => selected.has(m.id));
     if (!list.length) return say("送信する注釈を選んでください。");
     if (!app && !o?.sendFollowUpMessage) return say("このホストではチャットに送信できません。");
@@ -371,6 +372,13 @@ const reviewResult = (() => {
       save();
       say(`${list.length}件の注釈をチャットに送信しました。`);
     } catch (e) {
+      if (!sending) {
+        for (const m of list) {
+          delete dd.sent[m.id];
+          selected.add(m.id);
+        }
+        save();
+      }
       say(
         sending
           ? "送信できたか確認できません。チャット欄を確認し、届いていない注釈だけ選び直して送信してください。"
