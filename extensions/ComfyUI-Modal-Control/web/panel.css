@@ -31,3 +31,7 @@ button.modal-gpu-indicator:focus-visible { outline: 2px solid #8ebcf0; outline-o
 .modal-control-panel fieldset { margin: 16px 0; padding: 8px 12px; border: 1px solid var(--border-color,#555); }
 .modal-control-panel fieldset label { display: block; margin: 8px 0; }
 .modal-control-panel input[type=number] { width: 5em; margin-inline-start: 8px; color: inherit; background: var(--comfy-input-bg,#333); }
+
+.modal-idle-dialog { max-width: min(24rem, 85vw); padding: 1rem 1.5rem; border: 1px solid var(--border-color,#555); border-radius: 8px; background: var(--comfy-menu-bg,#292929); color: var(--fg-color,#eee); }
+.modal-idle-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+.modal-idle-dialog button { padding: .5rem 1rem; font: inherit; cursor: pointer; }

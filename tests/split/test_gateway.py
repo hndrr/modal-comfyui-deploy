@@ -31,9 +31,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             state = await response.json()
             self.assertEqual(state["api_version"], 1)
             self.assertEqual(state["gpu"]["containers"], 0)
+            self.assertTrue(state["can_pause_ui"])
         response = await self.client.get("/extensions")
         self.assertNotIn("/split.js", await response.json())
         self.worker.spawn.aio.assert_not_awaited()
+
+    async def test_ui_cannot_pause_during_work_or_legacy_mode(self):
+        async def can_pause():
+            response = await self.client.get("/modal-control/v1/status")
+            return (await response.json())["can_pause_ui"]
+
+        job = self.control.journal.enqueue({"prompt": {"1": {}}})
+        for status in ("queued", "dispatching", "running"):
+            job["status"] = status
+            self.assertFalse(await can_pause(), status)
+        job["status"] = "completed"
+        self.control.cpu_pinned = True
+        self.assertFalse(await can_pause())
+        self.control.cpu_pinned = False
+        self.assertTrue(await can_pause())
+        self.control.journal.data["mode"] = "legacy"
+        self.assertFalse(await can_pause())
 
     async def test_gpu_display_reads_metadata_without_invoking_worker(self):
         self.worker.get_current_stats = remote_mock(SimpleNamespace(num_total_runners=0))

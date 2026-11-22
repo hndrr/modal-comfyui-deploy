@@ -3,6 +3,44 @@ import { app } from "../../scripts/app.js";
 import { ComfyButton } from "../../scripts/ui/components/button.js";
 import { api } from "../../scripts/api.js";
 export { app };
+
+// Detach before closing, as in ComfyUI's replaceSocket. Its close handler
+// only reconnects the socket that still owns api.socket.
+export function pauseConnection() {
+  const socket = api.socket;
+  if (!socket || typeof api.reconnectSocket !== "function") return null;
+  api.socket = null;
+  socket.close();
+
+  // Optional panels and ComfyUI's HTTP fallback can poll independently of us.
+  const fetchApi = api.fetchApi;
+  api.fetchApi = function (route, options) {
+    if (["GET", "HEAD"].includes((options?.method || "GET").toUpperCase())) {
+      return Promise.reject(new DOMException("ComfyUI tab is idle", "AbortError"));
+    }
+    return fetchApi.call(this, route, options);
+  };
+  return async () => {
+    await api.reconnectSocket();
+    const next = api.socket;
+    try {
+      if (next.readyState !== WebSocket.OPEN) {
+        await new Promise((resolve, reject) => {
+          const timeout = AbortSignal.timeout(20000);
+          next.addEventListener("open", resolve, { once: true, signal: timeout });
+          next.addEventListener("close", reject, { once: true, signal: timeout });
+          timeout.addEventListener("abort", reject, { once: true });
+        });
+      }
+    } catch (error) {
+      api.socket = null;
+      next?.close();
+      throw error;
+    }
+    api.fetchApi = fetchApi;
+    api.dispatchCustomEvent("reconnected");
+  };
+}
 export async function saveWorkflow() {
   if (!app.graph?.serialize || !api.storeUserData) {
     throw new Error("このComfyUIではワークフロー保存APIを利用できません。モード切替を中止しました。");

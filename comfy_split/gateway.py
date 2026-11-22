@@ -930,6 +930,7 @@ class Controller:
                         "wait_seconds": max(0, int(time.time() - j["submitted_at"]))}
                         for j in data["jobs"].values() if waiting_for_gpu(j)],
                     "candidate": data["candidate"], "busy": self.journal.busy(),
+                    "can_pause_ui": data["mode"] == "split" and not self.cpu_pinned and not self.background_work(),
                     "transitioning": bool(data["session"] and (
                         not data["session"].get("url") or data["session"].get("stopping"))),
                     "unknown_jobs": [j["id"] for j in data["jobs"].values() if j["status"] == "unknown"]})

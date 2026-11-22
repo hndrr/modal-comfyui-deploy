@@ -1,4 +1,4 @@
-import { app, registerGpuSidebar, registerGpuIndicator, saveWorkflow, restoreWorkflow } from "./comfy-adapter.mjs";
+import { app, pauseConnection, registerGpuSidebar, registerGpuIndicator, saveWorkflow, restoreWorkflow } from "./comfy-adapter.mjs";
 
 const restoreKey = "modal-split-workflow";
 const request = async (path, body) => {
@@ -210,8 +210,59 @@ app.registerExtension({
     panel.append(heading, button, gpuDescription, description, gpuLabel, routingHint, waiting, fallback, selection, error, advanced);
     registerGpuSidebar((element) => element.replaceChildren(panel));
     updateIndicator = registerGpuIndicator();
+    let lastActivity = Date.now();
+    const activity = () => { lastActivity = Date.now(); };
+    for (const event of ["pointerdown", "pointermove", "keydown", "input", "wheel", "click"]) {
+      window.addEventListener(event, e => { if (e.isTrusted) activity(); }, { capture: true, passive: true });
+    }
+    const idleDialog = document.createElement("dialog");
+    idleDialog.className = "modal-idle-dialog";
+    idleDialog.setAttribute("aria-label", "ComfyUIの接続");
+    idleDialog.oncancel = event => event.preventDefault();
+    const message = document.createElement("p");
+    message.setAttribute("role", "status");
+    const wake = document.createElement("button");
+    wake.type = "button";
+    wake.textContent = "作業を再開";
+    idleDialog.append(message, wake);
+    document.body.append(idleDialog);
+    let reconnect;
+    wake.onclick = async () => {
+      wake.disabled = true;
+      message.textContent = "ComfyUIに再接続しています…";
+      try {
+        const signal = AbortSignal.timeout(600000);
+        while (true) {
+          const response = await fetch("/split/startup", { cache: "no-store", signal });
+          if (!response.ok) throw new Error();
+          const startup = await response.json();
+          if (startup.failed) throw new Error();
+          if (startup.ready) break;
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+        await reconnect();
+        idleDialog.close();
+        activity();
+        void poll();
+      } catch {
+        message.textContent = "再接続できませんでした。編集内容はこのタブに残っています。";
+      } finally {
+        wake.disabled = false;
+      }
+    };
     const poll = async () => {
-      try { await refresh(); } catch { showGpu(null); }
+      try {
+        await refresh();
+        if (working || !state.can_pause_ui) activity();
+        if (Date.now() - lastActivity >= 5 * 60 * 1000) {
+          reconnect = pauseConnection();
+          if (reconnect) {
+            message.textContent = "操作がないため、このタブの接続を休止しました。";
+            idleDialog.showModal();
+            return;
+          }
+        }
+      } catch { showGpu(null); }
       setTimeout(poll, 5000);
     };
     void poll();
