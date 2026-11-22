@@ -100,6 +100,23 @@ export class MediaDelivery {
     }
     return data;
   }
+  async openReview(prompt_id:string,ref:{index:number}|{output_path:string}) {
+    const data=await this.json("/v1/video-review",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({prompt_id,...ref})});
+    const source=z.object({label:z.string(),version:z.string(),base:z.url(),stream:z.url(),
+      ref:z.object({prompt_id:z.uuid(),index:z.number().int().nonnegative()})}).parse(data);
+    const base=new URL(source.base);
+    if(base.origin!==this.origin || !/^\/review-session\/[a-f0-9]{64}\/draft$/.test(base.pathname) ||
+        source.stream!==source.base.replace(/\/draft$/,"/stream") || source.ref.prompt_id!==prompt_id || ("index" in ref && source.ref.index!==ref.index))
+      throw new Error("Invalid review session");
+    return source;
+  }
+  async reviewWidget() {
+    const r=await this.fetcher(new Request(this.origin+"/assets/video-review-widget-v1.txt",{redirect:"manual",signal:this.signal()}));
+    const bytes=await readAtMost(r,512*1024);
+    if(!r.ok || !bytes) throw new Error("Review widget unavailable");
+    return new TextDecoder().decode(bytes);
+  }
   private state(value:unknown):DeliveryState {
     const parsed=stateSchema.safeParse(value);
     if(!parsed.success) throw new DeliveryError("invalid_service_response");
@@ -140,15 +157,15 @@ export class MediaDelivery {
     }
     return results;
   }
-  async prepare(send:MediaSend,file:OutputFile):Promise<DeliveryState> {
+  async prepare(send:MediaSend,file:OutputFile,ref?:{prompt_id:string}):Promise<DeliveryState> {
     const source=await this.inspect(send,file);
-    return this.prepareSource(send,source,(await this.lookup([source]))[0]);
+    return this.prepareSource(send,source,(await this.lookup([source]))[0],ref);
   }
-  async prepareSource(send:MediaSend,source:SourceMedia,state:DeliveryState):Promise<DeliveryState> {
+  async prepareSource(send:MediaSend,source:SourceMedia,state:DeliveryState,ref?:{prompt_id:string;index?:number}):Promise<DeliveryState> {
     if(state.status!=="ready" && state.status!=="pending") {
       const {output_path,source_etag,filename,mime_type,size_bytes,kind}=source;
       state=this.state(await this.json("/v1/media",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({source_id:this.source,output_path,source_etag,filename,mime_type,size_bytes,kind})}));
+        body:JSON.stringify({source_id:this.source,output_path,source_etag,filename,mime_type,size_bytes,kind,...(ref ? {remix_origin:ref} : {})})}));
       if(state.status==="upload_required") {
         const response=await send(source.path,{method:"GET",headers:{Range:`bytes=0-${size_bytes-1}`,"If-Range":source_etag},signal:this.signal()});
         if(![200,206].includes(response.status) || response.headers.get("ETag")!==source_etag ||

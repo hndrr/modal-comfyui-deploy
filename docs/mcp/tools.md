@@ -192,3 +192,8 @@ ComfyUIのLoRA選択肢を確認する例：
 内部プレイヤーの3つの `read_*_part` も同じ参照・取得経路を引き継ぎます。旧プレイヤーとの互換性のため、どちらもないパーツ取得は全offsetで原本経路を使います。`read_3d_part` は原本の継続取得時にも `etag` が必要です。`delivery_status`、`delivery_reason`、`retry_after_seconds` で準備・失敗を区別します。詳細は[アダプタ契約](../design/media-delivery-adapter-plan.md)を参照してください。
 
 外部配信が有効な `list_outputs` は1ページ最大32件に制限し、`next_offset` で続ける。原本HEAD、24件ずつのlookup、認証・起動確認を合わせて [Workers Freeのサブリクエスト上限](https://developers.cloudflare.com/workers/platform/limits/#subrequests) に収めるための上限であり、登録・転送は行わない。
+
+
+### 動画の赤入れ
+
+`MEDIA_DELIVERY` と配信先の Remix 設定が有効な場合、`open_split_video_review` に `prompt_id` と `get_video` の動画番号 `index`（既定0）または `list_outputs` の全種類共通番号 `output_index` を渡すと、ChatGPT 内で動画を開けます。管理画面と同じ下書きに、時間範囲、図形、コメント、参照画像を保存します。チェックを付けた指示だけを現在の会話へ送れます。再生セッションは1時間有効で、再度ツールを開くと保存済みの下書きを読み込めます。

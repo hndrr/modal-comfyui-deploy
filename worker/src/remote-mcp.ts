@@ -19,7 +19,7 @@ import { IMAGE_VIEWER_URI, PREVIOUS_IMAGE_VIEWER_URI, imageViewerFor } from "./i
 import {THREE_VIEWER_URI, PREVIOUS_THREE_VIEWER_URIS, threeViewerHtml} from "./three-viewer.ts";
 import {threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerFor } from "./audio-player.ts";
-import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema } from "./media.ts";
+import { AUDIO_PART_BYTES, audioPartInputs, audioInputs, audioOutput, audioSchema, getMedia, VIDEO_PART_BYTES, videoPartInputs, videoInputs, videoOutput, videoSchema, outputsOfKind } from "./media.ts";
 
 const graph = z.record(z.string(), z.unknown());
 const relative = z.string().max(512).refine(s => !s.includes("\\") && !s.startsWith("/") &&
@@ -94,7 +94,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
               if(!outputs.ok) {await outputs.body?.cancel();throw new Error("Missing outputs");}
               const bytes=await readAtMost(outputs,1024*1024);
               if(!bytes) throw new Error("Oversized outputs");
-              const page=await deliveryOutputs(delivery,source,JSON.parse(new TextDecoder().decode(bytes)),true,browserOrigin!);
+              const page=await deliveryOutputs(delivery,source,JSON.parse(new TextDecoder().decode(bytes)),true,browserOrigin!,prompt_id);
               Object.assign(progress,{outputs:page.items,outputs_next_offset:page.next_offset});
             } catch {Object.assign(progress,{delivery_status:"unavailable",delivery_reason:"output_delivery_unavailable"});}
           }
@@ -231,6 +231,39 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
     a=>call("read_3d_part",a,browserOrigin));
+  if (delivery) {
+    const uri="ui://split/video-redline-v1.html";
+    server.registerResource("video-redline",uri,{mimeType:PLAYER_MIME},async()=>({
+      contents:[{uri,mimeType:PLAYER_MIME,text:await delivery.reviewWidget(),_meta:{
+        ui:{csp:{connectDomains:[delivery.origin],resourceDomains:[delivery.origin,"data:"]}},
+        "openai/widgetCSP":{connect_domains:[delivery.origin],resource_domains:[delivery.origin,"data:"]},
+      }}],
+    }));
+    server.registerTool("open_split_video_review",{title:"Annotate a video",
+      description:"Open a saved video for timestamped drawings and edit instructions. Use index from get_video (default 0), or output_index from list_outputs. Save a shared private draft or send selected annotations to this chat.",
+      annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:true},
+      inputSchema:{prompt_id:z.uuid(),index:z.number().int().nonnegative().optional(),output_index:z.number().int().nonnegative().optional()},
+      _meta:{ui:{resourceUri:uri},"openai/outputTemplate":uri}},async ({prompt_id,index,output_index})=>{
+        try {
+          if(index!==undefined && output_index!==undefined)return failure("Specify one index.");
+          prompt_id=prompt_id.toLowerCase();
+          let ref:{index:number}|{output_path:string};
+          if(output_index!==undefined)ref={index:output_index};
+          else {
+            const history=await (mediaSend || send)("/history/"+prompt_id,{method:"GET"});
+            const raw=await readAtMost(history,8*1024*1024);
+            if(!history.ok || !raw)throw new Error("Missing history");
+            const file=outputsOfKind(JSON.parse(new TextDecoder().decode(raw))?.[prompt_id]?.outputs,"video")[index ?? 0];
+            if(!file)throw new Error("Missing video");
+            ref={output_path:[file.subfolder,file.filename].filter(Boolean).join("/")};
+          }
+          const source=await delivery.openReview(prompt_id,ref);
+          // Session capabilities stay in widget-only metadata, outside the model transcript.
+          return {content:[{type:"text",text:"Video review opened for "+source.label}],structuredContent:{prompt_id,output_index:source.ref.index},
+            _meta:{"pmd/review":source}};
+        } catch {return failure("Could not open this video review. Verify the list_outputs index and media delivery configuration.");}
+      });
+  }
   const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},
     "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())

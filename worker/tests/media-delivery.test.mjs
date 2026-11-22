@@ -34,7 +34,7 @@ function fixture(count=1){
     }
     if(url.pathname==='/v1/media'){
       const p=await request.json();assert.equal(p.source_id,'test');
-      assert.deepEqual(Object.keys(p).sort(),['source_id','output_path','source_etag','filename','mime_type','size_bytes','kind'].sort());
+      assert.deepEqual(Object.keys(p).sort(),['source_id','output_path','source_etag','filename','mime_type','size_bytes','kind',...(p.remix_origin ? ['remix_origin'] : [])].sort());
       const key=JSON.stringify({output_path:p.output_path,source_etag:p.source_etag});
       let r=records.get(key);if(!r){r={id:randomUUID(),upload:randomUUID(),mime:p.mime_type,size:p.size_bytes,state:'reserved',etag:'"copy-v1"'};records.set(key,r);}
       return Response.json(value(r));
@@ -416,4 +416,20 @@ test('GLB/SPZ reuse the current cleansed copy without transferring the original 
     const old=await callSplit(noGeneration,'read_3d_part',{filename,byte_offset:0,delivery_ref:original.structuredContent.delivery_ref},browser,undefined,f.send,f.adapter());
     assert.equal(old.isError,true);
   }
+});
+
+test('video review resolves get_video numbering and keeps scoped URLs outside the transcript',async()=>{
+  const f=fixture(2), tokenPath='/review-session/'+'1'.repeat(64);
+  Object.assign(f.files[1],{filename:'second.mp4',kind:'video'});
+  const adapter=new MediaDelivery(config,async req=>{
+    assert.equal(new URL(req.url).pathname,'/v1/video-review');
+    assert.deepEqual(await req.json(),{prompt_id:job,output_path:'second.mp4'});
+    return Response.json({base:origin+tokenPath+'/draft',stream:origin+tokenPath+'/stream',version:'"v1"',label:'second.mp4',ref:{prompt_id:job,index:1}});
+  });
+  const req=new Request(browser+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
+    body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'open_split_video_review',arguments:{prompt_id:job,index:0}}})});
+  const {result}=await (await remoteMcp(req,noGeneration,browser,undefined,f.send,adapter)).json();
+  assert.deepEqual(result.structuredContent,{prompt_id:job,output_index:1});
+  assert.equal(result._meta['pmd/review'].stream,origin+tokenPath+'/stream');
+  assert.ok(!JSON.stringify(result.content).includes(tokenPath));
 });

@@ -76,7 +76,7 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
         const allowed=kind==="3d" ? /\.(glb|spz)$/i : /\.(png|jpe?g|webp)$/i;
         if(!allowed.test(file.filename)) throw new DeliveryError("unsupported_media");
       }
-      const state=await adapter.prepare(send,file);
+      const state=await adapter.prepare(send,file,prompt_id ? {prompt_id} : undefined);
       if(state.status!=="ready") return failure(new DeliveryError("delivery_pending",state.status==="pending" ? state.retry_after_seconds : 60));
       ref={...file,...(prompt_id ? {prompt_id,index} : {}),media_id:state.media_id,etag:state.etag,mime_type:state.mime_type,size_bytes:state.size_bytes};
     }
@@ -124,7 +124,7 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
 const outputPageSchema=z.object({items:z.array(z.object({filename:z.string(),subfolder:z.string().default(""),index:z.number().int().nonnegative(),
   kind:z.enum(["image","audio","video","3d"])}).passthrough()),
   next_offset:z.number().int().nonnegative().nullable(),total:z.number().int().nonnegative()}).passthrough();
-export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value:unknown,prepare:boolean,origin:string) {
+export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value:unknown,prepare:boolean,origin:string,promptId?:string) {
   const page=outputPageSchema.parse(value);
   const items:Record<string,unknown>[]=page.items.map(file=>({...file,url:new URL(outputPath({filename:file.filename,subfolder:file.subfolder}),origin).href}));
   const inspected:Array<{source:SourceMedia;position:number}>=[];
@@ -141,7 +141,7 @@ export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value
     try {
       const states=await adapter.lookup(inspected.map(({source})=>source));
       for(const [i,{source,position}] of inspected.entries()) {
-        try {Object.assign(items[position],summary(prepare ? await adapter.prepareSource(send,source,states[i]) : states[i]));}
+        try {Object.assign(items[position],summary(prepare ? await adapter.prepareSource(send,source,states[i],promptId ? {prompt_id:promptId,index:page.items[position].index} : undefined) : states[i]));}
         catch(e) {Object.assign(items[position],unavailable(e));}
       }
     } catch(e) {for(const {position} of inspected) Object.assign(items[position],unavailable(e));}
