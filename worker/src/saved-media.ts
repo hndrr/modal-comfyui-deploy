@@ -3,12 +3,13 @@ import {z} from "zod";
 import {readAtMost} from "./bounded-response.ts";
 import {AUDIO_PART_BYTES, audioPartInputs, audioSchema, base64, getMedia, mediaHeaderValid, VIDEO_PART_BYTES, videoPartInputs, videoSchema} from "./media.ts";
 import {get3D} from "./three-media.ts";
-import {MediaDelivery} from "./media-delivery.ts";
+import {MediaDelivery, outputFileSchema} from "./media-delivery.ts";
 import {deliveryOutputs} from "./delivered-media.ts";
 
 type Send = (path:string, init:RequestInit) => Promise<Response>;
 const failure=(text:string):CallToolResult=>({isError:true,content:[{type:"text",text}]});
-export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","read_video_part","get_3d","read_3d_part","list_outputs"]);
+export const savedMediaTools=new Set(["get_image","get_audio","get_video","read_audio_part","read_video_part","get_3d","read_3d_part","list_outputs","open_split_video_review","read_split_review_part"]);
+export const reviewPartInputs={...videoPartInputs, version:z.string().max(256).optional()};
 export const imageOutput={filename:z.string(),mimeType:z.enum(["image/png","image/jpeg","image/webp"]),
   url:z.url(),delivery:z.enum(["inline","link"])};
 
@@ -75,6 +76,15 @@ export async function callSavedMedia(send:Send,name:string,args:Record<string,un
     if(typeof args.prompt_id==="string")args={...args,prompt_id:args.prompt_id.toLowerCase()};
     if (name==="get_3d" || name==="read_3d_part") return await get3D(send,origin,args,name==="read_3d_part");
     if (name==="get_image") return await image(send,origin,args);
+    if (name==="open_split_video_review" || name==="read_split_review_part") {
+      const part=name==="read_split_review_part";
+      const selector=args.file ? outputFileSchema.parse(args.file) : undefined;
+      if (part) {
+        const {version,...values}=z.object(reviewPartInputs).parse(args);
+        return await getMedia("video",send,origin,{...values,chunk_bytes:VIDEO_PART_BYTES},true,{version});
+      }
+      return await getMedia("video",send,origin,videoSchema.parse(args),false,{file:selector});
+    }
     if (name==="list_outputs") {
       const values=z.object({prompt_id:z.uuid(),offset:z.number().int().min(0).default(0),
         limit:z.number().int().min(1).max(100).default(50)}).parse(args);

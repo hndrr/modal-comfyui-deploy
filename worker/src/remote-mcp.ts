@@ -1,7 +1,7 @@
 import {receiptLink} from "./job-review.ts";
-import {callSavedMedia, imageOutput, savedMediaTools} from "./saved-media.ts";
+import {callSavedMedia, imageOutput, savedMediaTools, reviewPartInputs} from "./saved-media.ts";
 import {callSavedCatalog, savedCatalogRequest} from "./saved-catalog.ts";
-import {MediaDelivery, deliveryOutput, deliveryRefSchema} from "./media-delivery.ts";
+import {MediaDelivery, deliveryOutput, deliveryRefSchema, outputFileSchema} from "./media-delivery.ts";
 import {callDeliveredMedia, deliveredTools, deliveryOutputs} from "./delivered-media.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -70,6 +70,8 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
       const state = await res.json<{ready:boolean;failed:boolean}>();
       if (state.failed) return failure("Split CPU initialization failed. No tool was executed.");
       if (state.ready) {
+        if (name==="open_split_video_review" || name==="read_split_review_part")
+          return callSavedMedia(send,name,args,browserOrigin!);
         if(delivery && browserOrigin && deliveredTools.has(name))
           return callDeliveredMedia(delivery,send,name,args,()=>callSavedMedia(send,name,args,browserOrigin));
         if (name === "get_image") {
@@ -94,7 +96,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
               if(!outputs.ok) {await outputs.body?.cancel();throw new Error("Missing outputs");}
               const bytes=await readAtMost(outputs,1024*1024);
               if(!bytes) throw new Error("Oversized outputs");
-              const page=await deliveryOutputs(delivery,source,JSON.parse(new TextDecoder().decode(bytes)),true,browserOrigin!);
+              const page=await deliveryOutputs(delivery,source,JSON.parse(new TextDecoder().decode(bytes)),true,browserOrigin!,prompt_id);
               Object.assign(progress,{outputs:page.items,outputs_next_offset:page.next_offset});
             } catch {Object.assign(progress,{delivery_status:"unavailable",delivery_reason:"output_delivery_unavailable"});}
           }
@@ -152,7 +154,7 @@ export async function callSplit(send:Send, name:string, args:Record<string,unkno
         text:"The media player is waiting for split to start. No generation was submitted. Clients without a player can retry " + name + "."}]};
     }
     const waiting=failure("Split CPU is starting. Retry after 2 seconds; keep the same request_id. No tool was executed.");
-    return name==="read_audio_part" || name==="read_video_part" ? {...waiting,_meta:{"split/starting":true}} : waiting;
+    return name==="read_audio_part" || name==="read_video_part" || name==="read_split_review_part" ? {...waiting,_meta:{"split/starting":true}} : waiting;
   } catch {
     return failure(name==="enqueue_workflow" ?
       "No receipt available. Retry only with the SAME request_id and unchanged workflow." : "Split CPU request failed; retry the read.");
@@ -171,7 +173,9 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
   const deliveryRead=delivery ? {...read,readOnlyHint:false,idempotentHint:true,openWorldHint:true} : read;
   const deliveryNote=delivery ? " Prepares a private external delivery copy on demand. Forward delivery_ref unchanged when reading subsequent parts, or delivery_route: original when returned by a fallback. Never omit the returned route/reference on continuation; restart at byte_offset 0 if lost." : "";
-  const deliveryInput: z.ZodRawShape=delivery ? {delivery_ref:deliveryRefSchema.optional(),delivery_route:deliveryOutput.delivery_route} : {};
+  // Even when the integration goes away, reject a pinned copy instead of reading original bytes.
+  const deliveryInput: z.ZodRawShape=delivery ? {delivery_ref:deliveryRefSchema.optional(),delivery_route:deliveryOutput.delivery_route}
+    : {delivery_ref:z.never().optional()};
   const deliveryFields: z.ZodRawShape=delivery ? deliveryOutput : {};
   server.registerTool("calculate",{description:"Calculate dimensions, seeds or a batch of numeric expressions.",annotations:read,
     inputSchema:{spec:z.union([z.string().max(4096),z.array(z.string().max(1024)).max(64)]),variables:z.record(z.string(),z.number()).optional(),seed:z.number().int().optional()}},a=>call("calculate",a));
@@ -231,6 +235,60 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
     a=>call("read_3d_part",a,browserOrigin));
+  const reviewUri="ui://split/video-redline-v5.html";
+  const shareOrigins=delivery ? [delivery.origin] : [];
+  const reviewResources=[browserOrigin,"blob:","data:"];
+  for (const uri of [reviewUri,"ui://split/video-redline-v4.html","ui://split/video-redline-v3.html","ui://split/video-redline-v2.html","ui://split/video-redline-v1.html"]) {
+    server.registerResource(uri.split("/").at(-1)!,uri,{mimeType:PLAYER_MIME},async()=>({
+      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.origin,true),_meta:{
+        ui:{csp:{connectDomains:shareOrigins,resourceDomains:reviewResources}},
+        "openai/widgetCSP":{connect_domains:shareOrigins,resource_domains:reviewResources},
+      }}],
+    }));
+  }
+  const index=z.number().int().nonnegative();
+  const reviewInput={prompt_id:z.uuid(),index:index.optional(),output_index:index.optional()};
+  const appOnly={ui:{visibility:["app" as const]},"openai/visibility":"private","openai/widgetAccessible":true};
+  server.registerTool("open_split_video_review",{title:"Annotate a video",
+    description:"Annotate a saved Split video and send selected edit instructions to chat. Use the video index from get_video (default 0), or the global output_index from list_outputs. Works using Split alone.",
+    annotations:read,inputSchema:reviewInput,
+    _meta:{ui:{resourceUri:reviewUri},"openai/outputTemplate":reviewUri,"openai/widgetAccessible":true}},async ({prompt_id,index,output_index})=>{
+      if (index!==undefined && output_index!==undefined) return failure("Specify index or output_index, not both.");
+      let file;
+      if (output_index!==undefined) {
+        const page=await callSplit(send,"list_outputs",{prompt_id,offset:output_index,limit:1},browserOrigin,undefined,mediaSend);
+        if (page.isError) return page;
+        const item=page.content[0];
+        const row=item?.type==="text" && JSON.parse(item.text).items?.[0];
+        const selected=outputFileSchema.safeParse(row);
+        if (!selected.success || row.index!==output_index || row.kind!=="video") return failure("No video at that list_outputs index.");
+        file=selected.data;
+      }
+      const result=await callSplit(send,"open_split_video_review",{prompt_id,index,file},browserOrigin,undefined,mediaSend);
+      const info=result.structuredContent;
+      if (result.isError || !info) return result;
+      return {content:[{type:"text",text:"Video review: "+info.filename}],structuredContent:{...info,...(output_index!==undefined?{output_index}:{})},
+        _meta:{"split/review":{sharing:!!delivery,version:info.etag}}};
+    });
+  server.registerTool("read_split_review_part",{description:"Read a private original-video chunk for the redline editor.",
+    annotations:read,inputSchema:reviewPartInputs,_meta:appOnly},a=>callSplit(send,"read_split_review_part",a,browserOrigin,undefined,mediaSend));
+  if (delivery) {
+    server.registerTool("open_split_review_share",{description:"Connect this video's annotations to the optional private admin draft.",
+      annotations:{readOnlyHint:false,destructiveHint:false,openWorldHint:true},inputSchema:{prompt_id:z.uuid(),index,version:z.string().max(256).optional()},_meta:appOnly},async ({prompt_id,index,version})=>{
+        prompt_id=prompt_id.toLowerCase();
+        const original=await callSplit(send,"open_split_video_review",{prompt_id,index},browserOrigin,undefined,mediaSend);
+        if (original.isError || !original.structuredContent?.url) return failure("This video is no longer available from Split.");
+        const etag=original.structuredContent.etag;
+        if (version!==undefined && version!==etag) return failure("This video changed. Reopen its review before sharing.");
+        const params=new URL(String(original.structuredContent.url)).searchParams;
+        const path=[params.get("subfolder"),params.get("filename")].filter(Boolean).join("/");
+        try {
+          const source=await delivery.openReview(prompt_id,{output_path:path});
+          if (source.version!==etag) return failure("This video changed. Reopen its review before sharing.");
+          return {content:[],_meta:{"pmd/review":source}};
+        } catch {return failure("Admin draft sharing is unavailable. You can keep editing and send your notes to chat.");}
+      });
+  }
   const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},
     "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())

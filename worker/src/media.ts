@@ -75,7 +75,7 @@ function safeSegment(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 255 &&
     value !== "." && value !== ".." && !/[/\\:\x00-\x1f\x7f]/.test(value);
 }
-export function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
+export function outputsOfKind(outputs: unknown, kind: Kind, includeWebm = false): Output[] {
   const result: Output[] = [];
   if (!record(outputs)) return result;
   for (const node of Object.values(outputs)) {
@@ -85,7 +85,9 @@ export function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
       for (const item of list) {
         if (!record(item) || item.type !== "output" || !safeSegment(item.filename)) continue;
         const extension = /\.([a-z0-9]+)$/i.exec(item.filename)?.[1].toLowerCase();
-        const format = extension && formats[kind].get(extension);
+        const format = includeWebm && extension === "webm"
+          ? {mime:"video/webm", min:4, matches:(bytes:Uint8Array) => mediaHeaderValid("video/webm",bytes)}
+          : extension && formats[kind].get(extension);
         if (!format) continue;
         const subfolder = item.subfolder ?? "";
         if (typeof subfolder !== "string" || subfolder.length > 1024 ||
@@ -94,7 +96,8 @@ export function outputsOfKind(outputs: unknown, kind: Kind): Output[] {
       }
     }
   }
-  return result;
+  // Preserve get_video's MP4 indexes. WebM can also be selected by its list_outputs row.
+  return includeWebm ? [...result.filter(f=>f.format.mime!=="video/webm"),...result.filter(f=>f.format.mime==="video/webm")] : result;
 }
 
 export function base64(bytes: Uint8Array): string {
@@ -105,9 +108,13 @@ export function base64(bytes: Uint8Array): string {
   return parts.join("");
 }
 
+export function strongVideoVersion(value: string | null): boolean {
+  return value !== null && value.length <= 256 && /^"[!#-~]*"$/.test(value);
+}
+
 export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   {prompt_id, index = 0, byte_offset, chunk_bytes}: z.infer<typeof videoSchema>,
-  forPlayer = false): Promise<CallToolResult> {
+  forPlayer = false, review?:{file?:{filename:string;subfolder:string};version?:string}): Promise<CallToolResult> {
   const get = (path: string, headers?: HeadersInit) =>
     send(path, {method:"GET", headers, signal:AbortSignal.timeout(50_000)});
   const history = await get("/history/" + prompt_id);
@@ -119,7 +126,12 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   if (!job) return fail("No finished history for this prompt_id. Check queue status; do not resubmit.");
   if (job.status?.status_str !== "success" || job.status.completed !== true)
     return fail("This job did not finish successfully.");
-  const files = outputsOfKind(job.outputs, kind);
+  const files = outputsOfKind(job.outputs, kind, !!review);
+  if (review?.file) {
+    const selected = review.file;
+    index = files.findIndex(f=>f.filename===selected.filename && f.subfolder===selected.subfolder);
+    if (index === -1) return fail("The selected output is unavailable for review. Choose an MP4 or WebM video from list_outputs.");
+  }
   if (!files[index]) return fail("This job has " + files.length + " " + kind + " output(s); no file at index " + index + ".");
   const {filename, subfolder, format} = files[index];
   const path = "/view?" + new URLSearchParams({type:"output", filename, subfolder});
@@ -129,12 +141,22 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   // the file signature and total size; the iframe loads authenticated media.
   const player = !chunks;
   const offset = byte_offset ?? 0, length = player ? 16 : chunk_bytes ?? MAX_PART;
-  const file = await get(path, {Range:`bytes=${offset}-${offset + length - 1}`});
-  const metadata = {prompt_id, filename, index, [kind + "_count"]:files.length, mimeType:format.mime, url};
+  const file = await get(path, {Range:`bytes=${offset}-${offset + length - 1}`, ...(review?.version ? {"If-Range":review.version} : {})});
+  const etag = file.headers.get("ETag");
+  if (review?.version && etag !== review.version) {
+    await file.body?.cancel();
+    return fail("The saved video changed. Open its review again.");
+  }
+  const metadata = {prompt_id, filename, index, [kind + "_count"]:files.length, mimeType:format.mime, url,
+    ...(review && etag ? {etag} : {})};
   if (file.status !== 200 && file.status !== 206) {
     await file.body?.cancel();
     return fail(file.status === 416 ? "Byte offset is outside this file." :
        "Cannot retrieve the saved file (HTTP " + file.status + ").");
+  }
+  if (review && !strongVideoVersion(etag)) {
+    await file.body?.cancel();
+    return fail("Cannot verify this video's version for annotations. Open the video for playback instead.");
   }
   let total: number | undefined, expected: number | undefined;
   if (file.status === 206) {

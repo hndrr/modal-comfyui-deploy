@@ -31,6 +31,12 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   }
   delete cfg.MEDIA_DELIVERY;
   const jwt=await sign('mcp-aud','owner@example.com');
+  cfg.MEDIA_DELIVERY="broken optional setting";
+  const degraded=await (await request(jwt)).json();
+  assert.ok(degraded.result.tools.some(t=>t.name==="open_split_video_review"));
+  assert.ok(degraded.result.tools.some(t=>t.name==="enqueue_workflow"));
+  assert.ok(!degraded.result.tools.some(t=>t.name==="open_split_review_share"));
+  delete cfg.MEDIA_DELIVERY;
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();

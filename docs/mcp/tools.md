@@ -192,3 +192,12 @@ ComfyUIのLoRA選択肢を確認する例：
 内部プレイヤーの3つの `read_*_part` も同じ参照・取得経路を引き継ぎます。旧プレイヤーとの互換性のため、どちらもないパーツ取得は全offsetで原本経路を使います。`read_3d_part` は原本の継続取得時にも `etag` が必要です。`delivery_status`、`delivery_reason`、`retry_after_seconds` で準備・失敗を区別します。詳細は[アダプタ契約](../design/media-delivery-adapter-plan.md)を参照してください。
 
 外部配信が有効な `list_outputs` は1ページ最大32件に制限し、`next_offset` で続ける。原本HEAD、24件ずつのlookup、認証・起動確認を合わせて [Workers Freeのサブリクエスト上限](https://developers.cloudflare.com/workers/platform/limits/#subrequests) に収めるための上限であり、登録・転送は行わない。
+
+
+### 動画の赤入れ
+
+ChatGPT で動画の赤入れを頼むと、`open_split_video_review` が Split の原本を開きます。`prompt_id` と `get_video` の動画番号 `index`（既定0）、または `list_outputs` の全種類共通番号 `output_index` を指定できます。WebM は `output_index` で選べます。赤入れ画面は Split Worker に同梱されています。時間範囲・図形・コメントを付けて、選んだ指示と参照フレームを現在の会話に送れます。
+
+動画は既存の Split 認証を使って読み込みます。128 MiB 超や Range 非対応の原本では、ブラウザーの Split ログインとストリーム再生を使用します。赤入れを開いた時点の ETag を各読み込みで照合します。同名の動画が差し替わった場合は赤入れを開き直してください。ブラウザーがフレームの取得を制限する場合は、時間・図形・コメントを会話に送れます。
+
+管理画面と下書きを共有したい場合に限り、`MEDIA_DELIVERY` と配信先の動画レビュー API を設定します。画面から共有を選ぶと、その動画の原本バージョンに対応する下書きに接続します。共有先が停止していても、Split での編集とチャットへの送信は利用できます。

@@ -33,8 +33,8 @@ function fixture(count=1){
       return Response.json({results:references.map(ref=>{const r=records.get(JSON.stringify(ref));return r?.state==='ready'?value(r):{status:'missing',reason:r?'expired':'not_found'};})});
     }
     if(url.pathname==='/v1/media'){
-      const p=await request.json();assert.equal(p.source_id,'test');
-      assert.deepEqual(Object.keys(p).sort(),['source_id','output_path','source_etag','filename','mime_type','size_bytes','kind'].sort());
+      const p=await request.json();calls.at(-1).registration=p;assert.equal(p.source_id,'test');
+      assert.deepEqual(Object.keys(p).sort(),['source_id','output_path','source_etag','filename','mime_type','size_bytes','kind',...(p.remix_origin ? ['remix_origin'] : [])].sort());
       const key=JSON.stringify({output_path:p.output_path,source_etag:p.source_etag});
       let r=records.get(key);if(!r){r={id:randomUUID(),upload:randomUUID(),mime:p.mime_type,size:p.size_bytes,state:'reserved',etag:'"copy-v1"'};records.set(key,r);}
       return Response.json(value(r));
@@ -416,4 +416,117 @@ test('GLB/SPZ reuse the current cleansed copy without transferring the original 
     const old=await callSplit(noGeneration,'read_3d_part',{filename,byte_offset:0,delivery_ref:original.structuredContent.delivery_ref},browser,undefined,f.send,f.adapter());
     assert.equal(old.isError,true);
   }
+});
+
+test('redline reads the original with or without sharing and opens a private draft only on request',async()=>{
+  const f=fixture(4), tokenPath='/review-session/'+'1'.repeat(64);
+  const webm=Buffer.from([0x1a,0x45,0xdf,0xa3,0x93,0x42,0x82,0x84]);
+  Object.assign(f.files[0],{filename:'first.webm',kind:'video',mime:'video/webm',bytes:webm});
+  Object.assign(f.files[2],{filename:'second.mp4',kind:'video',mime:'video/mp4',bytes:mediaBytes('video/mp4',48)});
+  Object.assign(f.files[3],{filename:'third.mov',kind:'video'});
+  let shareCalls=0,offline=false,sharedVersion=f.files[2].etag;
+  const adapter=new MediaDelivery(config,async req=>{
+    shareCalls++;
+    if(offline) return new Response(null,{status:503});
+    assert.equal(new URL(req.url).pathname,'/v1/video-review');
+    assert.deepEqual(await req.json(),{prompt_id:job,output_path:'second.mp4'});
+    return Response.json({base:origin+tokenPath+'/draft',stream:origin+tokenPath+'/stream',version:sharedVersion,label:'second.mp4',ref:{prompt_id:job,index:2}});
+  });
+  const rpc=async(method,params,adapter)=>{
+    const req=new Request(browser+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
+      body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+    return (await (await remoteMcp(req,noGeneration,browser,undefined,f.send,adapter)).json()).result;
+  };
+  const call=(name,args,delivery)=>rpc('tools/call',{name,arguments:{prompt_id:job,...args}},delivery);
+  for(const delivery of [undefined,adapter]) {
+    const {tools}=await rpc('tools/list',{},delivery);
+    const tool=tools.find(t=>t.name==='open_split_video_review');
+    assert.ok(tool);
+    assert.equal(tools.some(t=>t.name==='open_split_review_share'),!!delivery);
+    const resource=await rpc('resources/read',{uri:tool._meta.ui.resourceUri},delivery);
+    assert.match(resource.contents[0].text,/read_split_review_part/);
+    assert.deepEqual(resource.contents[0]._meta.ui.csp.connectDomains,delivery?[origin]:[]);
+    assert.deepEqual(resource.contents[0]._meta.ui.csp.resourceDomains,[browser,"blob:","data:"]);
+    for(const [selector,expected,videoIndex] of [[{},f.files[2],0],[{output_index:2},f.files[2],0],[{output_index:0},f.files[0],1]]) {
+      const result=await call('open_split_video_review',selector,delivery);
+      assert.equal(result.isError,undefined,JSON.stringify(result));
+      assert.equal(result.structuredContent.filename,expected.filename);
+      assert.equal(result.structuredContent.index,videoIndex);
+      assert.equal(result._meta['split/review'].sharing,!!delivery);
+      const chunk=await call('read_split_review_part',{index:videoIndex,byte_offset:0,version:expected.etag},delivery);
+      assert.deepEqual(Buffer.from(chunk._meta['split/videoPart'],'base64'),expected.bytes);
+    }
+    assert.equal((await call('open_split_video_review',{index:0,output_index:2},delivery)).isError,true);
+    assert.equal((await call('open_split_video_review',{output_index:1},delivery)).isError,true);
+    const unsupported=await call('open_split_video_review',{output_index:3},delivery);
+    assert.equal(unsupported.isError,true);
+    assert.match(unsupported.content[0].text,/MP4 or WebM/);
+    assert.equal((await call('read_split_review_part',{index:0,byte_offset:0,version:'"old"'},delivery)).isError,true);
+  }
+  const stale=await call('open_split_review_share',{index:0,version:'"old"'},adapter);
+  assert.equal(stale.isError,true);
+  assert.match(stale.content[0].text,/video changed/);
+  assert.equal(shareCalls,0);
+  const shared=await call('open_split_review_share',{index:0,version:f.files[2].etag},adapter);
+  assert.equal(shared._meta['pmd/review'].stream,origin+tokenPath+'/stream');
+  assert.ok(!JSON.stringify(shared.content).includes(tokenPath));
+  assert.equal(shared.structuredContent,undefined);
+  sharedVersion='"new"';
+  const changed=await call('open_split_review_share',{index:0},adapter);
+  assert.equal(changed.isError,true);
+  assert.match(changed.content[0].text,/video changed/);
+  offline=true;
+  assert.equal((await call('open_split_review_share',{index:0},adapter)).isError,true);
+  assert.equal((await call('open_split_video_review',{index:0},adapter)).structuredContent.filename,'second.mp4');
+  assert.equal(shareCalls,3);
+  f.files[2].etag='W/"weak"';
+  assert.equal((await call('open_split_video_review',{index:0})).isError,true);
+});
+
+test('old receivers can register a copy when they reject the optional remix origin',async()=>{
+  const f=fixture();
+  Object.assign(f.files[0],{filename:'clip.mp4',mime:'video/mp4',kind:'video',bytes:mediaBytes('video/mp4',32)});
+  const registrations=[];
+  const old=new MediaDelivery(config,async request=>{
+    if(new URL(request.url).pathname==='/v1/media'){
+      const body=await request.clone().json();
+      registrations.push(body);
+      if(body.remix_origin)return Response.json({error:{code:'unknown_field'}},{status:400});
+    }
+    return f.fetcher(request);
+  });
+  const result=await callSplit(noGeneration,'get_video',{prompt_id:job},browser,undefined,f.send,old);
+  assert.equal(result.structuredContent.delivery_status,'ready');
+  assert.equal(registrations.length,2);
+  const {remix_origin,...legacy}=registrations[0];
+  assert.equal(remix_origin.prompt_id,job);
+  assert.deepEqual(registrations[1],legacy);
+  assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+});
+
+test('shared review URLs and output references must match the requested draft',async()=>{
+  const draftPath='/review-session/'+'2'.repeat(64)+'/draft';
+  const base=origin+draftPath;
+  const source={label:'clip',version:'"v1"',base,stream:base.replace(/draft$/,'stream'),ref:{prompt_id:job,index:3}};
+  for(const changes of [{base:base+'?'},{base:base+'#'},{base:'https://other.test'+draftPath},
+    {base:origin+'/folder/..'+draftPath,stream:origin+'/folder/..'+draftPath.replace(/draft$/,'stream')},
+    {stream:base},{ref:{prompt_id:job,index:4}},{ref:{prompt_id:randomUUID(),index:3}}]) {
+    const adapter=new MediaDelivery(config,async()=>Response.json({...source,...changes}));
+    await assert.rejects(adapter.openReview(job,{index:3}),/Invalid review session/);
+  }
+});
+
+test('registrations use the job for direct audio/video and the global index for output pages',async()=>{
+  for(const [kind,filename,mime] of [['audio','a.wav','audio/wav'],['video','v.mp4','video/mp4'],['image','image0.png','image/png'],['3d','scene.glb','model/gltf-binary']]) {
+    const f=fixture();
+    Object.assign(f.files[0],{kind,filename,mime,bytes:kind==='image'?png:mediaBytes(mime,48)});
+    const timed=kind==='audio'||kind==='video';
+    await callSplit(noGeneration,'get_'+kind,timed?{prompt_id:job.toUpperCase()}:{filename,subfolder:''},browser,undefined,f.send,f.adapter());
+    const [registration]=f.calls.filter(c=>c.registration);
+    assert.ok(registration);
+    assert.deepEqual(registration.registration.remix_origin,timed?{prompt_id:job}:undefined);
+  }
+  const f=fixture(2);
+  await deliveryOutputs(f.adapter(),f.send,{items:[{...f.files[1],index:7}],total:8,next_offset:null},true,browser,job);
+  assert.deepEqual(f.calls.find(c=>c.registration).registration.remix_origin,{prompt_id:job,index:7});
 });

@@ -126,6 +126,12 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
     assert.equal(r.headers.get("Cookie"),null);
     if(new URL(r.url).pathname.startsWith("/history/"))return Response.json({[id]:{status:{status_str:"success",completed:true},
       outputs:{"1":{audio:[{filename:"a.mp3",type:"output"}]}}}});
+    if(extension==="mp4") {
+      assert.equal(new URL(r.url).searchParams.has("split_review_version"),false);
+      return new Response(r.method==="HEAD"?null:Uint8Array.of(1),{status:206,headers:{
+        ETag:'"v2"',"Content-Range":"bytes 0-0/10",
+      }});
+    }
     return new Response(extension==="png"?png:audio);
   });
   const jwt=await sign("mcp"),browser=await sign("browser");
@@ -153,6 +159,20 @@ test("OAuth tools and browser bytes use media CPU; discovery and the audio page 
   }
   const archived=new Request(host+"/view?type=output&filename=preview.glb&subfolder=.split-temp/run",{headers:{"CF-Access-Jwt-Assertion":browser}});
   assert.equal((await worker.fetch(archived,cfg)).status,200);
+  for (const subfolder of ["movie",".split-temp/job"]) {
+    for (const method of ["GET","HEAD"]) {
+      const read=version=>worker.fetch(new Request(host+"/api/view?"+new URLSearchParams({
+        filename:"clip.mp4",subfolder,split_review_version:version,
+      }),{method,headers:{"CF-Access-Jwt-Assertion":browser,Range:"bytes=0-0"}}),cfg);
+      const current=await read('"v2"');
+      assert.equal(current.status,206);
+      assert.equal(current.headers.get("Content-Range"),"bytes 0-0/10");
+      const stale=await read('"v1"');
+      assert.equal(stale.status,409);
+      assert.equal(stale.body,null);
+      assert.equal((await read('W/"v2"')).status,400);
+    }
+  }
   const threePage=token=>new Request(host+"/view?type=output&filename=model.glb",{headers:{"CF-Access-Jwt-Assertion":token,
     "Sec-Fetch-Dest":"document","Sec-Fetch-Mode":"navigate"}});
   hits.length=0;

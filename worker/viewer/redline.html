@@ -1,0 +1,164 @@
+<style>
+  .rl-wrap {
+    position: relative;
+  }
+  .rl-wrap video:not([hidden]) {
+    display: block;
+  }
+  #rl-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    border-radius: 8px;
+  }
+  #rl-canvas.on {
+    pointer-events: auto;
+    cursor: crosshair;
+    touch-action: none;
+    box-shadow: inset 0 0 0 3px #ff3b30;
+  }
+  #rl {
+    padding: 4px 4px 12px;
+  }
+  #rl > summary {
+    cursor: pointer;
+    padding: 6px 0;
+    font-weight: 600;
+  }
+  #rl .rl-body {
+    display: grid;
+    gap: 8px;
+  }
+  #rl .rl-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  #rl [hidden] {
+    display: none;
+  }
+  #rl fieldset {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
+  #rl textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 3.5em;
+    font: inherit;
+  }
+  #rl input[type="number"] {
+    width: 6.5em;
+    font: inherit;
+  }
+  #rl button {
+    min-height: 32px;
+    font: inherit;
+  }
+  #rl button[aria-pressed="true"] {
+    background: #ff3b30;
+    color: #fff;
+  }
+  #rl ol {
+    margin: 0;
+    padding-left: 1.6em;
+    display: grid;
+    gap: 6px;
+  }
+  #rl ol:focus {
+    outline: none;
+  }
+  #rl li[aria-current] {
+    outline: 2px solid #ffd400;
+    outline-offset: 2px;
+  }
+  #rl .rl-note {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  #rl small {
+    opacity: 0.75;
+  }
+  #rl p {
+    margin: 0;
+    min-height: 1.2em;
+  }
+  .rl-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  @media (max-width: 480px) {
+    #rl .rl-row > button {
+      flex: 1 1 auto;
+    }
+  }
+</style>
+<canvas id="rl-canvas" aria-hidden="true"></canvas>
+<details id="rl" open hidden>
+  <summary>動画の赤入れ<span id="rl-count"></span></summary>
+  <div class="rl-body">
+    <div class="rl-row">
+      <button type="button" id="rl-draw" aria-pressed="false">描画モード</button>
+      <fieldset>
+        <legend class="rl-sr">図形の種類</legend>
+        <label><input type="radio" name="rl-tool" value="rect" checked /> 四角</label>
+        <label><input type="radio" name="rl-tool" value="circle" /> 円</label>
+        <label><input type="radio" name="rl-tool" value="arrow" /> 矢印</label>
+        <label><input type="radio" name="rl-tool" value="pen" /> ペン</label>
+      </fieldset>
+      <button type="button" id="rl-undo">1つ戻す</button>
+      <button type="button" id="rl-clear">描画を消去</button>
+      <small id="rl-pending" aria-live="polite"></small>
+    </div>
+    <label for="rl-note">メモ（必須・3000文字まで）</label>
+    <textarea id="rl-note" maxlength="3000" placeholder="例: この部分の手の形を自然にする"></textarea>
+    <div class="rl-row">
+      <label for="rl-start">開始（秒）</label
+      ><input
+        id="rl-start"
+        type="number"
+        min="0"
+        step="any"
+        inputmode="decimal"
+        placeholder="描画位置"
+        aria-describedby="rl-time-hint"
+      />
+      <button type="button" id="rl-sets" aria-label="開始を現在の再生位置にする">現在位置</button>
+      <label for="rl-end">終了（秒）</label
+      ><input
+        id="rl-end"
+        type="number"
+        min="0"
+        step="any"
+        inputmode="decimal"
+        placeholder="描画位置"
+        aria-describedby="rl-time-hint"
+      />
+      <button type="button" id="rl-sete" aria-label="終了を現在の再生位置にする">現在位置</button>
+      <button type="button" id="rl-add">注釈を追加</button>
+    </div>
+    <small id="rl-time-hint"
+      >空欄なら描画したフレームの時刻を使います。描画は一時停止中のフレームにだけできます（Escで描画終了）。</small
+    >
+    <p id="rl-status" role="status"></p>
+    <ol id="rl-list" tabindex="-1" aria-label="注釈一覧"></ol>
+    <div class="rl-row">
+      <button type="button" id="rl-send">選択した注釈をチャットに送信</button><small id="rl-store"></small>
+    </div>
+    <div class="rl-row" id="rl-share" hidden>
+      <button type="button" id="rl-open">共有下書きを開く</button
+      ><button type="button" id="rl-sync" hidden>共有下書きと同期</button><small id="rl-share-label"></small>
+    </div>
+  </div>
+</details>
