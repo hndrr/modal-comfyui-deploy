@@ -130,6 +130,7 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   if (review?.file) {
     const selected = review.file;
     index = files.findIndex(f=>f.filename===selected.filename && f.subfolder===selected.subfolder);
+    if (index === -1) return fail("The selected output is unavailable for review. Choose an MP4 or WebM video from list_outputs.");
   }
   if (!files[index]) return fail("This job has " + files.length + " " + kind + " output(s); no file at index " + index + ".");
   const {filename, subfolder, format} = files[index];

@@ -277,7 +277,7 @@ const reviewResult = (() => {
       revision = sourceRevision,
       note = ui.note.value.trim(),
       frame = ms(pending.shapes.length ? pending.frame : player.currentTime);
-    const num = (i) => (i.value === "" ? frame : ms(Number(i.value))),
+    const num = (i) => (i.value === "" && !i.validity.badInput ? frame : ms(i.valueAsNumber)),
       start = num(ui.start),
       end = num(ui.end);
     if (!note) {
@@ -285,7 +285,7 @@ const reviewResult = (() => {
       return say("メモを入力してください。");
     }
     if (dd.marks.length >= 60) return say("注釈は60件までです。不要な注釈を削除してください。");
-    if (!(start >= 0 && start <= frame && frame <= end))
+    if (!time(start) || !time(end) || !(start <= frame && frame <= end))
       return say(`開始 ≤ 描画位置（${fmt(frame)}）≤ 終了 になるよう時間を設定してください。`);
     const m = { id: crypto.randomUUID(), start, end, frame, note, shapes: pending.shapes, image: "" };
     // Commit the annotation now. Capturing its optional image can take a seek.
@@ -513,9 +513,9 @@ const reviewResult = (() => {
         if (!Number.isSafeInteger((await post.json())?.revision))
           throw Error("保存結果を確認できません。もう一度同期してください。");
       }
-      if (sourceRevision !== revision) return;
       Object.assign(dd, { marks, known: marks.map((m) => m.id), deleted: [] });
       save();
+      if (sourceRevision !== revision) return;
       if (viewing && !marks.some((m) => m.id === viewing)) viewing = undefined;
       say(`共有下書きと同期しました（${marks.length}件）。`);
     } catch (e) {
@@ -527,7 +527,7 @@ const reviewResult = (() => {
       );
     } finally {
       setBusy(false);
-      paint();
+      if (sourceRevision === revision) paint();
     }
   }
   function setBusy(b) {

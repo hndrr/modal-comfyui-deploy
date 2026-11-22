@@ -235,10 +235,10 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
     a=>call("read_3d_part",a,browserOrigin));
-  const reviewUri="ui://split/video-redline-v4.html";
+  const reviewUri="ui://split/video-redline-v5.html";
   const shareOrigins=delivery ? [delivery.origin] : [];
   const reviewResources=[browserOrigin,"blob:","data:"];
-  for (const uri of [reviewUri,"ui://split/video-redline-v3.html","ui://split/video-redline-v2.html","ui://split/video-redline-v1.html"]) {
+  for (const uri of [reviewUri,"ui://split/video-redline-v4.html","ui://split/video-redline-v3.html","ui://split/video-redline-v2.html","ui://split/video-redline-v1.html"]) {
     server.registerResource(uri.split("/").at(-1)!,uri,{mimeType:PLAYER_MIME},async()=>({
       contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.origin,true),_meta:{
         ui:{csp:{connectDomains:shareOrigins,resourceDomains:reviewResources}},
@@ -278,12 +278,13 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
         prompt_id=prompt_id.toLowerCase();
         const original=await callSplit(send,"open_split_video_review",{prompt_id,index},browserOrigin,undefined,mediaSend);
         if (original.isError || !original.structuredContent?.url) return failure("This video is no longer available from Split.");
+        const etag=original.structuredContent.etag;
+        if (version!==undefined && version!==etag) return failure("This video changed. Reopen its review before sharing.");
         const params=new URL(String(original.structuredContent.url)).searchParams;
         const path=[params.get("subfolder"),params.get("filename")].filter(Boolean).join("/");
         try {
           const source=await delivery.openReview(prompt_id,{output_path:path});
-          if ((version && source.version!==version) || (original.structuredContent.etag && source.version!==original.structuredContent.etag))
-            return failure("This video changed. Reopen its review before sharing.");
+          if (source.version!==etag) return failure("This video changed. Reopen its review before sharing.");
           return {content:[],_meta:{"pmd/review":source}};
         } catch {return failure("Admin draft sharing is unavailable. You can keep editing and send your notes to chat.");}
       });

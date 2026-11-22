@@ -419,17 +419,18 @@ test('GLB/SPZ reuse the current cleansed copy without transferring the original 
 });
 
 test('redline reads the original with or without sharing and opens a private draft only on request',async()=>{
-  const f=fixture(3), tokenPath='/review-session/'+'1'.repeat(64);
+  const f=fixture(4), tokenPath='/review-session/'+'1'.repeat(64);
   const webm=Buffer.from([0x1a,0x45,0xdf,0xa3,0x93,0x42,0x82,0x84]);
   Object.assign(f.files[0],{filename:'first.webm',kind:'video',mime:'video/webm',bytes:webm});
   Object.assign(f.files[2],{filename:'second.mp4',kind:'video',mime:'video/mp4',bytes:mediaBytes('video/mp4',48)});
-  let shareCalls=0,offline=false;
+  Object.assign(f.files[3],{filename:'third.mov',kind:'video'});
+  let shareCalls=0,offline=false,sharedVersion=f.files[2].etag;
   const adapter=new MediaDelivery(config,async req=>{
     shareCalls++;
     if(offline) return new Response(null,{status:503});
     assert.equal(new URL(req.url).pathname,'/v1/video-review');
     assert.deepEqual(await req.json(),{prompt_id:job,output_path:'second.mp4'});
-    return Response.json({base:origin+tokenPath+'/draft',stream:origin+tokenPath+'/stream',version:f.files[2].etag,label:'second.mp4',ref:{prompt_id:job,index:2}});
+    return Response.json({base:origin+tokenPath+'/draft',stream:origin+tokenPath+'/stream',version:sharedVersion,label:'second.mp4',ref:{prompt_id:job,index:2}});
   });
   const rpc=async(method,params,adapter)=>{
     const req=new Request(browser+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
@@ -457,17 +458,27 @@ test('redline reads the original with or without sharing and opens a private dra
     }
     assert.equal((await call('open_split_video_review',{index:0,output_index:2},delivery)).isError,true);
     assert.equal((await call('open_split_video_review',{output_index:1},delivery)).isError,true);
+    const unsupported=await call('open_split_video_review',{output_index:3},delivery);
+    assert.equal(unsupported.isError,true);
+    assert.match(unsupported.content[0].text,/MP4 or WebM/);
     assert.equal((await call('read_split_review_part',{index:0,byte_offset:0,version:'"old"'},delivery)).isError,true);
   }
+  const stale=await call('open_split_review_share',{index:0,version:'"old"'},adapter);
+  assert.equal(stale.isError,true);
+  assert.match(stale.content[0].text,/video changed/);
   assert.equal(shareCalls,0);
-  const shared=await call('open_split_review_share',{index:0},adapter);
+  const shared=await call('open_split_review_share',{index:0,version:f.files[2].etag},adapter);
   assert.equal(shared._meta['pmd/review'].stream,origin+tokenPath+'/stream');
   assert.ok(!JSON.stringify(shared.content).includes(tokenPath));
   assert.equal(shared.structuredContent,undefined);
+  sharedVersion='"new"';
+  const changed=await call('open_split_review_share',{index:0},adapter);
+  assert.equal(changed.isError,true);
+  assert.match(changed.content[0].text,/video changed/);
   offline=true;
   assert.equal((await call('open_split_review_share',{index:0},adapter)).isError,true);
   assert.equal((await call('open_split_video_review',{index:0},adapter)).structuredContent.filename,'second.mp4');
-  assert.equal(shareCalls,2);
+  assert.equal(shareCalls,3);
   f.files[2].etag='W/"weak"';
   assert.equal((await call('open_split_video_review',{index:0})).isError,true);
 });
