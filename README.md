@@ -188,7 +188,7 @@ CPU/GPU 分離構成（Split app）は MCP に対応しており、ChatGPT Web�
 | [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) | 4.2.2 | [GPL-3.0-only](https://pypi.org/project/comfyui-manager/4.2.2/) |
 | [comfy-cli](https://github.com/Comfy-Org/comfy-cli) | 1.7.3 | [GPL-3.0-only](https://pypi.org/project/comfy-cli/1.7.3/) |
 | [comfyui-mcp](https://github.com/artokun/comfyui-mcp) | 0.52.206 | [MIT](https://github.com/artokun/comfyui-mcp/blob/c64a8ec76f3345446f0f472152afcd95af846a37/LICENSE) |
-| [Modal SDK](https://github.com/modal-labs/modal-client) | 1.1.4 | [Apache-2.0](https://pypi.org/project/modal/1.1.4/) |
+| [Modal SDK](https://github.com/modal-labs/modal-client) | 1.6.4 | [Apache-2.0](https://pypi.org/project/modal/1.6.4/) |
 | [Gradio](https://github.com/gradio-app/gradio) | 5.47.2 | [Apache-2.0](https://pypi.org/project/gradio/5.47.2/) |
 | [Pillow](https://github.com/python-pillow/Pillow) | 11.3.0 | [MIT-CMU](https://pypi.org/project/pillow/11.3.0/) |
 | [python-dotenv](https://github.com/theskumar/python-dotenv) | 1.2.2 | [BSD-3-Clause](https://pypi.org/project/python-dotenv/1.2.2/) |

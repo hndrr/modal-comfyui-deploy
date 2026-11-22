@@ -83,7 +83,7 @@ image = (
         "python -m pip install -r /opt/comfy-template/manager_requirements.txt",
     )
     .pip_install(
-        "modal==1.1.4",
+        "modal==1.6.4",
         "aiohttp==3.14.4",
     )
     .run_commands(
