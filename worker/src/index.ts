@@ -528,6 +528,7 @@ export default {
     const mcpPath = requestUrl.pathname === "/mcp" || requestUrl.pathname.startsWith("/mcp/");
     // Keep the shared split path closed even after its OAuth binding is removed.
     const splitUiHost = env.SPLIT_UI_ORIGIN && parseOrigins(env.SPLIT_UI_ORIGIN.trim()).has(requestUrl.hostname);
+    let remoteSplitHost = false;
     if (env.SPLIT_REMOTE_MCP) {
       let cfg;
       try { cfg = JSON.parse(env.SPLIT_REMOTE_MCP); }
@@ -535,7 +536,8 @@ export default {
         if (mcpPath || !resolveUpstreamOrigin(env, requestUrl.hostname)) return textResponse("Invalid MCP binding.", 500);
       }
       const url = requestUrl;
-      if (mcpPath && url.hostname === cfg?.split_hostname && url.hostname !== cfg.hostname)
+      remoteSplitHost = url.hostname === cfg?.split_hostname;
+      if (mcpPath && remoteSplitHost && url.hostname !== cfg.hostname)
         return textResponse("Not found.", 404);
       if (url.hostname === cfg?.hostname && (mcpPath || cfg.hostname !== cfg.split_hostname)) {
         if (url.pathname !== "/mcp" || url.search) return textResponse("Not found.", 404);
@@ -593,6 +595,24 @@ export default {
     }
     if (identity.kind==="split-mcp")
       return textResponse("Local MCP service access was retired. Use HTTPS /mcp with OAuth.",410);
+
+    // Access returns from a different site. Start a same-origin navigation to
+    // the UI so ComfyUI can retain its cross-site checks on every request.
+    if ((splitUiHost || remoteSplitHost) && identity.kind === "browser" && request.method === "GET" &&
+        (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html") &&
+        request.headers.get("Sec-Fetch-Site") === "cross-site" &&
+        request.headers.get("Sec-Fetch-Mode") === "navigate" &&
+        request.headers.get("Sec-Fetch-Dest") === "document") {
+      const target = (requestUrl.pathname + requestUrl.search).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+      return new Response(`<!doctype html><html lang="ja"><meta charset="utf-8">
+<title>ComfyUI</title><meta http-equiv="refresh" content="0;url=${target}">
+<a href="${target}">ComfyUI を開く</a></html>`, {headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "private, no-store",
+        "Vary": "Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest",
+        "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      }});
+    }
 
     let mediaHost=false;
     if(env.SPLIT_MEDIA_ORIGIN){

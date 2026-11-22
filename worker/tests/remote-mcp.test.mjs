@@ -122,6 +122,50 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.match(await (await document(browser)).text(),/<audio controls/);
   assert.equal(hits.length,1); // Rendering the signed-in page never touches Modal.
 
+  await t.test('the signed-in Split home opens after returning from Access', async () => {
+    const navigation = {
+      'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+    };
+    const open = (path, {token = browser, hostname = host, env = shared, method = 'GET', headers} = {}) =>
+      worker.fetch(new Request('https://' + hostname + path, {
+        method, headers: {...navigation, ...headers, 'CF-Access-Jwt-Assertion': token},
+      }), env);
+    const before = hits.length;
+    assert.equal((await open('/', {token: ''})).status, 403);
+    const landing = await open('/', {env: {...shared, SPLIT_REMOTE_MCP: undefined}});
+    assert.equal(landing.status, 200);
+    assert.match(landing.headers.get('Content-Type'), /text\/html/);
+    assert.match(landing.headers.get('Cache-Control'), /no-store/);
+    assert.equal(landing.headers.get('Content-Security-Policy'),
+      "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+    assert.equal(landing.headers.get('Vary'), 'Sec-Fetch-Site, Sec-Fetch-Mode, Sec-Fetch-Dest');
+    assert.match(await landing.text(), /http-equiv="refresh" content="0;url=\/"/);
+    const query = '?workflow=A%2FB&copy=1';
+    for (const path of ['/', '/index.html']) {
+      const page = await open(path + query, {env: cfg, hostname: split});
+      const html = await page.text();
+      const target = path + '?workflow=A%2FB&amp;copy=1';
+      assert.ok(html.includes(`content="0;url=${target}"`));
+      assert.ok(html.includes(`href="${target}"`));
+    }
+    assert.equal(hits.length, before);
+    await open('/index.html' + query, {env: cfg, hostname: split, headers: {'Sec-Fetch-Site': 'same-origin'}});
+    assert.equal(hits.at(-1).url, origin + '/index.html' + query);
+    for (const options of [{method: 'POST'}, {headers: {'Sec-Fetch-Dest': 'iframe'}},
+      {headers: {'Sec-Fetch-Mode': 'cors'}}]) {
+      const previous = hits.length;
+      await open('/', options);
+      assert.equal(hits.length, previous + 1);
+      assert.equal(hits.at(-1).url, origin + '/');
+    }
+    await open('/', {hostname: 'ordinary.example.com', env: {...cfg,
+      MODAL_ADDITIONAL_ORIGINS: JSON.stringify({'ordinary.example.com': 'https://ordinary.modal.run'})}});
+    assert.equal(hits.at(-1).url, 'https://ordinary.modal.run/');
+    await open('/api/queue');
+    assert.equal(hits.at(-1).url, origin + '/api/queue');
+    assert.equal(hits.at(-1).headers.get('Sec-Fetch-Site'), 'cross-site');
+  });
+
   // Other ComfyUI hosts may already have custom-node routes below /mcp.
   const other = "ordinary.example.com", upstream = "https://ordinary.modal.run";
   for (const binding of [shared.SPLIT_REMOTE_MCP, undefined]) {
