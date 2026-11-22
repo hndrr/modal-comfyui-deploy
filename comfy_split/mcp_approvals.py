@@ -108,13 +108,14 @@ async def submit(c, body, key):
                 raise ValueError("request_id was already used with different content.")
             return web.json_response(c.receipt(job))
     prepared = c.prepare_prompt(copy.deepcopy(body))
-    graph = prepared["prompt"]
-    definitions = json.loads((await c.objects("/object_info", graph=graph)).body)
-    graph = prepared["prompt"] = policy.executable_graph(graph, definitions)
+    submitted_graph = prepared["prompt"]
+    definitions = json.loads((await c.objects("/object_info", graph=submitted_graph)).body)
+    graph = prepared["prompt"] = policy.executable_graph(submitted_graph, definitions)
     calls, loaders = policy.plan(graph, definitions)
     if not calls:
         selection = await c.select_gpu(requested, graph, definitions)
-        job = c.admit_prompt(prepared, key, selection)
+        job = c.admit_prompt(prepared, key, selection,
+                             execution_graph=graph if graph is not submitted_graph else None)
         job.update(mcp_guard=policy.execution_guard(prepared, [], []), mcp_digest=digest)
         await c.commit_prompt()
         await c.status()

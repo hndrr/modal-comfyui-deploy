@@ -111,7 +111,8 @@ async def run_worker(spec, events, commands, volumes):
             write_json(started_path, {"id": session_id, "at": time.time(), "worker_id": WORKER_ID,
                                      "environment": spec["environment"], "operation": spec["operation"]})
             await volumes["data"].commit.aio()
-            await process.start(spec["environment"], cpu=CPU_WORKER, isolated_output=generating)
+            await process.start(spec["environment"], cpu=CPU_WORKER, isolated_output=generating,
+                                fp16_accumulation=generating and not CPU_WORKER and spec.get("fp16_accumulation", False))
             process.models_revision = models_revision
             print(json.dumps({"event": "cpu_worker_ready" if CPU_WORKER else "gpu_ready", "id": session_id,
                               "seconds": time.monotonic() - started}))

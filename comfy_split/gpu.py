@@ -115,6 +115,21 @@ def light_media_node(name, module, inputs):
     return all(type(n) is int and n > 0 for n in dims) and dims[0] * dims[1] * dims[2] <= 4096**2
 
 
+def minimax_h3_video(graph):
+    models = [node["inputs"].get("unet_name") for node in graph.values()
+              if node["class_type"] == "UNETLoader"]
+    video_vaes = {"minimax_h3_video_vae_fp16.safetensors", "minimax_h3_video_vae_int8_convrot.safetensors"}
+    return bool(models) and all(
+        isinstance(name, str) and name.rsplit("/", 1)[-1].startswith(("minimax_h3_", "fastvideo_fasth3_"))
+        for name in models
+    ) and any(
+        node["class_type"] == "VAELoader"
+        and isinstance(name := node["inputs"].get("vae_name"), str)
+        and name.rsplit("/", 1)[-1] in video_vaes
+        for node in graph.values()
+    )
+
+
 def select_gpu(requested, graph, definitions):
     """Route verified, currently CPU-importable graphs before applying GPU preferences."""
     if requested == "CPU":

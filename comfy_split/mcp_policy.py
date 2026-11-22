@@ -121,8 +121,8 @@ def executable_graph(graph, definitions, targets=None):
     """Remove disconnected branches from the payload itself, before classifying it.
 
     Every registered output is a root (including output nodes with side effects).
-    If older catalog entries lack output metadata, keep the entire graph and
-    inspect it conservatively. Never trust output flags supplied by the caller.
+    If older catalog entries lack output metadata, return the original graph
+    unchanged. Never trust output flags supplied by the caller.
     """
     if not isinstance(graph, dict) or not graph or len(graph) > 4096:
         raise ValueError("Expected a bounded API workflow.")

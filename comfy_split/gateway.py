@@ -372,7 +372,8 @@ class Controller:
                 hook = getattr(extension, "before_dispatch", None)
                 if hook:
                     values = hook(record)
-                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard", "models_revision", "allocation"}:
+                    if set(values) & {"id", "operation", "environment", "body", "token", "mcp_guard",
+                                      "models_revision", "allocation", "fp16_accumulation"}:
                         raise ValueError("Extension attempted to replace core worker fields")
                     extra.update(values)
         except ValueError as error:
@@ -388,7 +389,7 @@ class Controller:
         await self.persist()
         spec = {"id": record["id"], "operation": operation,
                 "environment": record["environment"]}
-        for key in ("body", "token", "mcp_guard"):
+        for key in ("body", "token", "mcp_guard", "fp16_accumulation"):
             if key in record:
                 spec[key] = record[key]
         spec.update(extra)
@@ -879,7 +880,7 @@ class Controller:
             return {"gpu": running[0], "gpu_reason": reason}
         return selection
 
-    def admit_prompt(self, body, request_id, selection=None):
+    def admit_prompt(self, body, request_id, selection=None, *, execution_graph=None):
         existing = request_id and any(
             j.get("request_id") == request_id
             for j in (*self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values())
@@ -888,6 +889,8 @@ class Controller:
         job = self.journal.enqueue(body, request_id)
         if selection and not existing:
             job.update(selection)
+            if execution_graph and selection["gpu"] != "CPU" and gpu.minimax_h3_video(execution_graph):
+                job["fp16_accumulation"] = True
         for ext, admission in admissions:
             ext.accepted(job, admission)
         return job
@@ -1069,9 +1072,10 @@ class Controller:
                     if requested == "CPU":
                         raise ValueError("CPU試行はMCPのenqueue_workflowで指定してください。")
                     body = self.prepare_prompt(body)
-                    graph = body.get("prompt")
-                    if not isinstance(graph, dict) or not graph:
+                    submitted_graph = body.get("prompt")
+                    if not isinstance(submitted_graph, dict) or not submitted_graph:
                         raise ValueError("prompt must be a non-empty object")
+                    graph = submitted_graph
                     definitions = {}
                     try:
                         definitions = json.loads((await self.objects("/object_info", graph=graph)).body)
@@ -1087,7 +1091,8 @@ class Controller:
                     if requested != "auto":
                         body["gpu"] = requested
                     selection = await self.select_gpu(requested, graph, definitions)
-                    job = self.admit_prompt(body, request_id, selection)
+                    job = self.admit_prompt(body, request_id, selection,
+                                            execution_graph=graph if graph is not submitted_graph else None)
                     await self.commit_prompt()
                 await self.status()
                 return web.json_response(self.receipt(job))

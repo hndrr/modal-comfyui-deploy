@@ -74,6 +74,20 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 child.wait.assert_not_awaited()
                 self.assertIs(process.process, child)
 
+    async def test_warm_gpu_restarts_when_fp16_accumulation_changes(self):
+        process = runtime.ComfyProcess("gpu", 8188)
+        process.process = SimpleNamespace(returncode=None)
+        process.version = "base"
+        for active, requested in ((False, True), (True, False)):
+            with self.subTest(active=active), patch.object(process, "stop", AsyncMock()) as stop, \
+                    patch.object(runtime, "environment_path", side_effect=RuntimeError("starting")):
+                process.fp16_accumulation = active
+                await process.start("base", fp16_accumulation=active)
+                stop.assert_not_awaited()
+                with self.assertRaisesRegex(RuntimeError, "starting"):
+                    await process.start("base", fp16_accumulation=requested)
+                stop.assert_awaited_once()
+
     async def test_cpu_and_gpu_use_same_snapshot_only_when_enabled_without_git_token(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -98,6 +112,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                 packs = tuple(NODE_PACKS) if mode == "on" else (("gemini",) if mode == "gemini" else ())
                 selection = Settings(node_packs=packs).environment()
                 for role in ("cpu", "candidate", "gpu", "cpu_worker"):
+                    fast = role == "gpu" and mode == "off"
                     process = runtime.ComfyProcess(role, 8187)
                     process.root = root / f"{mode}-{role}"
                     process.temp_root = process.root / "temporary"
@@ -112,9 +127,14 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
                                                 **provider_keys}), \
                          patch.object(runtime.asyncio, "create_subprocess_exec", launch), \
                          self.assertRaisesRegex(RuntimeError, "captured launch"):
-                        await process.start("env-snapshot", cpu=role != "gpu")
+                        await process.start("env-snapshot", cpu=role != "gpu", fp16_accumulation=fast)
                     command = launch.call_args.args
                     self.assertEqual("--cpu" in command, role != "gpu")
+                    if fast:
+                        fast_index = command.index("--fast")
+                        self.assertEqual(command[fast_index + 1], "fp16_accumulation")
+                    else:
+                        self.assertNotIn("--fast", command)
                     self.assertEqual(launch.call_args.kwargs["env"]["SPLIT_CPU"],
                                      "1" if role in {"cpu", "candidate"} else "0")
                     self.assertNotIn(node_packs.TOKEN_ENV, launch.call_args.kwargs["env"])

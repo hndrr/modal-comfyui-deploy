@@ -108,6 +108,40 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["latest_selection"]["gpu"], "CPU")
         cpu.get_current_stats.aio.assert_not_awaited()
 
+    async def test_minimax_fp16_accumulation_follows_executed_branch_to_worker(self):
+        graph = {
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "fastvideo_fasth3_8step_v2_pruned_int8_convrot.safetensors"}},
+            "2": {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"}},
+            "3": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+            "4": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["2", 0]}},
+            "5": {"class_type": "CreateVideo", "inputs": {"images": ["4", 0]}},
+            "6": {"class_type": "SaveVideo", "inputs": {"video": ["5", 0]}},
+            "7": {"class_type": "UNETLoader", "inputs": {"unet_name": "another_model.safetensors"}},
+            "8": {"class_type": "KSampler", "inputs": {"model": ["7", 0]}},
+            "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}},
+        }
+        definitions = {node["class_type"]: {"python_module": "nodes", "output_node": key in {"6", "9"}}
+                       for key, node in graph.items()}
+        with patch.object(self.control, "objects", AsyncMock(return_value=web.json_response(definitions))):
+            for outputs, fast in ((["6"], True), (["9"], False), (["6", "9"], False)):
+                with self.subTest(outputs=outputs):
+                    response = await self.client.post("/api/prompt", json={
+                        "prompt": graph, "partial_execution_targets": outputs, "gpu": self.control.session_gpu,
+                    })
+                    self.assertEqual(response.status, 200, await response.text())
+                    job = self.control.journal.data["jobs"][(await response.json())["prompt_id"]]
+                    await self.control.spawn(job, "generate")
+                    spec = self.worker.spawn.aio.call_args.args[0]
+                    self.assertEqual(spec.get("fp16_accumulation", False), fast)
+
+            response = await self.client.post("/_remote_mcp/submit", headers={
+                "X-Split-Remote-Tool": "1", "X-Modal-Execution-Mode": "split",
+                "Idempotency-Key": "minimax-h3",
+            }, json={"prompt": {str(key): graph[str(key)] for key in range(1, 7)}})
+            self.assertEqual(response.status, 200, await response.text())
+            job = self.control.journal.data["jobs"][(await response.json())["prompt_id"]]
+            self.assertTrue(job["fp16_accumulation"])
+
     async def asyncSetUp(self):
         self.enterContext(patch.dict("os.environ", Settings().environment()))
         self.temp = tempfile.TemporaryDirectory()

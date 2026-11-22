@@ -192,12 +192,17 @@ class WorkerExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_cpu_worker_uses_shared_commit_protocol_without_retry_on_failure(self):
         self.generate.side_effect = RuntimeError("CUDA-only custom node")
         with patch.object(worker_module, "CPU_WORKER", True):
-            result = await self.run_job()
-        self.process.start.assert_awaited_once_with("base", cpu=True, isolated_output=True)
+            result = await self.run_job(fp16_accumulation=True)
+        self.process.start.assert_awaited_once_with("base", cpu=True, isolated_output=True, fp16_accumulation=False)
         self.generate.assert_awaited_once()
         self.assertEqual(result["status"], "failed")
         self.assertIn("CUDA-only", result["error"])
         self.assertEqual(json.loads((self.root / "job.json").read_text())["status"], "failed")
+
+    async def test_gpu_passes_minimax_fp16_accumulation_to_comfy_process(self):
+        result = await self.run_job(fp16_accumulation=True)
+        self.assertEqual(result["status"], "completed")
+        self.process.start.assert_awaited_once_with("base", cpu=False, isolated_output=True, fp16_accumulation=True)
 
     async def test_output_commit_failure_does_not_publish_completion(self):
         self.volumes["output"].commit.aio.side_effect = OSError("output commit failed")

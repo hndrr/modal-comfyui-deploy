@@ -126,6 +126,7 @@ class ComfyProcess:
         self.process = None
         self.version = None
         self.models_revision = None
+        self.fp16_accumulation = False
         self.dependencies = {}
         self.root = Path("/tmp") / ("split-comfy-" + role)
         self.log = Path("/tmp") / ("split-comfy-" + role + ".log")
@@ -226,9 +227,10 @@ class ComfyProcess:
         self.version = None
         self.dependencies = {}
 
-    async def start(self, version, *, cpu=False, manager=False, isolated_output=False):
+    async def start(self, version, *, cpu=False, manager=False, isolated_output=False, fp16_accumulation=False):
         output = self.root / "generated" if isolated_output else OUTPUT
-        if self.version == version and self.output_directory == output and self.process and self.process.returncode is None:
+        if (self.version == version and self.output_directory == output and self.fp16_accumulation == fp16_accumulation
+                and self.process and self.process.returncode is None):
             return
         await self.stop()
         self.output_directory = output
@@ -307,8 +309,11 @@ class ComfyProcess:
                    "--extra-model-paths-config", str(extension_paths)]
         if cpu:
             command.append("--cpu")
-        elif os.environ.get("COMFYUI_SAGE_ATTENTION", "on") == "on":
-            command.append("--use-sage-attention")
+        else:
+            if fp16_accumulation:
+                command.extend(["--fast", "fp16_accumulation"])
+            if os.environ.get("COMFYUI_SAGE_ATTENTION", "on") == "on":
+                command.append("--use-sage-attention")
         environment = dict(os.environ)
         environment.pop(node_packs.TOKEN_ENV, None)
         environment.pop("COMFY_API_KEY", None)
@@ -345,6 +350,7 @@ class ComfyProcess:
                                 if not guarded and metadata.get("cpu_guard"):
                                     raise RuntimeError("Execution worker unexpectedly has the CPU guard")
                             self.version = version
+                            self.fp16_accumulation = fp16_accumulation
                             self.dependencies = metadata.get("dependencies", {})
                             print(json.dumps({"event": "comfy_ready", "role": self.role,
                                               "seconds": time.monotonic() - started}), flush=True)
