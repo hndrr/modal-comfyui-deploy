@@ -7,7 +7,7 @@ def encoded_path(scope, *, has_body=False):
     raw_path = scope.get("raw_path")
     if raw_path:
         return raw_path.decode("ascii")
-    # Modal 1.1.4's ASGI serialization omits raw_path too. Restore ComfyUI's
+    # Modal's ASGI serialization can omit raw_path. Restore ComfyUI's
     # route parameter boundaries before forwarding the decoded path. Keep the
     # query separate, including any literal ?/# that belongs to a file name.
     path = scope["path"]
@@ -22,7 +22,7 @@ def encoded_path(scope, *, has_body=False):
 
 
 def web_server_proxy(host, port, *, gateway_token=None):
-    # Modal 1.1.4's web_server proxy reconstructs URLs from ASGI's decoded
+    # Modal's web_server proxy reconstructs URLs from ASGI's decoded
     # `path`. ComfyUI's /userdata/{file} requires folders to stay encoded in
     # that single route parameter. Keep the pinned SDK's streaming, lifespan
     # and WebSocket handling, but supply the original wire path to its proxy.

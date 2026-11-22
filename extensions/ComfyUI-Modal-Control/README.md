@@ -1,7 +1,7 @@
 # ComfyUI-Modal-Control
 
 標準サイドバーの「GPU」タブに稼働状態を表示する、フロントエンド専用のComfyUI拡張です。
-キャンバス上に固定ボタンや独自ポップアップは置きません。
+分離モードで生成と操作が約5分途切れると、タブの接続を休止します。「作業を再開」で同じ編集画面に戻れます。
 モード切替は折りたたまず表示し、ノード更新操作は未反映の更新がある場合だけ表示します。
 推論ノード、Python依存パッケージ、ComfyUI本体へのパッチはありません。
 
@@ -21,7 +21,7 @@ ComfyUIや環境バージョンを交換しても拡張はイメージから読�
 
 - `web/modal-control.js`: 独立したDOMで状態表示・操作を提供します。
   ComfyUI内部のCSSクラス、Vueストア、既存ツールバーのDOM構造には依存しません。
-- `web/comfy-adapter.mjs`: サイドバー登録、標準ツールバーへのボタン追加、ワークフロー保存・復元APIへの接続です。`ComfyButton`と`app.menu.element`にも依存します。
+- `web/comfy-adapter.mjs`: サイドバー登録、標準ツールバーへのボタン追加、ワークフロー保存・復元APIへの接続です。休止と復帰にはフロントエンドの `api.socket`、`api.fetchApi`、`api.reconnectSocket()` を使います。`ComfyButton`と`app.menu.element`にも依存します。
   本体更新でAPIが変わった場合はここで対応します。保存APIが使えない場合、切替を中止します。
 - `GET /modal-control/v1/status`: CPU側バックエンドとのバージョン付き契約です。
   `api_version: 1`、`gpu: {containers, checked_at, phase}` とモード・環境情報を返します。
@@ -38,3 +38,4 @@ split はデプロイ時に ComfyUI の安定リリースを選び、そのリ�
 1. 検証環境で標準 UI を開き、`GET /extensions` の一覧にこの拡張の `modal-control.js` があることを確認します。読み込みに失敗したら、ブラウザのコンソールで `comfy-adapter.mjs` の import を確認します。[公式の拡張読み込み仕様](https://docs.comfy.org/custom-nodes/js/javascript_overview)
 2. GPU 停止中にツールバーの `GPU(0)` をクリックし、サイドバーが開くことを確認します。状態 API が台数を返しているのにボタンが出ない場合は、アダプターの `registerGpuIndicator` と `registerGpuSidebar` を確認します。
 3. 検証用ワークフローを編集し、キューが空の状態で GPU 常時起動へ切り替え、分離モードへ戻します。各回の再読み込み後にノード・接続・編集値が復元されることを確認します。保存時は `saveWorkflow`、復元時は `restoreWorkflow` が公式 UI との接点です。
+4. タブが自動休止したら、検証用サーバーで `/split/startup` は準備完了を返し、WebSocketの接続だけが失敗する状態にして「作業を再開」を押します。WebSocketを受け付ける状態に戻して再試行し、接続が1本に戻り、ネットワークログに毎秒の `GET /api/prompt` が発生しないことを確認します。

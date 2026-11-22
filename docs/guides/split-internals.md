@@ -123,8 +123,9 @@ Volumeの構成一覧については、[CPU/GPU分離構成ガイドのVolume一
 - **ジョブ一覧API**: 外部キューのスナップショットを標準拡張へ渡して整形します（ComfyUI内部のキュー・履歴メソッドは差し替えません）。
 
 > [!NOTE]
-> **ASGIパスの再エンコード問題（Modal 1.1.4対策）**  
-> Modal 1.1.4の標準Webサーバー中継はデコード済みASGIパスを転送するため、`/userdata/workflows%2Fname.json` のようなURLエンコードされたファイルパスの保存・読み込みに失敗します。  
+> **ASGIパスの再エンコード**
+>
+> Modal SDK 1.6.4の標準Webサーバー中継はデコード済みASGIパスを転送するため、`/userdata/workflows%2Fname.json` のようなURLエンコードされたファイルパスには補正が必要です。
 > そのため、CPUの入口は認証付きASGIアプリとして構成し、`comfy_split/modal_proxy.py` でパスを再エンコードして固定版Modalの中継へ渡しています（環境から `raw_path` が提供されている場合はそれを優先）。Modal SDK更新時は `tests/split/test_proxy.py` および公開URL経由でのワークフロー保存・読込を確認してください。
 
 ### 追加API一覧

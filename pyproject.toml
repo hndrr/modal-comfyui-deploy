@@ -3,10 +3,10 @@ name = "modal-comfyui"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.16"
 dependencies = [
     "gradio>=5.47.2",
-    "modal>=1.1.4",
+    "modal==1.6.4",
     "pillow>=11.0.0",
     "python-dotenv>=1.0.1",
 ]
