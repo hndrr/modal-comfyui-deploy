@@ -21,9 +21,14 @@ export function pauseConnection() {
     return fetchApi.call(this, route, options);
   };
   return async () => {
-    await api.reconnectSocket();
-    const next = api.socket;
+    // ComfyUI's HTTP fallback starts an interval with no cancellation handle.
+    // The idle dialog owns retries until this handshake succeeds.
+    const pollQueue = api._pollQueue;
+    api._pollQueue = () => {};
+    let next;
     try {
+      await api.reconnectSocket();
+      next = api.socket;
       if (next.readyState !== WebSocket.OPEN) {
         await new Promise((resolve, reject) => {
           const timeout = AbortSignal.timeout(20000);
@@ -33,9 +38,11 @@ export function pauseConnection() {
         });
       }
     } catch (error) {
-      api.socket = null;
+      if (api.socket === next) api.socket = null;
       next?.close();
       throw error;
+    } finally {
+      api._pollQueue = pollQueue;
     }
     api.fetchApi = fetchApi;
     api.dispatchCustomEvent("reconnected");

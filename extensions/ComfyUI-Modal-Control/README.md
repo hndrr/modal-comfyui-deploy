@@ -38,3 +38,4 @@ split はデプロイ時に ComfyUI の安定リリースを選び、そのリ�
 1. 検証環境で標準 UI を開き、`GET /extensions` の一覧にこの拡張の `modal-control.js` があることを確認します。読み込みに失敗したら、ブラウザのコンソールで `comfy-adapter.mjs` の import を確認します。[公式の拡張読み込み仕様](https://docs.comfy.org/custom-nodes/js/javascript_overview)
 2. GPU 停止中にツールバーの `GPU(0)` をクリックし、サイドバーが開くことを確認します。状態 API が台数を返しているのにボタンが出ない場合は、アダプターの `registerGpuIndicator` と `registerGpuSidebar` を確認します。
 3. 検証用ワークフローを編集し、キューが空の状態で GPU 常時起動へ切り替え、分離モードへ戻します。各回の再読み込み後にノード・接続・編集値が復元されることを確認します。保存時は `saveWorkflow`、復元時は `restoreWorkflow` が公式 UI との接点です。
+4. タブが自動休止したら、検証用サーバーで `/split/startup` は準備完了を返し、WebSocketの接続だけが失敗する状態にして「作業を再開」を押します。WebSocketを受け付ける状態に戻して再試行し、接続が1本に戻り、ネットワークログに毎秒の `GET /api/prompt` が発生しないことを確認します。
