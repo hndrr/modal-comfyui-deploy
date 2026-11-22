@@ -594,6 +594,22 @@ export default {
     if (identity.kind==="split-mcp")
       return textResponse("Local MCP service access was retired. Use HTTPS /mcp with OAuth.",410);
 
+    // Access returns from a different site. Start a same-origin navigation to
+    // the UI so ComfyUI can retain its cross-site checks on every request.
+    if (splitUiHost && identity.kind === "browser" && request.method === "GET" &&
+        requestUrl.pathname === "/" && !requestUrl.search &&
+        request.headers.get("Sec-Fetch-Site") === "cross-site" &&
+        request.headers.get("Sec-Fetch-Mode") === "navigate" &&
+        request.headers.get("Sec-Fetch-Dest") === "document") {
+      return new Response(`<!doctype html><html lang="ja"><meta charset="utf-8">
+<title>ComfyUI</title><meta http-equiv="refresh" content="0;url=/">
+<a href="/">ComfyUI を開く</a></html>`, {headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "private, no-store",
+        "Content-Security-Policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      }});
+    }
+
     let mediaHost=false;
     if(env.SPLIT_MEDIA_ORIGIN){
       try { mediaHost=JSON.parse(env.SPLIT_MEDIA_ORIGIN).hostname===requestUrl.hostname; }

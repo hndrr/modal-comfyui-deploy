@@ -122,6 +122,29 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
   assert.match(await (await document(browser)).text(),/<audio controls/);
   assert.equal(hits.length,1); // Rendering the signed-in page never touches Modal.
 
+  await t.test('the signed-in Split home opens after returning from Access', async () => {
+    const navigation = {
+      'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+    };
+    const open = (token, path = '/', site = 'cross-site') => worker.fetch(new Request(
+      'https://' + host + path, {
+        headers: {...navigation, 'Sec-Fetch-Site': site, 'CF-Access-Jwt-Assertion': token},
+      }), shared);
+    const before = hits.length;
+    assert.equal((await open('')).status, 403);
+    const landing = await open(browser);
+    assert.equal(landing.status, 200);
+    assert.match(landing.headers.get('Content-Type'), /text\/html/);
+    assert.match(landing.headers.get('Cache-Control'), /no-store/);
+    assert.match(await landing.text(), /http-equiv="refresh" content="0;url=\/"/);
+    assert.equal(hits.length, before);
+    assert.equal((await open(browser, '/', 'same-origin')).status, 200);
+    assert.equal(hits.at(-1).url, origin + '/');
+    await open(browser, '/api/queue');
+    assert.equal(hits.at(-1).url, origin + '/api/queue');
+    assert.equal(hits.at(-1).headers.get('Sec-Fetch-Site'), 'cross-site');
+  });
+
   // Other ComfyUI hosts may already have custom-node routes below /mcp.
   const other = "ordinary.example.com", upstream = "https://ordinary.modal.run";
   for (const binding of [shared.SPLIT_REMOTE_MCP, undefined]) {
