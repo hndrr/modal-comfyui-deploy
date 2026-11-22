@@ -556,7 +556,7 @@ export default {
           buildUpstreamHeaders(new Request(url),env,splitOrigin)); }
         catch {return textResponse("Invalid saved-media binding.",500);}
         try {if(env.MEDIA_DELIVERY) delivery=new MediaDelivery(env.MEDIA_DELIVERY);}
-        catch {return textResponse("Invalid media delivery binding.",500);}
+        catch {console.warn("Invalid optional media delivery binding. Using Split originals.");}
         return remoteMcp(request, (path, init) => {
           // Build from zero: never forward a user JWT, cookie, or arbitrary header.
           const headers = buildUpstreamHeaders(new Request(url), env, splitOrigin, true);

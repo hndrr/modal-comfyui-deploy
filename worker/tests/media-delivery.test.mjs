@@ -418,18 +418,74 @@ test('GLB/SPZ reuse the current cleansed copy without transferring the original 
   }
 });
 
-test('video review resolves get_video numbering and keeps scoped URLs outside the transcript',async()=>{
-  const f=fixture(2), tokenPath='/review-session/'+'1'.repeat(64);
-  Object.assign(f.files[1],{filename:'second.mp4',kind:'video'});
+test('redline reads the original with or without sharing and opens a private draft only on request',async()=>{
+  const f=fixture(3), tokenPath='/review-session/'+'1'.repeat(64);
+  const webm=Buffer.from([0x1a,0x45,0xdf,0xa3,0x93,0x42,0x82,0x84]);
+  Object.assign(f.files[0],{filename:'first.webm',kind:'video',mime:'video/webm',bytes:webm});
+  Object.assign(f.files[2],{filename:'second.mp4',kind:'video',mime:'video/mp4',bytes:mediaBytes('video/mp4',48)});
+  let shareCalls=0,offline=false;
   const adapter=new MediaDelivery(config,async req=>{
+    shareCalls++;
+    if(offline) return new Response(null,{status:503});
     assert.equal(new URL(req.url).pathname,'/v1/video-review');
     assert.deepEqual(await req.json(),{prompt_id:job,output_path:'second.mp4'});
-    return Response.json({base:origin+tokenPath+'/draft',stream:origin+tokenPath+'/stream',version:'"v1"',label:'second.mp4',ref:{prompt_id:job,index:1}});
+    return Response.json({base:origin+tokenPath+'/draft',stream:origin+tokenPath+'/stream',version:f.files[2].etag,label:'second.mp4',ref:{prompt_id:job,index:2}});
   });
-  const req=new Request(browser+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
-    body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'open_split_video_review',arguments:{prompt_id:job,index:0}}})});
-  const {result}=await (await remoteMcp(req,noGeneration,browser,undefined,f.send,adapter)).json();
-  assert.deepEqual(result.structuredContent,{prompt_id:job,output_index:1});
-  assert.equal(result._meta['pmd/review'].stream,origin+tokenPath+'/stream');
-  assert.ok(!JSON.stringify(result.content).includes(tokenPath));
+  const rpc=async(method,params,adapter)=>{
+    const req=new Request(browser+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},
+      body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+    return (await (await remoteMcp(req,noGeneration,browser,undefined,f.send,adapter)).json()).result;
+  };
+  const call=(name,args,delivery)=>rpc('tools/call',{name,arguments:{prompt_id:job,...args}},delivery);
+  for(const delivery of [undefined,adapter]) {
+    const {tools}=await rpc('tools/list',{},delivery);
+    const tool=tools.find(t=>t.name==='open_split_video_review');
+    assert.ok(tool);
+    assert.equal(tools.some(t=>t.name==='open_split_review_share'),!!delivery);
+    const resource=await rpc('resources/read',{uri:tool._meta.ui.resourceUri},delivery);
+    assert.match(resource.contents[0].text,/read_split_review_part/);
+    assert.deepEqual(resource.contents[0]._meta.ui.csp.connectDomains,delivery?[origin]:[]);
+    for(const [selector,expected,videoIndex] of [[{},f.files[2],0],[{output_index:2},f.files[2],0],[{output_index:0},f.files[0],1]]) {
+      const result=await call('open_split_video_review',selector,delivery);
+      assert.equal(result.isError,undefined,JSON.stringify(result));
+      assert.equal(result.structuredContent.filename,expected.filename);
+      assert.equal(result.structuredContent.index,videoIndex);
+      assert.equal(result._meta['split/review'].sharing,!!delivery);
+      const chunk=await call('read_split_review_part',{index:videoIndex,byte_offset:0,version:expected.etag},delivery);
+      assert.deepEqual(Buffer.from(chunk._meta['split/videoPart'],'base64'),expected.bytes);
+    }
+    assert.equal((await call('open_split_video_review',{index:0,output_index:2},delivery)).isError,true);
+    assert.equal((await call('open_split_video_review',{output_index:1},delivery)).isError,true);
+    assert.equal((await call('read_split_review_part',{index:0,byte_offset:0,version:'"old"'},delivery)).isError,true);
+  }
+  assert.equal(shareCalls,0);
+  const shared=await call('open_split_review_share',{index:0},adapter);
+  assert.equal(shared._meta['pmd/review'].stream,origin+tokenPath+'/stream');
+  assert.ok(!JSON.stringify(shared.content).includes(tokenPath));
+  assert.equal(shared.structuredContent,undefined);
+  offline=true;
+  assert.equal((await call('open_split_review_share',{index:0},adapter)).isError,true);
+  assert.equal((await call('open_split_video_review',{index:0},adapter)).structuredContent.filename,'second.mp4');
+  assert.equal(shareCalls,2);
+});
+
+test('old receivers can register a copy when they reject the optional remix origin',async()=>{
+  const f=fixture();
+  Object.assign(f.files[0],{filename:'clip.mp4',mime:'video/mp4',kind:'video',bytes:mediaBytes('video/mp4',32)});
+  const registrations=[];
+  const old=new MediaDelivery(config,async request=>{
+    if(new URL(request.url).pathname==='/v1/media'){
+      const body=await request.clone().json();
+      registrations.push(body);
+      if(body.remix_origin)return Response.json({error:{code:'unknown_field'}},{status:400});
+    }
+    return f.fetcher(request);
+  });
+  const result=await callSplit(noGeneration,'get_video',{prompt_id:job},browser,undefined,f.send,old);
+  assert.equal(result.structuredContent.delivery_status,'ready');
+  assert.equal(registrations.length,2);
+  const {remix_origin,...legacy}=registrations[0];
+  assert.equal(remix_origin.prompt_id,job);
+  assert.deepEqual(registrations[1],legacy);
+  assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
 });

@@ -1,9 +1,10 @@
 // Use MCP authentication for bounded playback; large files retain the browser stream.
 import {VIDEO_PART_BYTES} from "./media.ts";
+import {reviewMarkup, reviewScript} from "./generated/video-redline.ts";
 export const PLAYER_URI = "ui://split/video-player-v10.html";
 export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v9.html","ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
-export const playerHtml = (browserOrigin:string, deliveryOrigin?:string) => `<!doctype html>
+export const playerHtml = (browserOrigin:string, deliveryOrigin?:string, review = false) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した動画</title>
 <style>
@@ -12,6 +13,7 @@ footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-betw
 </style>
 <video controls playsinline hidden aria-label="生成した動画"></video>
 <footer><span role="status">動画を読み込み中…</span><button hidden>動画を再取得</button><a hidden target="_blank" rel="noopener noreferrer">保存ページを開く</a></footer>
+${review ? reviewMarkup : ""}
 <script>
 const player=document.querySelector("video"), label=document.querySelector("span"), retry=document.querySelector("button"), link=document.querySelector("a");
 const pending=new Map(), limit=128*1024*1024;
@@ -73,7 +75,9 @@ async function load(){
       const args={prompt_id:info.prompt_id,index:info.index??0,byte_offset:offset};
       if(info.delivery_ref)args.delivery_ref=info.delivery_ref;
       if(info.delivery_route)args.delivery_route=info.delivery_route;
-      const result=await (serverTools || !window.openai?.callTool ? request("tools/call",{name:"read_video_part",arguments:args}) : window.openai.callTool("read_video_part",args));
+      ${review ? "if(info.etag)args.version=info.etag;" : ""}
+      const partTool=${JSON.stringify(review ? "read_split_review_part" : "read_video_part")};
+      const result=await (serverTools || !window.openai?.callTool ? request("tools/call",{name:partTool,arguments:args}) : window.openai.callTool(partTool,args));
       if(run!==version)return;
       if(result.isError){
         if(result._meta?.["split/starting"] && Date.now()<until){
@@ -102,9 +106,10 @@ async function load(){
 }
 function render(result){
   const info=result.structuredContent;
-  if(result.isError){clearVideo();label.textContent=result.content?.find(x=>x.type==="text")?.text || "動画を取得できませんでした。";return;}
+  if(result.isError){clearVideo();${review ? "reviewResult(null,{});" : ""}label.textContent=result.content?.find(x=>x.type==="text")?.text || "動画を取得できませんでした。";return;}
   if(!info?.prompt_id)return;
-  const nextKey=JSON.stringify([info.prompt_id,info.index,info.filename,info.size,info.delivery_ref?.media_id,info.delivery_ref?.etag]);
+  const nextKey=JSON.stringify([info.prompt_id,info.index,info.filename,info.size,info.delivery_ref?.media_id,info.delivery_ref?.etag,info.etag]);
+  ${review ? "reviewResult(info,result._meta || {});" : ""}
   if(key===nextKey)return;
   clearVideo();key=nextKey;current=info;setLink(info);
   if(info.delivery==="chunk"){label.textContent="動画の一部を取得しました。";return;}
@@ -138,6 +143,7 @@ addEventListener("message",e=>{
 });
 function resize(){const height=document.body.scrollHeight;if(initialized && height!==lastHeight){lastHeight=height;send({method:"ui/notifications/size-changed",params:{height}});}}
 new ResizeObserver(resize).observe(document.body);
+${review ? reviewScript : ""}
 send({id:1,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"split-video",version:"8"},appCapabilities:{}}});
 legacy(window.openai);
 </script></html>`;
