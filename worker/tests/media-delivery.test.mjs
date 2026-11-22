@@ -33,7 +33,7 @@ function fixture(count=1){
       return Response.json({results:references.map(ref=>{const r=records.get(JSON.stringify(ref));return r?.state==='ready'?value(r):{status:'missing',reason:r?'expired':'not_found'};})});
     }
     if(url.pathname==='/v1/media'){
-      const p=await request.json();assert.equal(p.source_id,'test');
+      const p=await request.json();calls.at(-1).registration=p;assert.equal(p.source_id,'test');
       assert.deepEqual(Object.keys(p).sort(),['source_id','output_path','source_etag','filename','mime_type','size_bytes','kind',...(p.remix_origin ? ['remix_origin'] : [])].sort());
       const key=JSON.stringify({output_path:p.output_path,source_etag:p.source_etag});
       let r=records.get(key);if(!r){r={id:randomUUID(),upload:randomUUID(),mime:p.mime_type,size:p.size_bytes,state:'reserved',etag:'"copy-v1"'};records.set(key,r);}
@@ -445,6 +445,7 @@ test('redline reads the original with or without sharing and opens a private dra
     const resource=await rpc('resources/read',{uri:tool._meta.ui.resourceUri},delivery);
     assert.match(resource.contents[0].text,/read_split_review_part/);
     assert.deepEqual(resource.contents[0]._meta.ui.csp.connectDomains,delivery?[origin]:[]);
+    assert.deepEqual(resource.contents[0]._meta.ui.csp.resourceDomains,[browser,"blob:","data:"]);
     for(const [selector,expected,videoIndex] of [[{},f.files[2],0],[{output_index:2},f.files[2],0],[{output_index:0},f.files[0],1]]) {
       const result=await call('open_split_video_review',selector,delivery);
       assert.equal(result.isError,undefined,JSON.stringify(result));
@@ -467,6 +468,8 @@ test('redline reads the original with or without sharing and opens a private dra
   assert.equal((await call('open_split_review_share',{index:0},adapter)).isError,true);
   assert.equal((await call('open_split_video_review',{index:0},adapter)).structuredContent.filename,'second.mp4');
   assert.equal(shareCalls,2);
+  f.files[2].etag='W/"weak"';
+  assert.equal((await call('open_split_video_review',{index:0})).isError,true);
 });
 
 test('old receivers can register a copy when they reject the optional remix origin',async()=>{
@@ -488,4 +491,31 @@ test('old receivers can register a copy when they reject the optional remix orig
   assert.equal(remix_origin.prompt_id,job);
   assert.deepEqual(registrations[1],legacy);
   assert.equal(f.calls.filter(c=>c.method==='PUT').length,1);
+});
+
+test('shared review URLs and output references must match the requested draft',async()=>{
+  const draftPath='/review-session/'+'2'.repeat(64)+'/draft';
+  const base=origin+draftPath;
+  const source={label:'clip',version:'"v1"',base,stream:base.replace(/draft$/,'stream'),ref:{prompt_id:job,index:3}};
+  for(const changes of [{base:base+'?'},{base:base+'#'},{base:'https://other.test'+draftPath},
+    {base:origin+'/folder/..'+draftPath,stream:origin+'/folder/..'+draftPath.replace(/draft$/,'stream')},
+    {stream:base},{ref:{prompt_id:job,index:4}},{ref:{prompt_id:randomUUID(),index:3}}]) {
+    const adapter=new MediaDelivery(config,async()=>Response.json({...source,...changes}));
+    await assert.rejects(adapter.openReview(job,{index:3}),/Invalid review session/);
+  }
+});
+
+test('registrations use the job for direct audio/video and the global index for output pages',async()=>{
+  for(const [kind,filename,mime] of [['audio','a.wav','audio/wav'],['video','v.mp4','video/mp4'],['image','image0.png','image/png'],['3d','scene.glb','model/gltf-binary']]) {
+    const f=fixture();
+    Object.assign(f.files[0],{kind,filename,mime,bytes:kind==='image'?png:mediaBytes(mime,48)});
+    const timed=kind==='audio'||kind==='video';
+    await callSplit(noGeneration,'get_'+kind,timed?{prompt_id:job.toUpperCase()}:{filename,subfolder:''},browser,undefined,f.send,f.adapter());
+    const [registration]=f.calls.filter(c=>c.registration);
+    assert.ok(registration);
+    assert.deepEqual(registration.registration.remix_origin,timed?{prompt_id:job}:undefined);
+  }
+  const f=fixture(2);
+  await deliveryOutputs(f.adapter(),f.send,{items:[{...f.files[1],index:7}],total:8,next_offset:null},true,browser,job);
+  assert.deepEqual(f.calls.find(c=>c.registration).registration.remix_origin,{prompt_id:job,index:7});
 });

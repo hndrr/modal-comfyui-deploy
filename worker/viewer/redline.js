@@ -80,6 +80,7 @@ const reviewResult = (() => {
     wstate,
     drag,
     viewing,
+    sourceRevision = 0,
     busy = false,
     drawing = false,
     tainted = false,
@@ -236,7 +237,7 @@ const reviewResult = (() => {
   }
   cv.addEventListener("pointerup", finish);
   cv.addEventListener("pointercancel", finish);
-  async function snapshot(m) {
+  async function snapshot(m, revision) {
     if (player.hidden || !player.videoWidth) return "";
     if (!near(m.frame)) {
       player.pause();
@@ -246,7 +247,7 @@ const reviewResult = (() => {
         new Promise((r) => setTimeout(r, 3000)),
       ]);
     }
-    if (player.readyState < 2 || !near(m.frame)) return "";
+    if (sourceRevision !== revision || player.seeking || player.readyState < 2 || !near(m.frame)) return "";
     for (const w of [640, 480, 320]) {
       const c = document.createElement("canvas"),
         s = Math.min(1, w / player.videoWidth),
@@ -271,6 +272,7 @@ const reviewResult = (() => {
   async function addMark() {
     if (drag) finish();
     const dd = d,
+      revision = sourceRevision,
       note = ui.note.value.trim(),
       frame = ms(pending.shapes.length ? pending.frame : player.currentTime);
     const num = (i) => (i.value === "" ? frame : ms(Number(i.value))),
@@ -284,20 +286,22 @@ const reviewResult = (() => {
     if (!(start >= 0 && start <= frame && frame <= end))
       return say(`開始 ≤ 描画位置（${fmt(frame)}）≤ 終了 になるよう時間を設定してください。`);
     const m = { id: crypto.randomUUID(), start, end, frame, note, shapes: pending.shapes, image: "" };
+    // Commit the annotation now. Capturing its optional image can take a seek.
+    dd.marks.push(m);
+    selected.add(m.id);
+    save();
+    pending = { frame: 0, shapes: [] };
+    ui.note.value = ui.start.value = ui.end.value = "";
+    pend();
+    paint();
     setBusy(true);
     try {
       try {
-        m.image = tainted ? "" : await snapshot(m);
+        m.image = tainted ? "" : await snapshot(m, revision);
       } catch {
         m.image = "";
       }
-      if (d !== dd) return;
-      dd.marks.push(m);
-      selected.add(m.id);
-      pending = { frame: 0, shapes: [] };
-      ui.note.value = ui.start.value = ui.end.value = "";
-      save();
-      pend();
+      if (sourceRevision !== revision) return;
       paint();
       say("注釈を追加しました（未送信）。");
     } finally {
@@ -307,6 +311,7 @@ const reviewResult = (() => {
   async function sendChat() {
     const dd = d,
       c = cur,
+      revision = sourceRevision,
       o = window.openai,
       app = initialized && !(o?.sendFollowUpMessage && o.uploadFile && o.setWidgetState),
       list = dd.marks.filter((m) => selected.has(m.id));
@@ -317,7 +322,13 @@ const reviewResult = (() => {
     setBusy(true);
     try {
       const imgs = [];
-      for (const m of list) if (withImages && !m.image && !tainted) m.image = await snapshot(m);
+      for (const m of list)
+        if (withImages && !m.image && !tainted) {
+          const u = await snapshot(m, revision);
+          // The video changed: never attach its frame or touch the new video's state.
+          if (sourceRevision !== revision) return;
+          m.image = u;
+        }
       const rep = list.map((m) => ({
         id: m.id,
         start: m.start,
@@ -340,6 +351,7 @@ const reviewResult = (() => {
               type: "image/jpeg",
             }),
           );
+          if (sourceRevision !== revision) return;
           if (typeof r?.fileId !== "string")
             throw Error("参照画像をアップロードできませんでした。何も送信していません。");
           fileIds.push(r.fileId);
@@ -350,6 +362,12 @@ const reviewResult = (() => {
         selected.delete(m.id);
       }
       await save(app ? undefined : { modelContent: text, imageIds: fileIds });
+      if (sourceRevision !== revision) {
+        for (const m of list) delete dd.sent[m.id];
+        if (cur?.key === c.key) for (const m of list) selected.add(m.id);
+        save();
+        return;
+      }
       sending = true;
       if (app) {
         const r = await request("ui/message", {
@@ -362,23 +380,25 @@ const reviewResult = (() => {
         if (r?.isError) {
           for (const m of list) {
             delete dd.sent[m.id];
-            selected.add(m.id);
+            if (cur?.key === c.key) selected.add(m.id);
           }
           save();
-          return say("チャットへの送信が拒否されました。何も送信していません。");
+          if (sourceRevision === revision) say("チャットへの送信が拒否されました。何も送信していません。");
+          return;
         }
       } else await o.sendFollowUpMessage({ prompt: text });
       for (const m of list) dd.sent[m.id] = "sent";
       save();
-      say(`${list.length}件の注釈をチャットに送信しました。`);
+      if (sourceRevision === revision) say(`${list.length}件の注釈をチャットに送信しました。`);
     } catch (e) {
       if (!sending) {
         for (const m of list) {
           delete dd.sent[m.id];
-          selected.add(m.id);
+          if (cur?.key === c.key) selected.add(m.id);
         }
         save();
       }
+      if (sourceRevision !== revision) return;
       say(
         sending
           ? "送信できたか確認できません。チャット欄を確認し、届いていない注釈だけ選び直して送信してください。"
@@ -392,6 +412,7 @@ const reviewResult = (() => {
   }
   async function openShare() {
     const c = cur,
+      revision = sourceRevision,
       args = {
         prompt_id: c.info.prompt_id,
         index: c.info.index ?? 0,
@@ -420,7 +441,7 @@ const reviewResult = (() => {
         throw Error("共有下書きの応答を確認できません。");
       if (c.version && s.version !== c.version)
         throw Error("動画の版が変わりました。動画を再取得してから開いてください。");
-      if (c.key !== cur.key) return;
+      if (sourceRevision !== revision) return;
       share = { base: u.href, version: s.version, label: s.label };
       if (d.share !== s.version) {
         Object.assign(d, { known: [], deleted: [], share: s.version });
@@ -428,20 +449,27 @@ const reviewResult = (() => {
       }
       say("共有下書きを開きました。「共有下書きと同期」で取得と保存を行います。");
     } catch (e) {
-      say(e.message || "共有下書きを開けませんでした。");
+      if (sourceRevision === revision) say(e.message || "共有下書きを開けませんでした。");
     } finally {
       setBusy(false);
     }
   }
   async function sync() {
     const dd = d,
-      s = share;
+      s = share,
+      revision = sourceRevision;
     setBusy(true);
     try {
-      const res = await fetch(s.base, { credentials: "omit", redirect: "error", cache: "no-store" });
+      const res = await fetch(s.base, {
+        credentials: "omit",
+        redirect: "error",
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
       if (!res.ok)
         throw Error(`共有下書きを読み込めません（HTTP ${res.status}）。ローカルの注釈は残っています。`);
       const remote = await res.json();
+      if (sourceRevision !== revision) return;
       if (
         !Number.isSafeInteger(remote?.revision) ||
         !Array.isArray(remote.marks) ||
@@ -466,6 +494,7 @@ const reviewResult = (() => {
           credentials: "omit",
           redirect: "error",
           cache: "no-store",
+          signal: AbortSignal.timeout(10000),
           headers: { "content-type": "application/json" },
           body,
         });
@@ -478,11 +507,13 @@ const reviewResult = (() => {
         if (!Number.isSafeInteger((await post.json())?.revision))
           throw Error("保存結果を確認できません。もう一度同期してください。");
       }
+      if (sourceRevision !== revision) return;
       Object.assign(dd, { marks, known: marks.map((m) => m.id), deleted: [] });
       save();
       if (viewing && !marks.some((m) => m.id === viewing)) viewing = undefined;
       say(`共有下書きと同期しました（${marks.length}件）。`);
     } catch (e) {
+      if (sourceRevision !== revision) return;
       say(
         e.name === "Error"
           ? e.message
@@ -495,7 +526,7 @@ const reviewResult = (() => {
   }
   function setBusy(b) {
     busy = b;
-    renderUI();
+    if (cur) renderUI();
   }
   function buttons() {
     for (const b of [ui.add, ui.open, ui.sync]) b.disabled = busy;
@@ -608,6 +639,8 @@ const reviewResult = (() => {
   new ResizeObserver(paint).observe(wrap);
   return function (info, meta) {
     if (!info?.prompt_id) {
+      sourceRevision++;
+      cur = undefined;
       ui.root.hidden = true;
       setDraw(false);
       return;
@@ -627,6 +660,7 @@ const reviewResult = (() => {
       version: typeof r?.version === "string" ? r.version : "",
     };
     if (prev !== k) {
+      sourceRevision++;
       share = viewing = drag = undefined;
       tainted = false;
       pending = { frame: 0, shapes: [] };

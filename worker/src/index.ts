@@ -1,3 +1,4 @@
+import {strongVideoVersion} from "./media.ts";
 import {browserReview} from "./job-review.ts";
 import { splitGui } from "./split-guis.ts";
 import { mediaDocument } from "./media-document.ts";
@@ -600,6 +601,19 @@ export default {
       catch { return textResponse("Invalid saved-media binding.",500); }
     }
 
+    const pinned = requestUrl.pathname === "/api/view" && ["GET","HEAD"].includes(request.method)
+      ? requestUrl.searchParams.get("split_review_version") : null;
+    if (pinned !== null) {
+      if (!strongVideoVersion(pinned)) return new Response(null,{status:400});
+      requestUrl.searchParams.delete("split_review_version");
+    }
+    function checkedVideo(response:Response):Response {
+      if (pinned === null || response.status >= 400) return response;
+      if ((response.status === 200 || response.status === 206 || response.status === 304) && response.headers.get("ETag") === pinned) return response;
+      void response.body?.cancel();
+      return new Response(null,{status:409,headers:{"Cache-Control":"no-store"}});
+    }
+
     if ((splitUiHost || mediaHost) && identity.kind === "browser") {
       const page = mediaDocument(request);
       if (page) return page;
@@ -607,8 +621,8 @@ export default {
         try {
           const send=mediaSender(env.SPLIT_MEDIA_ORIGIN,requestUrl.hostname,
             buildUpstreamHeaders(new Request(requestUrl),env,modalOrigin));
-          return await send(requestUrl.pathname+requestUrl.search,{method:request.method,
-            headers:request.headers,signal:request.signal});
+          return checkedVideo(await send(requestUrl.pathname+requestUrl.search,{method:request.method,
+            headers:request.headers,signal:request.signal}));
         } catch {return textResponse("Saved-media delivery is unavailable. Retry the read.",503);}
       }
     }
@@ -635,6 +649,6 @@ export default {
       })
     );
 
-    return rewriteLocationHeader(upstream, modalOrigin, requestUrl.origin);
+    return checkedVideo(rewriteLocationHeader(upstream, modalOrigin, requestUrl.origin));
   },
 } satisfies ExportedHandler<Env>;

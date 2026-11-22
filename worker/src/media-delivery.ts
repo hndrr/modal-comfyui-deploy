@@ -107,7 +107,7 @@ export class MediaDelivery {
     const source=z.object({label:z.string(),version:z.string(),base:z.url(),stream:z.url(),
       ref:z.object({prompt_id:z.uuid(),index:z.number().int().nonnegative()})}).parse(data);
     const base=new URL(source.base);
-    if(base.origin!==this.origin || base.username || base.password || base.search || base.hash || !/^\/review-session\/[a-f0-9]{64}\/draft$/.test(base.pathname) ||
+    if(source.base!==this.origin+base.pathname || !/^\/review-session\/[a-f0-9]{64}\/draft$/.test(base.pathname) ||
         source.stream!==source.base.replace(/\/draft$/,"/stream") || source.ref.prompt_id!==prompt_id || ("index" in ref && source.ref.index!==ref.index))
       throw new Error("Invalid review session");
     return source;

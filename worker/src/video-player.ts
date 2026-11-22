@@ -53,6 +53,7 @@ function play(){
   if(info.delivery_ref){label.textContent="保存ページで開いてください。";return;}
   if(!link.hidden){
     const raw=new URL(link.href);raw.pathname="/api/view";
+    ${review ? 'if(!info.etag){reviewResult(null,{});label.textContent="動画の版を確認できません。赤入れを開き直してください。";return;}raw.searchParams.set("split_review_version",info.etag);' : ""}
     label.textContent="動画を読み込み中…";player.hidden=false;
     player.onloadeddata=()=>{label.textContent=info.filename;};
     player.onerror=()=>{

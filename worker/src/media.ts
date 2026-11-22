@@ -108,6 +108,10 @@ export function base64(bytes: Uint8Array): string {
   return parts.join("");
 }
 
+export function strongVideoVersion(value: string | null): boolean {
+  return value !== null && value.length <= 256 && /^"[!#-~]*"$/.test(value);
+}
+
 export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
   {prompt_id, index = 0, byte_offset, chunk_bytes}: z.infer<typeof videoSchema>,
   forPlayer = false, review?:{file?:{filename:string;subfolder:string};version?:string}): Promise<CallToolResult> {
@@ -148,6 +152,10 @@ export async function getMedia(kind: Kind, send: Send, publicOrigin: string,
     await file.body?.cancel();
     return fail(file.status === 416 ? "Byte offset is outside this file." :
        "Cannot retrieve the saved file (HTTP " + file.status + ").");
+  }
+  if (review && !strongVideoVersion(etag)) {
+    await file.body?.cancel();
+    return fail("Cannot verify this video's version for annotations. Open the video for playback instead.");
   }
   let total: number | undefined, expected: number | undefined;
   if (file.status === 206) {
