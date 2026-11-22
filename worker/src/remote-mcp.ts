@@ -235,10 +235,10 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
     a=>call("read_3d_part",a,browserOrigin));
-  const reviewUri="ui://split/video-redline-v3.html";
+  const reviewUri="ui://split/video-redline-v4.html";
   const shareOrigins=delivery ? [delivery.origin] : [];
   const reviewResources=[browserOrigin,"blob:","data:"];
-  for (const uri of [reviewUri,"ui://split/video-redline-v2.html","ui://split/video-redline-v1.html"]) {
+  for (const uri of [reviewUri,"ui://split/video-redline-v3.html","ui://split/video-redline-v2.html","ui://split/video-redline-v1.html"]) {
     server.registerResource(uri.split("/").at(-1)!,uri,{mimeType:PLAYER_MIME},async()=>({
       contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.origin,true),_meta:{
         ui:{csp:{connectDomains:shareOrigins,resourceDomains:reviewResources}},

@@ -108,8 +108,10 @@ const reviewResult = (() => {
     const s = ws(),
       redline = { ...s.privateContent?.redline };
     for (const [k, v] of drafts) redline[k] = { ...v, marks: v.marks.map((m) => ({ ...m, image: "" })) };
-    wstate = { ...s, ...extra, privateContent: { ...s.privateContent, redline } };
-    return Promise.resolve().then(() => o.setWidgetState(wstate)).catch(() => {
+    wstate = { ...s, privateContent: { ...s.privateContent, redline } };
+    // Stage the native attachment for the host. Local saves retain the last dispatched message.
+    const hostState = extra ? { ...wstate, ...extra } : wstate;
+    return Promise.resolve().then(() => o.setWidgetState(hostState)).catch(() => {
       if (extra) throw Error("参照画像をチャットに関連付けられませんでした。下書きはこの画面に残っています。");
       say("ウィジェット状態を保存できません。下書きはこの画面に残っています。");
     });
@@ -361,11 +363,12 @@ const reviewResult = (() => {
         dd.sent[m.id] = "unknown";
         selected.delete(m.id);
       }
-      await save(app ? undefined : { modelContent: text, imageIds: fileIds });
+      const attachment = app ? undefined : { modelContent: text, imageIds: fileIds };
+      await save(attachment);
       if (sourceRevision !== revision) {
         for (const m of list) delete dd.sent[m.id];
         if (cur?.key === c.key) for (const m of list) selected.add(m.id);
-        save();
+        await save();
         return;
       }
       sending = true;
@@ -386,7 +389,10 @@ const reviewResult = (() => {
           if (sourceRevision === revision) say("チャットへの送信が拒否されました。何も送信していません。");
           return;
         }
-      } else await o.sendFollowUpMessage({ prompt: text });
+      } else {
+        if (o.setWidgetState) wstate = { ...wstate, ...attachment };
+        await o.sendFollowUpMessage({ prompt: text });
+      }
       for (const m of list) dd.sent[m.id] = "sent";
       save();
       if (sourceRevision === revision) say(`${list.length}件の注釈をチャットに送信しました。`);
@@ -396,7 +402,7 @@ const reviewResult = (() => {
           delete dd.sent[m.id];
           if (cur?.key === c.key) selected.add(m.id);
         }
-        save();
+        await save();
       }
       if (sourceRevision !== revision) return;
       say(
