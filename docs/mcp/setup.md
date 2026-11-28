@@ -154,6 +154,7 @@
 ```
 
 - originはパス・ポートなしのHTTPS。source_idとtokenは配信側で発行した組み合わせを使い、値をドキュメント・Gitへ保存しません。
+- 本人用リンクのホストを移す場合は、Worker の `MEDIA_DELIVERY_LINK_BASE` に `https://<OWNER_HOST>/admin/media/` のようなベースURLを設定します。末尾のパスは配信APIが返す `/media/` または `/admin/media/` に合わせます。APIの認証先は引き続き `MEDIA_DELIVERY.origin` です。
 - ローカルではgit管理外の `.dev.vars`、本番反映時は `worker/` で `npx wrangler secret put MEDIA_DELIVERY` の標準入力に登録します。トークンをコマンド引数に含めません。
 - 原本の配信用CPU `SPLIT_MEDIA_ORIGIN` を併用すると、保存済み作品の取得でComfyUIを起動せずに済みます。
 - 設定後はMCPツール一覧を読み直します。画像・音声・動画・GLB/SPZの取得と、生成completed時の最大4出力に配信用コピーを準備します。現在の契約は1ファイル25 MiBまでで、超過・非対応形式は原本経路を使います。
