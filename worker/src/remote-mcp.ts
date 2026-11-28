@@ -170,7 +170,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     callSplit(send,name,args,origin || browserOrigin,hosts,mediaSend,delivery);
   const read = {readOnlyHint:true,destructiveHint:false,openWorldHint:false};
   const deliveryRead=delivery ? {...read,readOnlyHint:false,idempotentHint:true,openWorldHint:true} : read;
-  const deliveryNote=delivery ? " Prepares a private external delivery copy on demand. Forward delivery_ref unchanged when reading subsequent parts, or delivery_route: original when returned by a fallback. Never omit the returned route/reference on continuation; restart at byte_offset 0 if lost." : "";
+  const deliveryNote=delivery?.sharing ? " Returns an expiring share link to a separate metadata-cleaned copy. Anyone with the link can view it without a website login for up to 24 hours. Private MCP reads use the original copy. Forward delivery_ref on subsequent parts." : delivery ? " Prepares a private external delivery copy on demand. Forward delivery_ref unchanged when reading subsequent parts, or delivery_route: original when returned by a fallback. Never omit the returned route/reference on continuation; restart at byte_offset 0 if lost." : "";
   const deliveryInput: z.ZodRawShape=delivery ? {delivery_ref:deliveryRefSchema.optional(),delivery_route:deliveryOutput.delivery_route} : {};
   const deliveryFields: z.ZodRawShape=delivery ? deliveryOutput : {};
   server.registerTool("calculate",{description:"Calculate dimensions, seeds or a batch of numeric expressions.",annotations:read,
@@ -209,7 +209,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     a=>call("get_history",a));
   for(const [i,uri] of [IMAGE_VIEWER_URI,...PREVIOUS_IMAGE_VIEWER_URIS].entries())
   server.registerResource("image-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-    contents:[{uri,mimeType:PLAYER_MIME,text:imageViewerFor(delivery?.ownerLinkBase)}],
+    contents:[{uri,mimeType:PLAYER_MIME,text:imageViewerFor(delivery?.viewerLinkBase)}],
   }));
   server.registerTool("get_image",{title:"View a generated image",
     description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate."+deliveryNote,annotations:deliveryRead,
@@ -217,13 +217,13 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:{...imageOutput,...deliveryFields}},a=>call("get_image",a));
   for(const [i,uri] of [THREE_VIEWER_URI,...PREVIOUS_THREE_VIEWER_URIS].entries())
   server.registerResource("3d-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-    contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.ownerLinkBase),_meta:{
+    contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.viewerLinkBase),_meta:{
       ui:{csp:{connectDomains:["blob:","data:"],resourceDomains:["blob:","data:"]}},
       "openai/widgetCSP":{connect_domains:["blob:","data:"],resource_domains:["blob:","data:"]},
     }}],
   }));
   server.registerTool("get_3d",{title:"View a saved 3D model",
-    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering or opening/saving is requested, give the signed-in browser viewer link. Files over 128 MiB cannot be previewed in chat or browser; direct the user to sign in and save the original file from the browser page. Does not generate. Tool success alone does not confirm that the model is displayed."+deliveryNote,
+    description:"View a saved GLB mesh or SPZ Gaussian splat by filename and optional subfolder from list_outputs. Models up to 128 MiB load through MCP authentication. Prefer the inline viewer; if the host blocks 3D rendering or opening/saving is requested, give the returned website link. Files over 128 MiB cannot be previewed in chat or browser; direct the user to sign in and save the original file from the browser page. Does not generate. Tool success alone does not confirm that the model is displayed."+deliveryNote,
     annotations:deliveryRead,inputSchema:threeInputs,outputSchema:{...threeOutput,...deliveryFields},
     _meta:{ui:{resourceUri:THREE_VIEWER_URI},"openai/outputTemplate":THREE_VIEWER_URI,"openai/widgetAccessible":true}},
     a=>call("get_3d",a,browserOrigin));
@@ -235,7 +235,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())
     server.registerResource(i===0?"video-player":"previous-video-player-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.ownerLinkBase),_meta:videoCsp}],
+      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.viewerLinkBase),_meta:videoCsp}],
     }));
   server.registerTool("get_video",{title:"Show the video player",
     description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. Up to 128 MiB, the player uses private MCP reads without a separate website login. Larger or range-unsupported files use the authenticated website stream. Prefer the player; opening the link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate."+deliveryNote,
@@ -251,7 +251,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   // Clients with cached descriptors can still read the current player at their old URI.
   for (const [index,uri] of [AUDIO_PLAYER_URI,...PREVIOUS_AUDIO_PLAYER_URIS].entries())
     server.registerResource(index===0?"audio-player":"previous-audio-player-"+index,uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerFor(delivery?.ownerLinkBase)}],
+      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerFor(delivery?.viewerLinkBase)}],
     }));
   server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},

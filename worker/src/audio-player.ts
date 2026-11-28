@@ -1,10 +1,10 @@
-import {isOwnerMediaLink} from "./owner-media-link.ts";
+import {isDeliveryLink} from "./delivery-link.ts";
 // The MCP view uses tool-result bytes only. Do not send browser credentials,
 // fetch /view from the iframe, or publish an output to an unprotected URL.
 import {audioBudgetScript} from "./audio-budget.ts";
 import {AUDIO_PART_BYTES} from "./media.ts";
-export const AUDIO_PLAYER_URI = "ui://split/audio-player-v7.html";
-export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v6.html","ui://split/audio-player-v5.html","ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
+export const AUDIO_PLAYER_URI = "ui://split/audio-player-v8.html";
+export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v7.html","ui://split/audio-player-v6.html","ui://split/audio-player-v5.html","ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
 export const audioPlayerFor = (linkBase?:string) => `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した音声</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}input{flex:1;min-width:4rem}output{font-variant-numeric:tabular-nums}a{color:LinkText}</style>
@@ -13,7 +13,7 @@ p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:
 <footer><button hidden>音声を再取得</button><a hidden target="_blank" rel="noopener noreferrer">再生・保存ページを開く</a></footer>
 <script>
 const linkBase=${JSON.stringify(linkBase ?? null).replaceAll("<","\\u003c")};
-const isOwnerMediaLink=${isOwnerMediaLink.toString()};
+const isDeliveryLink=${isDeliveryLink.toString()};
 ${audioBudgetScript}
 const transport=document.querySelector("#transport"), play=document.querySelector("#play"), seek=document.querySelector("input"), clock=document.querySelector("output");
 const statusLabel=document.querySelector("p"), retry=document.querySelector("footer button"), link=document.querySelector("a");
@@ -68,7 +68,7 @@ function show(parts,info){
   file=blob;transport.hidden=false;statusLabel.textContent=info.filename;
 }
 function setLink(info){
-  try{const u=new URL(info.url);if(!u.username && !u.password && (u.protocol==="https:" && u.pathname==="/view" || isOwnerMediaLink(u,linkBase))){link.href=u.href;link.hidden=false;}}catch{}
+  try{const u=new URL(info.url);if(!u.username && !u.password && (u.protocol==="https:" && u.pathname==="/view" || isDeliveryLink(u,linkBase))){link.href=u.href;link.hidden=false;}}catch{}
 }
 function sizePolicy(info,automatic){
   if(!Number.isSafeInteger(info.size) || info.size<=0 || info.size>limit){

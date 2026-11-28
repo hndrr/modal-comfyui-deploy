@@ -31,13 +31,14 @@ export const deliveryRefSchema = outputFileSchema.extend({
   prompt_id:z.uuid().optional(), index:z.number().int().nonnegative().optional(),
 });
 export type DeliveryRef = z.infer<typeof deliveryRefSchema>;
-export const deliveryOutput = {delivery_ref:deliveryRefSchema.optional(),
+export const deliveryOutput = {share_expires_at:z.iso.datetime().optional(),delivery_ref:deliveryRefSchema.optional(),
   delivery_route:z.literal("original").optional(),
   delivery_status:z.enum(["ready","pending","unavailable"]).optional(),
   delivery_reason:z.string().optional(), retry_after_seconds:z.number().int().positive().optional()};
+const shareSchema = z.object({url:z.url(), expires_at:z.iso.datetime()});
 const readySchema = z.object({status:z.literal("ready"),media_id:z.uuid(),url:z.url(),
   etag:etagSchema,mime_type:mimeSchema,size_bytes:z.number().int().positive().max(MAX_BYTES),
-  expires_at:z.iso.datetime().nullable(),cleansed:z.boolean()});
+  expires_at:z.iso.datetime().nullable(),cleansed:z.boolean(),share:shareSchema.optional()});
 const stateSchema = z.discriminatedUnion("status",[
   readySchema,
   z.object({status:z.literal("missing"),reason:z.enum(["not_found","expired","upload_failed"]),media_id:z.uuid().optional()}),
@@ -79,11 +80,26 @@ export class MediaDelivery {
     this.linkBase=new URL(linkBase?.trim() || this.origin+"/media/");
     if(this.linkBase.protocol!=="https:" || this.linkBase.username || this.linkBase.password ||
       this.linkBase.port || this.linkBase.href!==this.linkBase.origin+this.linkBase.pathname ||
-      !["/media/","/admin/media/"].includes(this.linkBase.pathname))
+      !["/media/","/admin/media/","/s/"].includes(this.linkBase.pathname))
       throw new Error("Invalid media delivery link base");
   }
-  get ownerLinkBase(): string {return this.linkBase.href;}
-  url(id:string) {return this.ownerLinkBase+id;}
+  get viewerLinkBase(): string {return this.linkBase.href;}
+  get sharing(): boolean {return this.linkBase.pathname === "/s/";}
+  private shareLink(value: z.infer<typeof shareSchema>) {
+    const expected = this.origin + "/s/";
+    const token = value.url.slice(expected.length);
+    if (!value.url.startsWith(expected) || !/^[a-f0-9]{64}$/.test(token) || Date.parse(value.expires_at) <= Date.now())
+      throw new DeliveryError("invalid_share_link");
+    return {url:this.viewerLinkBase + token, expires_at:value.expires_at};
+  }
+  async link(id:string, etag:string, create:boolean):Promise<{url:string;expires_at?:string}> {
+    if (!this.sharing) return {url:this.viewerLinkBase + id};
+    const value = await this.json(`/v1/media/${id}/share`,{method:create ? "POST" : "GET",headers:{"If-Match":etag}});
+    const result = shareSchema.extend({media_id:z.uuid(),etag:etagSchema}).safeParse(value);
+    if (!result.success || result.data.media_id !== id || result.data.etag !== etag)
+      throw new DeliveryError("invalid_share_response");
+    return this.shareLink(result.data);
+  }
   private signal() {return AbortSignal.timeout(Math.max(0,this.deadline-Date.now()));}
   private async request(path:string, init:RequestInit = {}) {
     const headers=new Headers(init.headers);
@@ -112,9 +128,10 @@ export class MediaDelivery {
     if(!parsed.success) throw new DeliveryError("invalid_service_response");
     const state=parsed.data;
     if(state.status!=="ready") return state;
-    if(state.url!==this.origin+this.linkBase.pathname+state.media_id)
+    if(state.url!==this.origin+(this.sharing ? "/admin/media/" : this.linkBase.pathname)+state.media_id)
       throw new DeliveryError("invalid_service_url");
-    return {...state,url:this.url(state.media_id)};
+    if (this.sharing) return {...state, share:state.share ? this.shareLink(state.share) : undefined};
+    return {...state,url:this.viewerLinkBase + state.media_id};
   }
   async inspect(send:MediaSend, file:OutputFile):Promise<SourceMedia> {
     const path=outputPath(file);
@@ -135,9 +152,10 @@ export class MediaDelivery {
   }
   async lookup(sources:SourceMedia[]):Promise<DeliveryState[]> {
     const results:DeliveryState[]=[];
-    for(let offset=0;offset<sources.length;offset+=24) {
-      const page=sources.slice(offset,offset+24);
-      const body={source_id:this.source,references:page.map(({output_path,source_etag})=>({output_path,source_etag}))};
+    const limit=this.sharing ? 12 : 24;
+    for(let offset=0;offset<sources.length;offset+=limit) {
+      const page=sources.slice(offset,offset+limit);
+      const body={source_id:this.source,...(this.sharing ? {shared_links:true} : {}),references:page.map(({output_path,source_etag})=>({output_path,source_etag}))};
       const data=await this.json("/v1/media/lookup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
       const parsed=z.object({results:z.array(z.unknown()).length(page.length)}).safeParse(data);
       if(!parsed.success) throw new DeliveryError("invalid_service_response");
