@@ -94,6 +94,27 @@ class ApprovalTests(unittest.IsolatedAsyncioTestCase):
             path, headers=self.review_headers, data={"csrf": csrf, "decision": decision}
         )
 
+    async def test_approved_minimax_video_keeps_fp16_choice(self):
+        graph = {
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors"}},
+            "2": {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_video_vae_fp16.safetensors"}},
+            "3": PAID["1"],
+            "4": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+            "5": {"class_type": "VAEDecode", "inputs": {"samples": ["4", 0], "vae": ["2", 0]}},
+            "6": {"class_type": "CreateVideo", "inputs": {"images": ["5", 0]}},
+            "7": {"class_type": "SaveVideo", "inputs": {"video": ["6", 0]}},
+        }
+        definitions = {n["class_type"]: {**DEFS.get(n["class_type"], {"python_module": "nodes"}),
+                       "output_node": key in {"3", "7"}} for key, n in graph.items()}
+        self.control.objects.return_value = web.json_response(definitions)
+        path, csrf, _ = await self.pending("h3-approved", graph)
+        self.assertFalse(self.control.journal.data["jobs"])
+        response = await self.decide(path, csrf, "approve")
+        self.assertEqual(response.status, 200)
+        job, = self.control.journal.data["jobs"].values()
+        self.assertTrue(job["mcp_guard"]["routes"])
+        self.assertTrue(job.get("fp16_accumulation", False))
+
     async def test_local_immediate_and_unknown_provenance_rejected(self):
         self.assertEqual((await self.send("render", LOCAL)).status, 200)
         receipt = await (await self.send("render", LOCAL)).json()

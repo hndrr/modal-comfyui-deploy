@@ -116,9 +116,10 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             "4": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["2", 0]}},
             "5": {"class_type": "CreateVideo", "inputs": {"images": ["4", 0]}},
             "6": {"class_type": "SaveVideo", "inputs": {"video": ["5", 0]}},
-            "7": {"class_type": "UNETLoader", "inputs": {"unet_name": "another_model.safetensors"}},
+            "7": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl.safetensors"}},
             "8": {"class_type": "KSampler", "inputs": {"model": ["7", 0]}},
-            "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}},
+            "10": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["7", 2]}},
+            "9": {"class_type": "SaveImage", "inputs": {"images": ["10", 0]}},
         }
         definitions = {node["class_type"]: {"python_module": "nodes", "output_node": key in {"6", "9"}}
                        for key, node in graph.items()}

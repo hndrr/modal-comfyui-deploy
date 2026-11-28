@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from comfy_split.gpu import CPU_API_NODES, DEFAULT, select_gpu
+from comfy_split.gpu import CPU_API_NODES, DEFAULT, minimax_h3_video, select_gpu
 from comfy_split.mcp_policy import executable_graph
 
 
@@ -26,6 +26,27 @@ class MeasuredRoutingTests(unittest.TestCase):
                 changed = copy.deepcopy(graph)
                 changed[node]["inputs"][field] = value
                 self.assertEqual(select_gpu("auto", changed, definitions)["gpu"], DEFAULT)
+
+    def test_mixed_or_unrecognized_weights_keep_default_precision(self):
+        graph = {
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "dir/minimax_h3_ref2va_pruned_bf16.safetensors"}},
+            "2": {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_video_vae_fp16.safetensors"}},
+            "4": {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}},
+            "5": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"}},
+            "6": {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"}},
+        }
+        definitions = {node["class_type"]: {"python_module": "nodes"} for node in graph.values()}
+        self.assertTrue(minimax_h3_video(graph, definitions))
+        for name, inputs, module in (
+            ("UNETLoader", {"unet_name": "minimax_h3_image.safetensors"}, "nodes"),
+            ("VAELoader", {"vae_name": "flux2-vae.safetensors"}, "nodes"),
+            ("CLIPLoader", {"clip_name": ["dynamic", 0]}, "nodes"),
+            ("UnetLoaderGGUF", {"unet_name": "other.gguf"}, "custom_nodes.gguf"),
+            ("UpscaleImage", {}, "custom_nodes.upscaler"),
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(minimax_h3_video({**graph, "3": {"class_type": name, "inputs": inputs}},
+                                                  {**definitions, name: {"python_module": module}}))
 
     def test_browser_partial_run_only_counts_requested_outputs(self):
         light = {"class_type": "EmptyImage", "inputs": {"width": 64, "height": 64, "batch_size": 1}}

@@ -880,7 +880,7 @@ class Controller:
             return {"gpu": running[0], "gpu_reason": reason}
         return selection
 
-    def admit_prompt(self, body, request_id, selection=None, *, execution_graph=None):
+    def admit_prompt(self, body, request_id, selection=None):
         existing = request_id and any(
             j.get("request_id") == request_id
             for j in (*self.journal.data["jobs"].values(), *self.journal.data["retired_jobs"].values())
@@ -889,8 +889,6 @@ class Controller:
         job = self.journal.enqueue(body, request_id)
         if selection and not existing:
             job.update(selection)
-            if execution_graph and selection["gpu"] != "CPU" and gpu.minimax_h3_video(execution_graph):
-                job["fp16_accumulation"] = True
         for ext, admission in admissions:
             ext.accepted(job, admission)
         return job
@@ -1091,8 +1089,9 @@ class Controller:
                     if requested != "auto":
                         body["gpu"] = requested
                     selection = await self.select_gpu(requested, graph, definitions)
-                    job = self.admit_prompt(body, request_id, selection,
-                                            execution_graph=graph if graph is not submitted_graph else None)
+                    if selection["gpu"] != "CPU" and graph is not submitted_graph and gpu.minimax_h3_video(graph, definitions):
+                        selection["fp16_accumulation"] = True
+                    job = self.admit_prompt(body, request_id, selection)
                     await self.commit_prompt()
                 await self.status()
                 return web.json_response(self.receipt(job))

@@ -112,16 +112,19 @@ async def submit(c, body, key):
     definitions = json.loads((await c.objects("/object_info", graph=submitted_graph)).body)
     graph = prepared["prompt"] = policy.executable_graph(submitted_graph, definitions)
     calls, loaders = policy.plan(graph, definitions)
-    if not calls:
+    if calls:
+        # Pin execution settings along with the graph before waiting for approval.
+        selection = gpu.select_gpu(requested, graph, definitions)
+    else:
         selection = await c.select_gpu(requested, graph, definitions)
-        job = c.admit_prompt(prepared, key, selection,
-                             execution_graph=graph if graph is not submitted_graph else None)
+    if selection["gpu"] != "CPU" and graph is not submitted_graph and gpu.minimax_h3_video(graph, definitions):
+        selection["fp16_accumulation"] = True
+    if not calls:
+        job = c.admit_prompt(prepared, key, selection)
         job.update(mcp_guard=policy.execution_guard(prepared, [], []), mcp_digest=digest)
         await c.commit_prompt()
         await c.status()
         return web.json_response(c.receipt(job))
-    # Pin the CPU/GPU choice at admission, including across owner approval.
-    selection = gpu.select_gpu(requested, graph, definitions)
     if sum(r["status"] == "pending" for r in rows.values()) >= 64:
         raise ValueError("Too many pending reviews; decline one or wait for expiry.")
     async with input_media._lock:
@@ -390,7 +393,7 @@ async def review(c, request, path):
             return page(row, "API キーが未設定です。実行していません。")
         else:
             job = c.admit_prompt(row["body"], row["key"],
-                                 {k: row[k] for k in ("gpu", "gpu_reason") if k in row})
+                                 {k: row[k] for k in ("gpu", "gpu_reason", "fp16_accumulation") if k in row})
             job.update(mcp_guard=policy.execution_guard(row["body"], row["calls"], row["assets"]),
                        mcp_digest=row["digest"])
             row["receipt"] = c.receipt(job)

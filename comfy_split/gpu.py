@@ -3,6 +3,7 @@
 import asyncio
 import os
 from collections import defaultdict
+from fnmatch import fnmatchcase
 
 DEFAULT = "RTX-PRO-6000"
 WORKERS = {DEFAULT: "gpu_worker_rtx", "L4": "gpu_worker_l4", "L40S": "gpu_worker_l40s"}
@@ -115,19 +116,56 @@ def light_media_node(name, module, inputs):
     return all(type(n) is int and n > 0 for n in dims) and dims[0] * dims[1] * dims[2] <= 4096**2
 
 
-def minimax_h3_video(graph):
-    models = [node["inputs"].get("unet_name") for node in graph.values()
-              if node["class_type"] == "UNETLoader"]
-    video_vaes = {"minimax_h3_video_vae_fp16.safetensors", "minimax_h3_video_vae_int8_convrot.safetensors"}
-    return bool(models) and all(
-        isinstance(name, str) and name.rsplit("/", 1)[-1].startswith(("minimax_h3_", "fastvideo_fasth3_"))
-        for name in models
-    ) and any(
-        node["class_type"] == "VAELoader"
-        and isinstance(name := node["inputs"].get("vae_name"), str)
-        and name.rsplit("/", 1)[-1] in video_vaes
-        for node in graph.values()
-    )
+# The flag applies to the whole process. Only opt in for known H3 workflows;
+# arbitrary nodes can load additional models without exposing a MODEL output.
+H3_VIDEO_VAES = {"minimax_h3_video_vae_fp16.safetensors", "minimax_h3_video_vae_int8_convrot.safetensors"}
+H3_MODEL_FILES = {
+    "UNETLoader": ("unet_name", ("minimax_h3_fl2va_*.safetensors", "minimax_h3_ref2va_*.safetensors",
+                                 "fastvideo_fasth3_*.safetensors")),
+    "VAELoader": ("vae_name", (*H3_VIDEO_VAES, "minimax_h3_audio_vae_fp32.safetensors")),
+    "CLIPLoader": ("clip_name", ("qwen3vl_*_minimax_h3_*.safetensors",)),
+    "LoraLoaderModelOnly": ("lora_name", ("minimax_h3_fl2v_*.safetensors", "minimax_h3_ref2v_*.safetensors")),
+}
+H3_WORKFLOW_NODES = {
+    "BasicGuider", "BasicScheduler", "BlockSparseAttention", "CLIPTextEncode",
+    "ComfyMathExpression", "ComfySwitchNode", "CreateVideo", "EmptyMiniMaxH3LatentAV",
+    "GetImageSize", "ImageScaleToTotalPixels", "KSampler", "KSamplerSelect", "LoadImage",
+    "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo", "MiniMaxH3SigmaShift", "ModelAttentionBackend",
+    "PreviewImage", "PrimitiveBoolean", "PrimitiveFloat", "PrimitiveInt", "PrimitiveStringMultiline",
+    "RandomNoise", "ResolutionSelector", "SamplerCustomAdvanced", "SaveImage", "SaveVideo",
+    "VAEDecode", "VAEDecodeAudio", "VAEEncode",
+}
+
+
+def minimax_h3_video(graph, definitions):
+    from comfy_split.mcp_policy import classification
+
+    has_model = has_video_vae = False
+    for node in graph.values():
+        name, inputs = node["class_type"], node["inputs"]
+        definition = definitions[name]
+        module = definition.get("python_module", "")
+        if module != "nodes" and not module.startswith("comfy_extras."):
+            try:
+                if classification(name, definition, inputs):
+                    continue  # The provider runs inference outside the local process.
+            except ValueError:
+                pass
+            return False
+        if name in H3_WORKFLOW_NODES:
+            continue
+        if name not in H3_MODEL_FILES:
+            return False
+        field, patterns = H3_MODEL_FILES[name]
+        value = inputs.get(field)
+        if not isinstance(value, str):
+            return False
+        filename = value.rsplit("/", 1)[-1]
+        if not any(fnmatchcase(filename, pattern) for pattern in patterns):
+            return False
+        has_model = has_model or name == "UNETLoader"
+        has_video_vae = has_video_vae or (name == "VAELoader" and filename in H3_VIDEO_VAES)
+    return has_model and has_video_vae
 
 
 def select_gpu(requested, graph, definitions):
