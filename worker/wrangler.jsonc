@@ -6,7 +6,7 @@
   "compatibility_date": "2026-08-01",
   "build": {
     "command": "npm run build:viewer",
-    "watch_dir": ["viewer", "scripts/build-viewer.mjs", "src/bounded-response.ts"]
+    "watch_dir": ["viewer", "scripts/build-viewer.mjs", "src/bounded-response.ts", "src/owner-media-link.ts"]
   },
 
   // カスタムドメイン以外の入口を塞ぐ。外すと Cloudflare Access を迂回できる経路が復活する。
