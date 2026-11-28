@@ -12,7 +12,7 @@
 {"origin":"https://<MEDIA_DELIVERY_HOST>","source_id":"<SOURCE_ID>","token":"<SERVICE_TOKEN>"}
 ```
 
-未設定では既存経路を使い、外部サービスへの通信は0件。設定が不正ならMCP入口で拒否する。HTTPSの単一originに固定し、パス・ポート・URL内認証情報・クエリは禁止。リダイレクトを追わず、返された本人用URLも設定originの `/media/{media_id}` と一致することを検証する。
+未設定では既存経路を使い、外部サービスへの通信は0件。設定が不正ならMCP入口で拒否する。HTTPSの単一originに固定し、パス・ポート・URL内認証情報・クエリは禁止。配信APIが返す本人用URLは、APIのorigin、設定した本人用パス（既定は `/media/`）、media_idの完全一致を確認する。`MEDIA_DELIVERY_LINK_BASE` があれば、MCPにはそのベースURLと検証済みmedia_idで作ったリンクを返す。
 
 本体のOAuth本人認証を通過した後に利用する。サービス間BearerはWorker内だけで使い、利用者のCookie・JWT・Modal認証情報を外部へ渡さない。ワークフローやプロンプトも送らない。本人用URLは公開リンクではなく、配信サービス側のブラウザ認証が必要。
 

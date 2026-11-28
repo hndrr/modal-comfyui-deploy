@@ -17,10 +17,10 @@ function mediaBytes(mime,size,fill=1) {
   if(mime==='video/mp4') bytes.write('ftyp',4);
   return bytes;
 }
-function fixture(count=1){
+function fixture(count=1,ownerPath='/media/'){
   const records=new Map(),calls=[],original=[];
   const files=Array.from({length:count},(_,index)=>({filename:`image${index}.png`,subfolder:'',index,kind:'image',mime:'image/png',bytes:png,etag:'"source-v1"'}));
-  const value=r=>r.state==='ready'?{status:'ready',media_id:r.id,url:origin+'/media/'+r.id,mime_type:r.mime,
+  const value=r=>r.state==='ready'?{status:'ready',media_id:r.id,url:origin+ownerPath+r.id,mime_type:r.mime,
     size_bytes:r.bytes.length,etag:r.etag,expires_at:'2026-12-01T00:00:00.000Z',cleansed:r.cleansed??false}:
     {status:'upload_required',media_id:r.id,upload_id:r.upload};
   const fetcher=async request=>{
@@ -64,6 +64,21 @@ function fixture(count=1){
   return {records,calls,original,files,fetcher,send,adapter:()=>new MediaDelivery(config,fetcher)};
 }
 const noGeneration=async()=>{throw Error('Unexpected Modal control-plane request');};
+
+test('prepared and cached copies use the new owner link; API calls still authenticate to the service',async()=>{
+  const f=fixture(1,'/admin/media/');
+  const linkBase='https://gallery.example.test/admin/media/';
+  const adapter=new MediaDelivery(config,f.fetcher,linkBase);
+  const ready=await adapter.prepare(f.send,f.files[0]);
+  assert.equal(ready.status,'ready');
+  const expected=linkBase+ready.media_id;
+  assert.equal(ready.url,expected);
+  assert.equal(adapter.url(ready.media_id),expected);
+  const source=await adapter.inspect(f.send,f.files[0]);
+  assert.equal((await adapter.lookup([source]))[0].url,expected);
+  const wrongOrigin=new MediaDelivery(config,async()=>Response.json({results:[ready]}),linkBase);
+  await assert.rejects(wrongOrigin.lookup([source]),{code:'invalid_service_url'});
+});
 
 test('original-route CLI chunks continue after fallback, and CPU readiness is checked only once per call',async()=>{
   for(const separate of [true,false]) {

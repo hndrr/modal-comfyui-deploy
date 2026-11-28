@@ -65,18 +65,24 @@ const sourceType = (response:Response) => {
 // Only this boundary knows service credentials. No bindings to the service's storage.
 export class MediaDelivery {
   readonly origin:string;
+  private readonly linkBase:URL;
   private source:string;
   private token:string;
   private fetcher:Fetch;
   private deadline=Date.now()+50_000;
-  constructor(raw:string, fetcher:Fetch = request => fetch(request)) {
+  constructor(raw:string, fetcher:Fetch = request => fetch(request), linkBase?:string) {
     const cfg=z.object({origin:z.url(),source_id:z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).refine(s=>s!=="local"),token:z.string().regex(/^[A-Za-z0-9._~-]{32,256}$/)}).strict().parse(JSON.parse(raw));
     const u=new URL(cfg.origin);
     if(u.protocol!=="https:" || u.username || u.password || u.port || u.pathname!=="/" || u.search || u.hash || /[\x00-\x20\x7f]/.test(cfg.token))
       throw new Error("Invalid media delivery binding");
     this.origin=u.origin;this.source=cfg.source_id;this.token=cfg.token;this.fetcher=fetcher;
+    this.linkBase=new URL(linkBase ?? this.origin+"/media/");
+    if(this.linkBase.protocol!=="https:" || this.linkBase.username || this.linkBase.password ||
+      this.linkBase.port || this.linkBase.href!==this.linkBase.origin+this.linkBase.pathname ||
+      !["/media/","/admin/media/"].includes(this.linkBase.pathname))
+      throw new Error("Invalid media delivery link base");
   }
-  url(id:string) {return `${this.origin}/media/${id}`;}
+  url(id:string) {return this.linkBase.href+id;}
   private signal() {return AbortSignal.timeout(Math.max(0,this.deadline-Date.now()));}
   private async request(path:string, init:RequestInit = {}) {
     const headers=new Headers(init.headers);
@@ -103,9 +109,11 @@ export class MediaDelivery {
   private state(value:unknown):DeliveryState {
     const parsed=stateSchema.safeParse(value);
     if(!parsed.success) throw new DeliveryError("invalid_service_response");
-    if(parsed.data.status==="ready" && parsed.data.url!==this.url(parsed.data.media_id))
+    const state=parsed.data;
+    if(state.status!=="ready") return state;
+    if(state.url!==this.origin+this.linkBase.pathname+state.media_id)
       throw new DeliveryError("invalid_service_url");
-    return parsed.data;
+    return {...state,url:this.url(state.media_id)};
   }
   async inspect(send:MediaSend, file:OutputFile):Promise<SourceMedia> {
     const path=outputPath(file);

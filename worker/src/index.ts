@@ -49,6 +49,7 @@ export interface Env {
   SPLIT_MEDIA_ORIGIN?: string;
   /** Optional external delivery service: {origin, source_id, token}. */
   MEDIA_DELIVERY?: string;
+  MEDIA_DELIVERY_LINK_BASE?: string;
   /** Exact verified Azure storage hosts used by ChatGPT attachments, comma separated. */
   SPLIT_ATTACHMENT_BLOB_HOSTS?: string;
   /** 例: https://<team-name>.cloudflareaccess.com */
@@ -557,7 +558,7 @@ export default {
         try { if (env.SPLIT_MEDIA_ORIGIN) media=mediaSender(env.SPLIT_MEDIA_ORIGIN,cfg.split_hostname,
           buildUpstreamHeaders(new Request(url),env,splitOrigin)); }
         catch {return textResponse("Invalid saved-media binding.",500);}
-        try {if(env.MEDIA_DELIVERY) delivery=new MediaDelivery(env.MEDIA_DELIVERY);}
+        try {if(env.MEDIA_DELIVERY) delivery=new MediaDelivery(env.MEDIA_DELIVERY,undefined,env.MEDIA_DELIVERY_LINK_BASE);}
         catch {return textResponse("Invalid media delivery binding.",500);}
         return remoteMcp(request, (path, init) => {
           // Build from zero: never forward a user JWT, cookie, or arbitrary header.
