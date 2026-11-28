@@ -1,7 +1,7 @@
-import {isOwnerMediaLink} from "./owner-media-link.ts";
+import {isDeliveryLink} from "./delivery-link.ts";
 // Display tool-result bytes locally; the iframe never fetches an Access-protected image.
-export const IMAGE_VIEWER_URI = "ui://split/image-viewer-v3.html";
-export const PREVIOUS_IMAGE_VIEWER_URIS = ["ui://split/image-viewer-v2.html","ui://split/image-viewer-v1.html"];
+export const IMAGE_VIEWER_URI = "ui://split/image-viewer-v4.html";
+export const PREVIOUS_IMAGE_VIEWER_URIS = ["ui://split/image-viewer-v3.html","ui://split/image-viewer-v2.html","ui://split/image-viewer-v1.html"];
 export const imageViewerFor = (linkBase?:string) => `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した画像</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 img{display:block;max-width:100%;max-height:720px;margin:auto;object-fit:contain}img[hidden]{display:none}
@@ -9,7 +9,7 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:.5rem;p
 <img hidden alt="生成した画像"><footer><span role="status">画像を読み込み中…</span><a hidden target="_blank" rel="noopener noreferrer">画像を開く・保存する</a></footer>
 <script>
 const linkBase=${JSON.stringify(linkBase ?? null).replaceAll("<","\\u003c")};
-const isOwnerMediaLink=${isOwnerMediaLink.toString()};
+const isDeliveryLink=${isDeliveryLink.toString()};
 const image=document.querySelector("img"),label=document.querySelector("span"),link=document.querySelector("a");
 let peer="*",ready=false,openLinks=false,rpcId=2;
 function send(message){parent.postMessage({jsonrpc:"2.0",...message},peer);}
@@ -21,7 +21,7 @@ function render(result){
   if(!info || typeof info.filename!=="string"){label.textContent="画像情報を読み込めませんでした。";return;}
   try{
     const url=new URL(info.url);
-    if(!url.username && !url.password && (url.protocol==="https:" && url.pathname==="/view" || isOwnerMediaLink(url,linkBase))){link.href=url.href;link.hidden=false;}
+    if(!url.username && !url.password && (url.protocol==="https:" && url.pathname==="/view" || isDeliveryLink(url,linkBase))){link.href=url.href;link.hidden=false;}
   }catch{}
   label.textContent=info.filename;
   const file=result.content?.find(x=>x.type==="image");

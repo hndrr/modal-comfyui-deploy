@@ -25,6 +25,7 @@ const data=await mkdtemp(join(tmpdir(),'media-adapter-smoke-'));
 const token=randomBytes(32).toString('hex'),owner=randomBytes(32).toString('hex');
 const publicOrigin='https://media.example.test',browserOrigin='https://split.example.test';
 const expectedLinkBase=new URL(values['link-base']?.trim() || publicOrigin+'/media/').href;
+const shared=new URL(expectedLinkBase).pathname==='/s/';
 const job='11111111-1111-4111-8111-111111111111';
 const encode=spawnSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=10','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',join(data,'sample.mp4')]);
 if(encode.status!==0)throw Error('ffmpeg is required for the synthetic video fixture. '+encode.stderr);
@@ -32,7 +33,7 @@ const wav=Buffer.alloc(44+16000*2);wav.write('RIFF');wav.writeUInt32LE(wav.lengt
 wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(wav.length-44,40);
 for(let i=0;i<16000;i++)wav.writeInt16LE(Math.round(1000*Math.sin(i*2*Math.PI*440/16000)),44+i*2);
 const files=[
-  {filename:'sample.png',kind:'image',mime:'image/png',bytes:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6qXAAAAAASUVORK5CYII=','base64')},
+  {filename:'sample.png',kind:'image',mime:'image/png',bytes:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAHnRFWHRwcm9tcHQAc2FtcGxlLXByaXZhdGUtbWV0YWRhdGGvW1pKAAAADElEQVR4nGP476AAAAOhAWAv9IBkAAAAAElFTkSuQmCC','base64')},
   {filename:'sample.wav',kind:'audio',mime:'audio/wav',bytes:wav},
   {filename:'sample.mp4',kind:'video',mime:'video/mp4',bytes:await readFile(join(data,'sample.mp4'))},
   {filename:'sample.glb',kind:'3d',mime:'model/gltf-binary',bytes:texturedGLB()},
@@ -55,7 +56,8 @@ const send=async(path,init={})=>{
 const control=async path=>path==='/split/startup'?Response.json({ready:true}):path==='/_remote_mcp/progress'?Response.json({prompt_id:job,status:'completed'}):assert.fail('Unexpected generation/control request '+path);
 try{
   mf=new Miniflare(convertV4MiniflareOptions({host:'127.0.0.1',port:0,modules:true,modulesRoot:root,scriptPath:join(root,'.local/worker.mjs'),compatibilityDate:'2026-11-06',log:new Log(LogLevel.ERROR),d1Databases:['DB'],kvNamespaces:['MEDIA'],resourcePersistencePath:join(data,'storage'),
-    bindings:{PUBLIC_ORIGIN:publicOrigin,ACCESS_ISSUER:'https://access.example.invalid',ACCESS_AUDIENCE:'local',OWNER_EMAIL:'local',LOCAL_OWNER_TOKEN:owner,SERVICE_TOKENS:JSON.stringify([{source_id:'adapter-smoke',token_hash:createHash('sha256').update(token).digest('hex')}])},
+    ratelimits:{PUBLIC_RATE_LIMITER:{namespace_id:"1001",simple:{limit:600,period:60}},PUBLIC_BROWSE_RATE_LIMITER:{namespace_id:"1003",simple:{limit:600,period:60}}},
+    bindings:{SHARE_COPY_SOURCE:"adapter-smoke",SHARE_COPY_KEY:randomBytes(32).toString("hex"),PUBLIC_ORIGIN:publicOrigin,ACCESS_ISSUER:'https://access.example.invalid',ACCESS_AUDIENCE:'local',OWNER_EMAIL:'local',LOCAL_OWNER_TOKEN:owner,SERVICE_TOKENS:JSON.stringify([{source_id:'adapter-smoke',token_hash:createHash('sha256').update(token).digest('hex')}])},
     serviceBindings:{ASSETS:async request=>{const path=new URL(request.url).pathname;if(!/^\/(index\.html|licenses\.txt|assets\/[\w.-]+)$/.test(path))return new Response(null,{status:404});try{return new Response(await readFile(join(root,'.cloudflare/output/v0/workers/default/assets',path)),{headers:{'Content-Type':{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[extname(path)]||'text/plain'}});}catch{return new Response(null,{status:404});}}}}));
   const localOrigin=(await mf.ready).origin,db=await mf.getD1Database('DB');
   for(const migration of await readD1Migrations(join(root,'migrations')))await db.batch(migration.queries.map(sql=>db.prepare(sql)));
@@ -76,10 +78,22 @@ try{
   const results=[];
   for(const s of selections){const result=await call(s.name,s.args);assert.equal(result.structuredContent.delivery_status,'ready');
     const info=result.structuredContent;
-    assert.equal(info.url,expectedLinkBase+info.delivery_ref.media_id);
+    if (shared) {
+      assert.ok(info.url.startsWith(expectedLinkBase));
+      assert.match(info.url.slice(expectedLinkBase.length),/^[a-f0-9]{64}$/);
+      assert.ok(Date.parse(info.share_expires_at)>Date.now());
+      const response=await fetch(localOrigin+new URL(info.url).pathname+'/content');
+      assert.equal(response.status,200);
+      const bytes=Buffer.from(await response.arrayBuffer());
+      assert.ok(bytes.length);
+      if(s.name==='get_image') {
+        assert.ok(files[0].bytes.includes('sample-private-metadata'));
+        assert.ok(!bytes.includes('sample-private-metadata'));
+      }
+    } else assert.equal(info.url,expectedLinkBase+info.delivery_ref.media_id);
     results.push(result);}
   assert.equal(originalGets,5);assert.equal(uploads,5);
-  for(const s of selections)await call(s.name,s.args);
+  for(const [i,s] of selections.entries())assert.equal((await call(s.name,s.args)).structuredContent.url,results[i].structuredContent.url);
   assert.equal(originalGets,5);assert.equal(uploads,5);
   for(let i=1;i<files.length;i++){
     const f=files[i],ref=results[i].structuredContent.delivery_ref,chunks=[];let offset=0;
@@ -119,7 +133,7 @@ try{
       assert.equal(await frame.locator('a:not([hidden])').last().getAttribute('href'),results[i].structuredContent.url);
       await page.screenshot({path:join(data,files[i].filename+'.png')});
     }
-    await page.context().addCookies([{name:'pmd_local',value:owner,url:localOrigin,httpOnly:true,sameSite:'Strict'}]);
+    if(!shared) await page.context().addCookies([{name:'pmd_local',value:owner,url:localOrigin,httpOnly:true,sameSite:'Strict'}]);
     await page.goto(localOrigin+new URL(results[3].structuredContent.url).pathname);
     await page.getByRole('link',{name:/download/i}).first().waitFor();
     await page.screenshot({path:join(data,'private-3d-page.png')});

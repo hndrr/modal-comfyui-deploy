@@ -48,6 +48,7 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
     if((Number(args.byte_offset) || 0)>0) return failure(new DeliveryError("delivery_reference_required"));
   }
   let file:OutputFile, ref:DeliveryRef, count:number|undefined;
+  let link:{url:string; expires_at?:string}|undefined;
   let prompt_id:string|undefined, index:number|undefined;
   try {
     if(kind==="audio" || kind==="video") {
@@ -78,20 +79,23 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
       }
       const state=await adapter.prepare(send,file);
       if(state.status!=="ready") return failure(new DeliveryError("delivery_pending",state.status==="pending" ? state.retry_after_seconds : 60));
+      if(adapter.sharing) link=state.share;
       ref={...file,...(prompt_id ? {prompt_id,index} : {}),media_id:state.media_id,etag:state.etag,mime_type:state.mime_type,size_bytes:state.size_bytes};
     }
+    if (!part || !adapter.sharing) link ??= await adapter.link(ref.media_id,ref.etag,!part);
   } catch(e) {
-    if(args.delivery_ref!==undefined) return failure(e);
+    if(args.delivery_ref!==undefined || adapter.sharing) return failure(e);
     return original(e);
   }
   const metadata={...file,...(prompt_id ? {prompt_id,index} : {}),
     ...(count ? {[kind+"_count"]:count} : {}),mimeType:ref.mime_type,size:ref.size_bytes,
-    url:adapter.url(ref.media_id),etag:ref.etag,delivery_status:"ready",delivery_ref:ref};
+    ...(link ? {url:link.url} : {}),...(link?.expires_at ? {share_expires_at:link.expires_at} : {}),etag:ref.etag,delivery_status:"ready",delivery_ref:ref};
+  const linkLabel=adapter.sharing ? "24-hour share link" : "open or save after website login";
   const format=kind==="3d" ? ref.mime_type==="model/gltf-binary" ? "glb" : "spz" : undefined;
   try {
     if(kind==="image") {
       const inline=ref.size_bytes<=8*1024*1024 && ["image/png","image/jpeg","image/webp"].includes(ref.mime_type);
-      const content:CallToolResult["content"]=[{type:"text",text:`${file.filename} — open or save after website login: ${metadata.url}`}];
+      const content:CallToolResult["content"]=[{type:"text",text:`${file.filename} — ${linkLabel}: ${metadata.url}`}];
       if(inline) content.unshift({type:"image",mimeType:ref.mime_type,data:base64(await adapter.read(ref,0,ref.size_bytes))});
       return {structuredContent:{...metadata,delivery:inline ? "inline" : "link"},content};
     }
@@ -99,7 +103,7 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
     if(!chunks) {
       if(kind!=="3d") await adapter.read(ref,0,16);
       return {structuredContent:{...metadata,...(format ? {format} : {}),delivery:kind==="3d" ? "viewer" : "player"},
-        content:[{type:"text",text:`${file.filename} — use the inline ${kind} viewer. Retrieval alone does not confirm playback. Open or save after website login: ${metadata.url}`}]};
+        content:[{type:"text",text:`${file.filename} — use the inline ${kind} viewer. Retrieval alone does not confirm playback. ${linkLabel}: ${metadata.url}`}]};
     }
     const offset=z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER-4*1024*1024).parse(args.byte_offset ?? 0);
     const length=part ? kind==="3d" ? THREE_PART_BYTES : kind==="audio" ? AUDIO_PART_BYTES : VIDEO_PART_BYTES :
@@ -116,7 +120,7 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
         mimeType:complete ? ref.mime_type : "application/octet-stream",blob}}]};
   } catch(e) {
     // No copy bytes have been returned by an initial get_* call yet.
-    if(args.delivery_ref===undefined && !part) return original(e);
+    if(args.delivery_ref===undefined && !part && !adapter.sharing) return original(e);
     return failure(e); // Never switch an explicitly selected copy mid-read.
   }
 }
@@ -126,7 +130,12 @@ const outputPageSchema=z.object({items:z.array(z.object({filename:z.string(),sub
   next_offset:z.number().int().nonnegative().nullable(),total:z.number().int().nonnegative()}).passthrough();
 export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value:unknown,prepare:boolean,origin:string) {
   const page=outputPageSchema.parse(value);
-  const items:Record<string,unknown>[]=page.items.map(file=>({...file,url:new URL(outputPath({filename:file.filename,subfolder:file.subfolder}),origin).href}));
+  const items:Record<string,unknown>[]=page.items.map(file=>{
+    const item:Record<string,unknown>={...file};
+    if(adapter.sharing) delete item.url;
+    else item.url=new URL(outputPath(file),origin).href;
+    return item;
+  });
   const inspected:Array<{source:SourceMedia;position:number}>=[];
   // Bound open connections while avoiding up to 32 sequential HEAD round trips.
   for(let offset=0;offset<items.length;offset+=6) {
@@ -141,7 +150,14 @@ export async function deliveryOutputs(adapter:MediaDelivery,send:MediaSend,value
     try {
       const states=await adapter.lookup(inspected.map(({source})=>source));
       for(const [i,{source,position}] of inspected.entries()) {
-        try {Object.assign(items[position],summary(prepare ? await adapter.prepareSource(send,source,states[i]) : states[i]));}
+        try {
+          const state=prepare ? await adapter.prepareSource(send,source,states[i]) : states[i];
+          if(adapter.sharing && state.status==="ready") {
+            const link=state.share ?? (prepare ? await adapter.link(state.media_id,state.etag,true) : undefined);
+            if(link) Object.assign(items[position],summary(state),{url:link.url,share_expires_at:link.expires_at});
+            else Object.assign(items[position],{delivery_status:"unavailable",delivery_reason:"share_not_prepared"});
+          } else Object.assign(items[position],summary(state));
+        }
         catch(e) {Object.assign(items[position],unavailable(e));}
       }
     } catch(e) {for(const {position} of inspected) Object.assign(items[position],unavailable(e));}

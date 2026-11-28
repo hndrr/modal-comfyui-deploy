@@ -1,4 +1,4 @@
-import {isOwnerMediaLink} from "../src/owner-media-link.ts";
+import {isDeliveryLink} from "../src/delivery-link.ts";
 import {createViewer} from "./render.ts";
 import {readAtMost} from "../src/bounded-response.ts";
 
@@ -64,7 +64,7 @@ function readInfo(value: unknown): Info | undefined {
   try {
     const url = new URL(info.url);
     if (!url.username && !url.password && ((url.origin === config.origin && url.pathname === "/view") ||
-      isOwnerMediaLink(url, config.linkBase)))
+      isDeliveryLink(url, config.linkBase)))
       return info;
   } catch { /* A malformed tool result has no usable viewer link. */ }
 }

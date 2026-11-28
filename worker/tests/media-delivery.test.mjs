@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {MediaDelivery} from '../src/media-delivery.ts';
-import {isOwnerMediaLink} from '../src/owner-media-link.ts';
+import {isDeliveryLink} from '../src/delivery-link.ts';
 import {callSplit,remoteMcp} from '../src/remote-mcp.ts';
 import {deliveryOutputs} from '../src/delivered-media.ts';
 import {AUDIO_PART_BYTES,VIDEO_PART_BYTES} from '../src/media.ts';
@@ -74,16 +74,16 @@ test('prepared and cached copies use the new owner link; API calls still authent
   assert.equal(ready.status,'ready');
   const expected=linkBase+ready.media_id;
   assert.equal(ready.url,expected);
-  assert.equal(adapter.url(ready.media_id),expected);
+  assert.equal((await adapter.link(ready.media_id,ready.etag,true)).url,expected);
   const source=await adapter.inspect(f.send,f.files[0]);
   assert.equal((await adapter.lookup([source]))[0].url,expected);
   const wrongOrigin=new MediaDelivery(config,async()=>Response.json({results:[ready]}),linkBase);
   await assert.rejects(wrongOrigin.lookup([source]),{code:'invalid_service_url'});
 });
 
-test('empty owner link bases use the service default and invalid bases are rejected',()=>{
+test('empty owner link bases use the service default and invalid bases are rejected',async()=>{
   for(const value of [undefined, '', '  \t ']){
-    assert.equal(new MediaDelivery(config,undefined,value).url(job),origin+'/media/'+job);
+    assert.equal((await new MediaDelivery(config,undefined,value).link(job,'"v1"',false)).url,origin+'/media/'+job);
   }
   for(const base of ['http://gallery.test/media/','https://user:password@gallery.test/media/',
     'https://gallery.test:8443/media/','https://gallery.test/media/?page=1','https://gallery.test/media/#section',
@@ -95,11 +95,11 @@ test('empty owner link bases use the service default and invalid bases are rejec
 test('viewers accept only a media ID directly beneath the configured owner link base',()=>{
   for(const base of [origin+'/media/','https://gallery.example.test/admin/media/']){
     const valid=new URL(base+job);
-    assert.ok(isOwnerMediaLink(valid,base));
-    assert.equal(isOwnerMediaLink(valid),false);
+    assert.ok(isDeliveryLink(valid,base));
+    assert.equal(isDeliveryLink(valid),false);
     for(const wrong of [base+'nested/'+job,base+'not-an-id',valid.href+'?download',valid.href+'#details',
       'https://other.example.test'+valid.pathname]){
-      assert.equal(isOwnerMediaLink(new URL(wrong),base),false,wrong);
+      assert.equal(isDeliveryLink(new URL(wrong),base),false,wrong);
     }
   }
 });
@@ -109,6 +109,24 @@ test('a ready URL on the API host must use exactly the configured owner path',as
     const f=fixture(1,returned);
     const adapter=new MediaDelivery(config,f.fetcher,'https://gallery.example.test'+configured);
     await assert.rejects(adapter.prepare(f.send,f.files[0]),{code:'invalid_service_url'});
+  }
+});
+
+test('expiring links validate the source ID, version, lifetime and exact share path',async()=>{
+  const token='a'.repeat(64), linkBase='https://gallery.example.test/s/';
+  const expires_at=new Date(Date.now()+86000000).toISOString(), etag='"copy"';
+  let reply={media_id:job,etag,url:origin+'/s/'+token,expires_at};
+  const adapter=new MediaDelivery(config,async(request)=>{
+    assert.equal(request.url,origin+'/v1/media/'+job+'/share');
+    assert.equal(request.headers.get('If-Match'),etag);
+    return Response.json(reply);
+  },linkBase);
+  assert.deepEqual(await adapter.link(job,etag,true),{url:linkBase+token,expires_at});
+  assert.equal(isDeliveryLink(new URL(linkBase+token),linkBase),true);
+  for(const url of [linkBase+job,linkBase+token+'?download',linkBase+token+'#x'])
+    assert.equal(isDeliveryLink(new URL(url),linkBase),false);
+  for(const change of [{url:linkBase+token},{media_id:randomUUID()},{etag:'"other"'},{expires_at:'2001-01-01T00:00:00.000Z'}]){
+    const saved=reply;reply={...saved,...change};await assert.rejects(adapter.link(job,etag,false));reply=saved;
   }
 });
 
@@ -463,4 +481,16 @@ test('GLB/SPZ reuse the current cleansed copy without transferring the original 
     const old=await callSplit(noGeneration,'read_3d_part',{filename,byte_offset:0,delivery_ref:original.structuredContent.delivery_ref},browser,undefined,f.send,f.adapter());
     assert.equal(old.isError,true);
   }
+});
+
+test('private chunk reads do not depend on an active share grant',async()=>{
+  const f=fixture();
+  Object.assign(f.files[0],{filename:'model.glb',kind:'3d',mime:'model/gltf-binary',bytes:Buffer.alloc(48,2)});
+  const first=await callSplit(noGeneration,'get_3d',{filename:'model.glb'},browser,undefined,f.send,f.adapter());
+  const adapter=f.adapter();Object.defineProperty(adapter,'sharing',{value:true});
+  adapter.link=()=>assert.fail('Private reads must not request a public share');
+  const result=await callSplit(noGeneration,'read_3d_part',{filename:'model.glb',byte_offset:0,delivery_ref:first.structuredContent.delivery_ref},browser,undefined,f.send,adapter);
+  assert.equal(result.isError,undefined);
+  assert.deepEqual(Buffer.from(result._meta['split/3dPart'],'base64'),f.files[0].bytes);
+  assert.equal(result.structuredContent.url,undefined);
 });

@@ -155,9 +155,10 @@
 
 - originはパス・ポートなしのHTTPS。source_idとtokenは配信側で発行した組み合わせを使い、値をドキュメント・Gitへ保存しません。
 - 本人用リンクのホストを移す場合は、Worker の `MEDIA_DELIVERY_LINK_BASE` に `https://<OWNER_HOST>/admin/media/` のようなベースURLを設定します。末尾のパスは配信APIが返す `/media/` または `/admin/media/` に合わせます。APIの認証先は引き続き `MEDIA_DELIVERY.origin` です。
+- 24時間共有を使う場合は、同じ設定に `https://<SHARE_HOST>/s/` を指定します。取得時に共有用のコピーだけから埋め込みメタデータを除去します。応答の `url` と `share_expires_at` が共有先と有効期限です。期限内の再取得では同じリンクを返します。共有の準備に失敗した場合は理由を返します。
 - ローカルではgit管理外の `.dev.vars`、本番反映時は `worker/` で `npx wrangler secret put MEDIA_DELIVERY` の標準入力に登録します。トークンをコマンド引数に含めません。
 - 原本の配信用CPU `SPLIT_MEDIA_ORIGIN` を併用すると、保存済み作品の取得でComfyUIを起動せずに済みます。
-- 設定後はMCPツール一覧を読み直します。画像・音声・動画・GLB/SPZの取得と、生成completed時の最大4出力に配信用コピーを準備します。現在の契約は1ファイル25 MiBまでで、超過・非対応形式は原本経路を使います。
+- 設定後はMCPツール一覧を読み直します。画像・音声・動画・GLB/SPZの取得と、生成completed時の最大4出力に配信用コピーを準備します。現在の契約は1ファイル25 MiBまでで、本人用リンクの設定では超過・非対応形式は原本経路を使います。
 - 本人用URLは配信側へのログインが必要です。MCP内の表示データは本体Workerがサービス認証で取得します。利用者のCookieやModal認証は配信側へ渡しません。
 - 切り戻しは `MEDIA_DELIVERY` の削除です。新しい応答は既存経路に戻り、外部への通信も止まります。配信側のコピー・リンクは残ります。
 
