@@ -1,8 +1,8 @@
 import {isDeliveryLink} from "./delivery-link.ts";
 // Use MCP authentication for bounded playback; large files retain the browser stream.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v12.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v11.html","ui://split/video-player-v10.html","ui://split/video-player-v9.html","ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v13.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v12.html","ui://split/video-player-v11.html","ui://split/video-player-v10.html","ui://split/video-player-v9.html","ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
 export const playerHtml = (browserOrigin:string, linkBase?:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -34,6 +34,7 @@ function clearVideo(){
   retry.hidden=true;link.hidden=true;link.removeAttribute("href");
 }
 function setLink(info){
+  link.hidden=true;link.removeAttribute("href");
   try{const url=new URL(info.url);
     if(!url.username && !url.password && ((url.origin===${JSON.stringify(new URL(browserOrigin).origin)} && url.pathname==="/view") || isDeliveryLink(url,linkBase))){link.href=url.href;link.hidden=false;}
   }catch{}
@@ -108,7 +109,7 @@ function render(result){
   if(result.isError){clearVideo();label.textContent=result.content?.find(x=>x.type==="text")?.text || "動画を取得できませんでした。";return;}
   if(!info?.prompt_id)return;
   const nextKey=JSON.stringify([info.prompt_id,info.index,info.filename,info.size,info.delivery_ref?.media_id,info.delivery_ref?.etag]);
-  if(key===nextKey)return;
+  if(key===nextKey){current=info;setLink(info);return;}
   clearVideo();key=nextKey;current=info;setLink(info);
   if(info.delivery==="chunk"){label.textContent="動画の一部を取得しました。";return;}
   // Previously saved inline results can still hydrate the current resource.

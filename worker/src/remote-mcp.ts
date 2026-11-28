@@ -228,7 +228,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     _meta:{ui:{resourceUri:THREE_VIEWER_URI},"openai/outputTemplate":THREE_VIEWER_URI,"openai/widgetAccessible":true}},
     a=>call("get_3d",a,browserOrigin));
   server.registerTool("read_3d_part",{description:"Read the next bounded private chunk for the 3D viewer.",
-    annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields},
+    annotations:read,inputSchema:{...threePartInputs,...deliveryInput},outputSchema:{...threeOutput,...deliveryFields,...(delivery?.sharing ? {url:threeOutput.url.optional()} : {})},
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true}},
     a=>call("read_3d_part",a,browserOrigin));
   const videoCsp={ui:{csp:{connectDomains:[],resourceDomains:[browserOrigin,"blob:"]}},

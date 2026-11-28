@@ -82,14 +82,14 @@ export async function callDeliveredMedia(adapter:MediaDelivery,send:MediaSend,na
       if(adapter.sharing) link=state.share;
       ref={...file,...(prompt_id ? {prompt_id,index} : {}),media_id:state.media_id,etag:state.etag,mime_type:state.mime_type,size_bytes:state.size_bytes};
     }
-    link ??= await adapter.link(ref.media_id,ref.etag,!part);
+    if (!part || !adapter.sharing) link ??= await adapter.link(ref.media_id,ref.etag,!part);
   } catch(e) {
     if(args.delivery_ref!==undefined || adapter.sharing) return failure(e);
     return original(e);
   }
   const metadata={...file,...(prompt_id ? {prompt_id,index} : {}),
     ...(count ? {[kind+"_count"]:count} : {}),mimeType:ref.mime_type,size:ref.size_bytes,
-    url:link.url,...(link.expires_at ? {share_expires_at:link.expires_at} : {}),etag:ref.etag,delivery_status:"ready",delivery_ref:ref};
+    ...(link ? {url:link.url} : {}),...(link?.expires_at ? {share_expires_at:link.expires_at} : {}),etag:ref.etag,delivery_status:"ready",delivery_ref:ref};
   const linkLabel=adapter.sharing ? "24-hour share link" : "open or save after website login";
   const format=kind==="3d" ? ref.mime_type==="model/gltf-binary" ? "glb" : "spz" : undefined;
   try {

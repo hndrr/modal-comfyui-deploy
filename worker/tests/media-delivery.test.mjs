@@ -482,3 +482,15 @@ test('GLB/SPZ reuse the current cleansed copy without transferring the original 
     assert.equal(old.isError,true);
   }
 });
+
+test('private chunk reads do not depend on an active share grant',async()=>{
+  const f=fixture();
+  Object.assign(f.files[0],{filename:'model.glb',kind:'3d',mime:'model/gltf-binary',bytes:Buffer.alloc(48,2)});
+  const first=await callSplit(noGeneration,'get_3d',{filename:'model.glb'},browser,undefined,f.send,f.adapter());
+  const adapter=f.adapter();Object.defineProperty(adapter,'sharing',{value:true});
+  adapter.link=()=>assert.fail('Private reads must not request a public share');
+  const result=await callSplit(noGeneration,'read_3d_part',{filename:'model.glb',byte_offset:0,delivery_ref:first.structuredContent.delivery_ref},browser,undefined,f.send,adapter);
+  assert.equal(result.isError,undefined);
+  assert.deepEqual(Buffer.from(result._meta['split/3dPart'],'base64'),f.files[0].bytes);
+  assert.equal(result.structuredContent.url,undefined);
+});

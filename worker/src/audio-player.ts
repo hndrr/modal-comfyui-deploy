@@ -3,8 +3,8 @@ import {isDeliveryLink} from "./delivery-link.ts";
 // fetch /view from the iframe, or publish an output to an unprotected URL.
 import {audioBudgetScript} from "./audio-budget.ts";
 import {AUDIO_PART_BYTES} from "./media.ts";
-export const AUDIO_PLAYER_URI = "ui://split/audio-player-v8.html";
-export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v7.html","ui://split/audio-player-v6.html","ui://split/audio-player-v5.html","ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
+export const AUDIO_PLAYER_URI = "ui://split/audio-player-v9.html";
+export const PREVIOUS_AUDIO_PLAYER_URIS = ["ui://split/audio-player-v8.html","ui://split/audio-player-v7.html","ui://split/audio-player-v6.html","ui://split/audio-player-v5.html","ui://split/audio-player-v4.html","ui://split/audio-player-v3.html","ui://split/audio-player-v2.html","ui://split/audio-player-v1.html"];
 export const audioPlayerFor = (linkBase?:string) => `<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した音声</title><style>:root{color-scheme:light dark;font:14px system-ui}body{margin:0;padding:.5rem}
 p{margin:.4rem 0;overflow-wrap:anywhere}footer,#transport:not([hidden]){display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}input{flex:1;min-width:4rem}output{font-variant-numeric:tabular-nums}a{color:LinkText}</style>
@@ -68,6 +68,7 @@ function show(parts,info){
   file=blob;transport.hidden=false;statusLabel.textContent=info.filename;
 }
 function setLink(info){
+  link.hidden=true;link.removeAttribute("href");
   try{const u=new URL(info.url);if(!u.username && !u.password && (u.protocol==="https:" && u.pathname==="/view" || isDeliveryLink(u,linkBase))){link.href=u.href;link.hidden=false;}}catch{}
 }
 function sizePolicy(info,automatic){
@@ -122,7 +123,7 @@ function render(result){
   if(result.isError){clear();statusLabel.textContent=result.content?.find(x=>x.type==="text")?.text || "音声を取得できませんでした。";return;}
   if(!info?.prompt_id)return;
   const k=JSON.stringify([info.prompt_id,info.index,info.filename,info.size,info.delivery_ref?.media_id,info.delivery_ref?.etag]);
-  if(k===key)return;
+  if(k===key){current=info;setLink(info);return;}
   clear();key=k;current=info;
   setLink(info);
   if(info.delivery!=="starting" && !sizePolicy(info,true))return;
