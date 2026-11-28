@@ -24,7 +24,7 @@ test(`MCP playback uses the ${route} route and repeated results preserve the vid
     return {content:[],structuredContent:{...info,...(!external?{delivery_route:'original'}:{}),delivery:next<bytes.length?"chunk":"inline",byte_offset:args.byte_offset,
       byte_length:chunk.length,next_offset:next<bytes.length?next:null},_meta:{"split/videoPart":chunk.toString("base64")}};
   }}};
-  runInNewContext(playerHtml("https://split.example.com","https://media.example.test").split("<script>")[1].split("</script>")[0],
+  runInNewContext(playerHtml("https://split.example.com","https://media.example.test/media/").split("<script>")[1].split("</script>")[0],
     {window:win,parent,document:{querySelector:k=>elements[k],body:{scrollHeight:400}},URL:BrowserURL,Blob,Uint8Array,atob,
       setTimeout,clearTimeout,ResizeObserver:class{observe(){}},addEventListener:(n,f)=>handlers[n]=f});
   handlers["openai:set_globals"]({detail:{globals:{toolOutput:info}}});

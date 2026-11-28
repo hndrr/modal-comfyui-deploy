@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {MediaDelivery} from '../src/media-delivery.ts';
+import {isOwnerMediaLink} from '../src/owner-media-link.ts';
 import {callSplit,remoteMcp} from '../src/remote-mcp.ts';
 import {deliveryOutputs} from '../src/delivered-media.ts';
 import {AUDIO_PART_BYTES,VIDEO_PART_BYTES} from '../src/media.ts';
@@ -78,6 +79,37 @@ test('prepared and cached copies use the new owner link; API calls still authent
   assert.equal((await adapter.lookup([source]))[0].url,expected);
   const wrongOrigin=new MediaDelivery(config,async()=>Response.json({results:[ready]}),linkBase);
   await assert.rejects(wrongOrigin.lookup([source]),{code:'invalid_service_url'});
+});
+
+test('empty owner link bases use the service default and invalid bases are rejected',()=>{
+  for(const value of [undefined, '', '  \t ']){
+    assert.equal(new MediaDelivery(config,undefined,value).url(job),origin+'/media/'+job);
+  }
+  for(const base of ['http://gallery.test/media/','https://user:password@gallery.test/media/',
+    'https://gallery.test:8443/media/','https://gallery.test/media/?page=1','https://gallery.test/media/#section',
+    'https://gallery.test/admin/media','https://gallery.test/other/']){
+    assert.throws(()=>new MediaDelivery(config,undefined,base),/Invalid media delivery link base/);
+  }
+});
+
+test('viewers accept only a media ID directly beneath the configured owner link base',()=>{
+  for(const base of [origin+'/media/','https://gallery.example.test/admin/media/']){
+    const valid=new URL(base+job);
+    assert.ok(isOwnerMediaLink(valid,base));
+    assert.equal(isOwnerMediaLink(valid),false);
+    for(const wrong of [base+'nested/'+job,base+'not-an-id',valid.href+'?download',valid.href+'#details',
+      'https://other.example.test'+valid.pathname]){
+      assert.equal(isOwnerMediaLink(new URL(wrong),base),false,wrong);
+    }
+  }
+});
+
+test('a ready URL on the API host must use exactly the configured owner path',async()=>{
+  for(const [returned,configured] of [['/media/','/admin/media/'],['/admin/media/','/media/']]){
+    const f=fixture(1,returned);
+    const adapter=new MediaDelivery(config,f.fetcher,'https://gallery.example.test'+configured);
+    await assert.rejects(adapter.prepare(f.send,f.files[0]),{code:'invalid_service_url'});
+  }
 });
 
 test('original-route CLI chunks continue after fallback, and CPU readiness is checked only once per call',async()=>{

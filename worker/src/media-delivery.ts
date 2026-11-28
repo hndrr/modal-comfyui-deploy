@@ -76,13 +76,14 @@ export class MediaDelivery {
     if(u.protocol!=="https:" || u.username || u.password || u.port || u.pathname!=="/" || u.search || u.hash || /[\x00-\x20\x7f]/.test(cfg.token))
       throw new Error("Invalid media delivery binding");
     this.origin=u.origin;this.source=cfg.source_id;this.token=cfg.token;this.fetcher=fetcher;
-    this.linkBase=new URL(linkBase ?? this.origin+"/media/");
+    this.linkBase=new URL(linkBase?.trim() || this.origin+"/media/");
     if(this.linkBase.protocol!=="https:" || this.linkBase.username || this.linkBase.password ||
       this.linkBase.port || this.linkBase.href!==this.linkBase.origin+this.linkBase.pathname ||
       !["/media/","/admin/media/"].includes(this.linkBase.pathname))
       throw new Error("Invalid media delivery link base");
   }
-  url(id:string) {return this.linkBase.href+id;}
+  get ownerLinkBase(): string {return this.linkBase.href;}
+  url(id:string) {return this.ownerLinkBase+id;}
   private signal() {return AbortSignal.timeout(Math.max(0,this.deadline-Date.now()));}
   private async request(path:string, init:RequestInit = {}) {
     const headers=new Headers(init.headers);

@@ -15,7 +15,7 @@ import { readAtMost } from "./bounded-response.ts";
 import { listModels, modelInputs } from "./model-inventory.ts";
 import { uploadInputs, uploadMedia } from "./upload-media.ts";
 import { PLAYER_MIME, PLAYER_URI, PREVIOUS_PLAYER_URIS, playerHtml } from "./video-player.ts";
-import { IMAGE_VIEWER_URI, PREVIOUS_IMAGE_VIEWER_URI, imageViewerFor } from "./image-viewer.ts";
+import { IMAGE_VIEWER_URI, PREVIOUS_IMAGE_VIEWER_URIS, imageViewerFor } from "./image-viewer.ts";
 import {THREE_VIEWER_URI, PREVIOUS_THREE_VIEWER_URIS, threeViewerHtml} from "./three-viewer.ts";
 import {threeInputs, threeOutput, threePartInputs} from "./three-media.ts";
 import { AUDIO_PLAYER_URI, PREVIOUS_AUDIO_PLAYER_URIS, audioPlayerFor } from "./audio-player.ts";
@@ -207,9 +207,9 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   server.registerTool("get_history",{description:"Read saved job history, output filenames, errors and timing without starting ComfyUI. diagnose prefers a failed job in the recent history window. Saved records are not live progress; use get_job_progress for that.",annotations:read,
     inputSchema:{action:z.enum(["list","diagnose"]),prompt_id:z.string().optional(),limit:z.number().int().min(1).max(100).optional()}},
     a=>call("get_history",a));
-  for(const [i,uri] of [IMAGE_VIEWER_URI,PREVIOUS_IMAGE_VIEWER_URI].entries())
+  for(const [i,uri] of [IMAGE_VIEWER_URI,...PREVIOUS_IMAGE_VIEWER_URIS].entries())
   server.registerResource("image-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-    contents:[{uri,mimeType:PLAYER_MIME,text:imageViewerFor(delivery?.origin)}],
+    contents:[{uri,mimeType:PLAYER_MIME,text:imageViewerFor(delivery?.ownerLinkBase)}],
   }));
   server.registerTool("get_image",{title:"View a generated image",
     description:"View a saved PNG, JPEG or WebP using its history filename. Images up to 8 MiB display in chat using MCP authentication, without a separate website login. Prefer the inline viewer. Include the website link only if the viewer is unavailable, the image exceeds the limit, or the user asks to open or save it. Do not claim the image is displayed from tool success alone. Does not generate."+deliveryNote,annotations:deliveryRead,
@@ -217,7 +217,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     inputSchema:{filename:relative,subfolder:relative.optional()},outputSchema:{...imageOutput,...deliveryFields}},a=>call("get_image",a));
   for(const [i,uri] of [THREE_VIEWER_URI,...PREVIOUS_THREE_VIEWER_URIS].entries())
   server.registerResource("3d-viewer-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-    contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.origin),_meta:{
+    contents:[{uri,mimeType:PLAYER_MIME,text:threeViewerHtml(browserOrigin,undefined,delivery?.ownerLinkBase),_meta:{
       ui:{csp:{connectDomains:["blob:","data:"],resourceDomains:["blob:","data:"]}},
       "openai/widgetCSP":{connect_domains:["blob:","data:"],resource_domains:["blob:","data:"]},
     }}],
@@ -235,7 +235,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
     "openai/widgetCSP":{connect_domains:[],resource_domains:[browserOrigin,"blob:"]}};
   for (const [i,uri] of [PLAYER_URI,...PREVIOUS_PLAYER_URIS].entries())
     server.registerResource(i===0?"video-player":"previous-video-player-"+i,uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.origin),_meta:videoCsp}],
+      contents:[{uri,mimeType:PLAYER_MIME,text:playerHtml(browserOrigin,delivery?.ownerLinkBase),_meta:videoCsp}],
     }));
   server.registerTool("get_video",{title:"Show the video player",
     description:"Show the inline player for a saved MP4. Call with only prompt_id and optional index for playback, without binary chunks. Up to 128 MiB, the player uses private MCP reads without a separate website login. Larger or range-unsupported files use the authenticated website stream. Prefer the player; opening the link is only a fallback. Do not claim playback is visible based only on tool success. For CLI binary download explicitly set byte_offset:0 and follow next_offset. Does not generate."+deliveryNote,
@@ -251,7 +251,7 @@ export async function remoteMcp(request:Request,send:Send, browserOrigin:string,
   // Clients with cached descriptors can still read the current player at their old URI.
   for (const [index,uri] of [AUDIO_PLAYER_URI,...PREVIOUS_AUDIO_PLAYER_URIS].entries())
     server.registerResource(index===0?"audio-player":"previous-audio-player-"+index,uri,{mimeType:PLAYER_MIME},async()=>({
-      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerFor(delivery?.origin)}],
+      contents:[{uri,mimeType:PLAYER_MIME,text:audioPlayerFor(delivery?.ownerLinkBase)}],
     }));
   server.registerTool("read_audio_part",{description:"Read the next verified chunk for the audio player.",
     _meta:{ui:{visibility:["app"]},"openai/visibility":"private","openai/widgetAccessible":true},

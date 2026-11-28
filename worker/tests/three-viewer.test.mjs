@@ -14,12 +14,12 @@ const compiled=await build({entryPoints:[new URL("../viewer/app.ts",import.meta.
     b.onLoad({filter:/.*/,namespace:"stub"},()=>({contents:`export function createViewer(){return {
       async load(bytes,format){await onDraw(bytes,format)},reset(){},dispose(){onDispose()}}}`,loader:"js"}));
   }}]});
-function app(info,{chunk,draw,browser=false,legacy=true,fetch:fetcher}={}){
+function app(info,{chunk,draw,linkBase,browser=false,legacy=true,fetch:fetcher}={}){
   const handlers={},calls=[],messages=[],drawn=[],elements=Object.fromEntries(
     ["#viewport","#status","#name","#reset","#retry","#open","#save"].map(id=>[id,{
       hidden:true,dataset:{},removeAttribute(key){delete this[key];}}]));
   let disposed=0;
-  const parent={postMessage:m=>messages.push(m)},win={split3D:{origin,...(browser ? {file:{filename:info.filename,subfolder:info.subfolder}} : {})},openai:{callTool:async(name,args)=>{
+  const parent={postMessage:m=>messages.push(m)},win={split3D:{origin,linkBase,...(browser ? {file:{filename:info.filename,subfolder:info.subfolder}} : {})},openai:{callTool:async(name,args)=>{
     calls.push({name,args});return chunk(args);
   }}};
   if(!legacy)delete win.openai;
@@ -85,6 +85,23 @@ test("private parts are assembled without browser authentication, repeats do not
   view.handlers.message({source:view.parent,origin:"https://host.example",data:{jsonrpc:"2.0",id:9,method:"ui/resource-teardown"}});
   assert.equal(view.disposed(),2);assert.equal(view.elements["#reset"].disabled,true);
   assert.equal(view.elements["#save"].href,undefined);
+});
+
+test("3D viewer loads a model with an owner link on a separate host",async()=>{
+  const linkBase="https://gallery.example.test/admin/media/";
+  const mediaId="123e4567-e89b-42d3-a456-426614174000";
+  const bytes=texturedGLB();
+  const info={filename:"mesh.glb",subfolder:"",format:"glb",size:bytes.length,delivery:"viewer",
+    url:linkBase+mediaId,etag:'"fixture"',delivery_ref:{media_id:mediaId,etag:'"fixture"'}};
+  const view=app(info,{linkBase,chunk:()=>({
+    structuredContent:{...info,byte_offset:0,byte_length:bytes.length,next_offset:null},
+    _meta:{"split/3dPart":bytes.toString("base64")}
+  })});
+  await settle();
+  assert.equal(view.elements["#viewport"].dataset.state,"ready");
+  assert.deepEqual(view.drawn,[{bytes,format:"glb"}]);
+  assert.equal(view.elements["#open"].href,info.url);
+  assert.equal(view.elements["#save"].href,info.url);
 });
 
 test("large files, corrupt chunks and blocked renderers retain the signed-in browser fallback",async()=>{

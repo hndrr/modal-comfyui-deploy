@@ -1,3 +1,4 @@
+import {isOwnerMediaLink} from "../src/owner-media-link.ts";
 import {createViewer} from "./render.ts";
 import {readAtMost} from "../src/bounded-response.ts";
 
@@ -7,7 +8,7 @@ type ToolResult = {isError?: boolean; structuredContent?: unknown; content?: {ty
   _meta?: Record<string, unknown>};
 declare global {
   interface Window {
-    split3D: {origin: string; deliveryOrigin?:string; file?: {filename: string; subfolder: string}};
+    split3D: {origin: string; linkBase?:string; file?: {filename: string; subfolder: string}};
     openai?: {callTool?: (name: string, args: unknown) => Promise<ToolResult>;
       toolOutput?: unknown; toolResponseMetadata?: Record<string, ToolResult>};
   }
@@ -63,7 +64,7 @@ function readInfo(value: unknown): Info | undefined {
   try {
     const url = new URL(info.url);
     if (!url.username && !url.password && ((url.origin === config.origin && url.pathname === "/view") ||
-      (url.origin === config.deliveryOrigin && /^\/media\/[a-f0-9-]{36}$/.test(url.pathname))))
+      isOwnerMediaLink(url, config.linkBase)))
       return info;
   } catch { /* A malformed tool result has no usable viewer link. */ }
 }

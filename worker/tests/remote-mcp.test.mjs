@@ -29,8 +29,19 @@ test('OAuth audience and owner guard discovery; discovery and ping never contact
       assert.equal((await request(jwt)).status,403);
     assert.equal(hits.length,0);
   }
-  delete cfg.MEDIA_DELIVERY;
   const jwt=await sign('mcp-aud','owner@example.com');
+  const ownerBase='https://gallery.example.test/admin/media/';
+  for(const [setting,expected] of [[ownerBase,ownerBase],['  ','https://media.example.test/media/']]){
+    cfg.MEDIA_DELIVERY_LINK_BASE=setting;
+    const descriptor=await (await request(jwt,'tools/list')).json();
+    for(const name of ['get_image','get_audio','get_video','get_3d']){
+      const uri=descriptor.result.tools.find(tool=>tool.name===name)._meta.ui.resourceUri;
+      const widget=await (await request(jwt,'resources/read',{uri})).json();
+      assert.ok(widget.result.contents[0].text.includes(JSON.stringify(expected)),name);
+    }
+  }
+  delete cfg.MEDIA_DELIVERY_LINK_BASE;
+  delete cfg.MEDIA_DELIVERY;
   const init=await (await request(jwt,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}})).json();
   assert.equal(init.result.serverInfo.name,'comfyui-split');
   const list=await (await request(jwt)).json();

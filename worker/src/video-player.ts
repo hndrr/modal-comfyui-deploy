@@ -1,9 +1,10 @@
+import {isOwnerMediaLink} from "./owner-media-link.ts";
 // Use MCP authentication for bounded playback; large files retain the browser stream.
 import {VIDEO_PART_BYTES} from "./media.ts";
-export const PLAYER_URI = "ui://split/video-player-v10.html";
-export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v9.html","ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
+export const PLAYER_URI = "ui://split/video-player-v11.html";
+export const PREVIOUS_PLAYER_URIS = ["ui://split/video-player-v10.html","ui://split/video-player-v9.html","ui://split/video-player-v8.html","ui://split/video-player-v7.html","ui://split/video-player-v6.html","ui://split/video-player-v5.html","ui://split/video-player-v4.html","ui://split/video-player-v3.html","ui://split/video-player-v2.html","ui://split/video-player-v1.html"];
 export const PLAYER_MIME = "text/html;profile=mcp-app";
-export const playerHtml = (browserOrigin:string, deliveryOrigin?:string) => `<!doctype html>
+export const playerHtml = (browserOrigin:string, linkBase?:string) => `<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>生成した動画</title>
 <style>
@@ -13,6 +14,8 @@ footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-betw
 <video controls playsinline hidden aria-label="生成した動画"></video>
 <footer><span role="status">動画を読み込み中…</span><button hidden>動画を再取得</button><a hidden target="_blank" rel="noopener noreferrer">保存ページを開く</a></footer>
 <script>
+const linkBase=${JSON.stringify(linkBase ?? null).replaceAll("<","\\u003c")};
+const isOwnerMediaLink=${isOwnerMediaLink.toString()};
 const player=document.querySelector("video"), label=document.querySelector("span"), retry=document.querySelector("button"), link=document.querySelector("a");
 const pending=new Map(), limit=128*1024*1024;
 let peer="*", openLinks=false, initialized=false, serverTools=false, lastHeight, rpcId=1, version=0, current, key="", objectUrl;
@@ -32,7 +35,7 @@ function clearVideo(){
 }
 function setLink(info){
   try{const url=new URL(info.url);
-    if(!url.username && !url.password && ((url.origin===${JSON.stringify(new URL(browserOrigin).origin)} && url.pathname==="/view") || (url.origin===${JSON.stringify(deliveryOrigin || null)} && /^\\/media\\/[a-f0-9-]{36}$/.test(url.pathname)))){link.href=url.href;link.hidden=false;}
+    if(!url.username && !url.password && ((url.origin===${JSON.stringify(new URL(browserOrigin).origin)} && url.pathname==="/view") || isOwnerMediaLink(url,linkBase))){link.href=url.href;link.hidden=false;}
   }catch{}
 }
 function show(parts,info){
