@@ -24,6 +24,7 @@ const {readD1Migrations}=await import(pathToFileURL(join(migrationPackage,migrat
 const data=await mkdtemp(join(tmpdir(),'media-adapter-smoke-'));
 const token=randomBytes(32).toString('hex'),owner=randomBytes(32).toString('hex');
 const publicOrigin='https://media.example.test',browserOrigin='https://split.example.test';
+const expectedLinkBase=new URL(values['link-base']?.trim() || publicOrigin+'/media/').href;
 const job='11111111-1111-4111-8111-111111111111';
 const encode=spawnSync('ffmpeg',['-loglevel','error','-f','lavfi','-i','testsrc2=size=320x180:rate=10','-t','1','-an','-c:v','libx264','-pix_fmt','yuv420p',join(data,'sample.mp4')]);
 if(encode.status!==0)throw Error('ffmpeg is required for the synthetic video fixture. '+encode.stderr);
@@ -75,7 +76,7 @@ try{
   const results=[];
   for(const s of selections){const result=await call(s.name,s.args);assert.equal(result.structuredContent.delivery_status,'ready');
     const info=result.structuredContent;
-    assert.equal(info.url,(values['link-base'] ?? publicOrigin+'/media/')+info.delivery_ref.media_id);
+    assert.equal(info.url,expectedLinkBase+info.delivery_ref.media_id);
     results.push(result);}
   assert.equal(originalGets,5);assert.equal(uploads,5);
   for(const s of selections)await call(s.name,s.args);
