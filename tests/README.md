@@ -119,8 +119,10 @@ CI は変更されたファイルを自動判定し、影響のあるテスト�
 3. 本体の `worker/` で実行します。
 
 ```sh
-node --experimental-strip-types scripts/media-delivery-smoke.mjs --service-root /path/to/personal-media-delivery --browser
+node --experimental-strip-types scripts/media-delivery-smoke.mjs --service-root /path/to/personal-media-delivery --link-base https://gallery.example.test/admin/media/ --browser
 ```
+
+`--link-base` には配信APIが返す本人用パスを指定します。上の例では、4種類のビューアーが別ホストの `/admin/media/` リンクを表示することを確認します。省略時は配信APIと同じホストの `/media/` を使います。
 
 `--browser` を省略すると実APIとMCP応答まで確認します。Miniflareはloopbackにだけ接続を受け付け、一意なOS一時ディレクトリにD1・KVを作ります。既存の配信側 `.local` データは使いません。合成PNG/WAV/MP4/GLB/SPZを登録し、初回の5転送、再取得・チャンク・完了ページングで追加転送0件、未認証拒否、ブラウザの画像・音声・動画・3D表示を確認します。結果JSONと画像の保存先を出力し、プロセス終了時にサーバーとブラウザを閉じます。生成は行いません。
 

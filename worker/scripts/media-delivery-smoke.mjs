@@ -14,7 +14,7 @@ import {MediaDelivery} from '../src/media-delivery.ts';
 import {remoteMcp} from '../src/remote-mcp.ts';
 import {texturedGLB,gaussianSPZ} from '../tests/three-fixtures.mjs';
 
-const {values}=parseArgs({options:{'service-root':{type:'string'},browser:{type:'boolean'}}});
+const {values}=parseArgs({options:{'service-root':{type:'string'},'link-base':{type:'string'},browser:{type:'boolean'}}});
 if(!values['service-root'])throw Error('Pass --service-root to opt into a separate, built service checkout.');
 const root=resolve(values['service-root']),requireService=createRequire(join(root,'package.json'));
 const {Miniflare,Log,LogLevel,convertV4MiniflareOptions}=await import(pathToFileURL(requireService.resolve('miniflare')));
@@ -66,14 +66,17 @@ try{
     return fetch(new Request(localOrigin+new URL(request.url).pathname,{method:request.method,headers:request.headers,body:request.body,redirect:'manual',signal:request.signal,duplex:'half'}));
   };
   const rpc=async(method,params)=>{
-    const adapter=new MediaDelivery(JSON.stringify({origin:publicOrigin,source_id:'adapter-smoke',token}),fetcher);
+    const adapter=new MediaDelivery(JSON.stringify({origin:publicOrigin,source_id:'adapter-smoke',token}),fetcher,values['link-base']);
     const response=await remoteMcp(new Request(browserOrigin+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:++rpcId,method,params})}),control,browserOrigin,undefined,send,adapter);
     const message=await response.json();assert.ok(!message.error,JSON.stringify(message));return message.result;
   };
   const call=async(name,args)=>{const result=await rpc('tools/call',{name,arguments:args});assert.ok(!result.isError,JSON.stringify(result));return result;};
   const selections=files.map(f=>({name:'get_'+f.kind,args:f.kind==='audio'||f.kind==='video'?{prompt_id:job}:{filename:f.filename}}));
   const results=[];
-  for(const s of selections){const result=await call(s.name,s.args);assert.equal(result.structuredContent.delivery_status,'ready');results.push(result);}
+  for(const s of selections){const result=await call(s.name,s.args);assert.equal(result.structuredContent.delivery_status,'ready');
+    const info=result.structuredContent;
+    assert.equal(info.url,(values['link-base'] ?? publicOrigin+'/media/')+info.delivery_ref.media_id);
+    results.push(result);}
   assert.equal(originalGets,5);assert.equal(uploads,5);
   for(const s of selections)await call(s.name,s.args);
   assert.equal(originalGets,5);assert.equal(uploads,5);
@@ -117,7 +120,7 @@ try{
     }
     await page.context().addCookies([{name:'pmd_local',value:owner,url:localOrigin,httpOnly:true,sameSite:'Strict'}]);
     await page.goto(localOrigin+new URL(results[3].structuredContent.url).pathname);
-    await page.getByText('Download to open in a 3D viewer',{exact:true}).waitFor();
+    await page.getByRole('link',{name:/download/i}).first().waitFor();
     await page.screenshot({path:join(data,'private-3d-page.png')});
     assert.deepEqual(errors,[]);
   }
